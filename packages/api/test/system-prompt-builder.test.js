@@ -654,7 +654,30 @@ describe('SystemPromptBuilder', () => {
     }
   });
 
-  test('F167-F AC-F10: AGENTS.md / CLAUDE.md have no hardcoded "@x = model-y" bindings', async () => {
+  test('F167-E: opencode is a pure coordinator with explicit hard limits', async () => {
+    const { loadCatConfig, toAllCatConfigs } = await import('../dist/config/cat-config-loader.js');
+    const { buildStaticIdentity } = await import('../dist/domains/cats/services/context/SystemPromptBuilder.js');
+    const originalConfigs = catRegistry.getAllConfigs();
+    catRegistry.reset();
+    try {
+      const runtimeConfigs = toAllCatConfigs(loadCatConfig(CAT_TEMPLATE_PATH));
+      for (const [id, config] of Object.entries(runtimeConfigs)) {
+        catRegistry.register(id, config);
+      }
+      const prompt = buildStaticIdentity('opencode');
+      assert.match(prompt, /协调与分诊猫/, 'opencode identity must present it as a coordinator');
+      assert.match(prompt, /只负责问题框架、归属判断、路由发球与证据回收/, 'coordinator scope must be explicit');
+      assert.match(prompt, /你的硬限制/, 'opencode own prompt must declare restrictions');
+      assert.match(prompt, /禁止写代码/, 'opencode must explicitly forbid coding');
+      assert.match(prompt, /禁止通过子 agent 间接执行/, 'opencode must forbid indirect execution via subagents');
+    } finally {
+      catRegistry.reset();
+      for (const [id, config] of Object.entries(originalConfigs)) {
+        catRegistry.register(id, config);
+      }
+    }
+  });
+
     // KD-21 invariant: handle/model must stay decoupled in static docs. If someone
     // re-introduces "@codex（model=gpt-5.3-codex）" style hardcoding, this test traps it.
     const fs = await import('node:fs');

@@ -3,11 +3,14 @@ import { unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type CatId, catRegistry, type RichBlock } from '@cat-cafe/shared';
+import type { CatConfig } from '@cat-cafe/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { resolveInternalRouteUrl } from '../../utils/upload-paths.js';
 import { ConnectorMessageFormatter, type MessageEnvelope, type MessageOrigin } from './ConnectorMessageFormatter.js';
 import type { IConnectorThreadBindingStore } from './ConnectorThreadBindingStore.js';
 import { renderAllRichBlocksPlaintext } from './rich-block-plaintext.js';
+import { A2AMessageValidator } from './A2AMessageValidator.js';
+import { transformTone } from '../../domains/cats/services/tone/ToneTransformPipeline.js';
 
 export interface IOutboundAdapter {
   readonly connectorId: string;
@@ -75,10 +78,22 @@ export interface ThreadMeta {
   readonly deepLinkUrl?: string | undefined;
 }
 
+function isCoordinatorConfig(config: CatConfig): boolean {
+  return config.breedId === 'abyssinian' || config.restrictions?.includes('禁止通过子 agent 间接执行') === true;
+}
+
+function deriveCoordinatorCatIdsFromRegistry(): string[] {
+  return Object.entries(catRegistry.getAllConfigs())
+    .filter(([, config]) => isCoordinatorConfig(config))
+    .map(([catId]) => catId);
+}
+
 export interface OutboundDeliveryHookOptions {
   readonly bindingStore: IConnectorThreadBindingStore;
   readonly adapters: Map<string, IOutboundAdapter>;
   readonly log: FastifyBaseLogger;
+  /** Explicit coordinator cat IDs. When omitted, derived from runtime cat registry. */
+  readonly coordinatorCatIds?: readonly string[];
   /** Resolve a route URL (e.g. /uploads/x.png) to an absolute file path on disk. */
   readonly mediaPathResolver?: ((url: string) => string | undefined) | undefined;
   /** F134: Look up a stored message by ID to retrieve its source.sender for group chat @sender replies. */
@@ -91,8 +106,14 @@ export interface OutboundDeliveryHookOptions {
 
 export class OutboundDeliveryHook {
   private readonly formatter = new ConnectorMessageFormatter();
+  private readonly a2aValidator: A2AMessageValidator;
 
-  constructor(private readonly opts: OutboundDeliveryHookOptions) {}
+  constructor(private readonly opts: OutboundDeliveryHookOptions) {
+    this.a2aValidator = new A2AMessageValidator({
+      log: opts.log,
+      coordinatorCatIds: opts.coordinatorCatIds ?? deriveCoordinatorCatIdsFromRegistry(),
+    });
+  }
 
   /**
    * Return the set of connectorIds bound to a thread.
@@ -125,6 +146,26 @@ export class OutboundDeliveryHook {
     origin?: MessageOrigin,
     triggerMessageId?: string,
   ): Promise<void> {
+    // ── A2A 三層校驗（Phase 2 P0: pre-send validation） ──────────────
+    const validation = this.a2aValidator.validate(content, catId, threadId);
+    if (!validation.passed) {
+      for (const issue of validation.issues) {
+        if (issue.severity === 'block') {
+          this.opts.log.error(
+            { threadId, catId, rule: issue.rule, message: issue.message },
+            '[A2AValidator] BLOCKED — message not delivered',
+          );
+          // Throw on first block-level issue to prevent delivery
+          throw new Error(
+            `[A2A/Blocked] ${issue.layer}/${issue.rule}: ${issue.message}`,
+          );
+        }
+        this.opts.log.warn(
+          { threadId, catId, rule: issue.rule, message: issue.message },
+          '[A2AValidator] WARN — message delivered with advisory',
+        );
+      }
+    }
     this.opts.log.info(
       { threadId, catId, contentLen: content.length, hasRichBlocks: !!(richBlocks && richBlocks.length) },
       '[OutboundDeliveryHook] deliver() called',
@@ -157,6 +198,8 @@ export class OutboundDeliveryHook {
     const catDisplayName = entry?.config.displayName ?? '';
     const catEmoji = '🐱';
     const textPrefix = catDisplayName ? `【${catDisplayName}🐱】\n` : '';
+    // F2: Tone Transform — 语感叙述化, 校验先跑 → transform 后跑
+    content = transformTone(content);
     const finalContent = `${textPrefix}${content}`;
 
     // Resolve audio blocks that have text but no url (voiceMode frontend-only blocks).

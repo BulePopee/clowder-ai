@@ -3,6 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import './helpers/setup-cat-registry.js';
 import { MemoryConnectorThreadBindingStore } from '../dist/infrastructure/connectors/ConnectorThreadBindingStore.js';
 import { OutboundDeliveryHook } from '../dist/infrastructure/connectors/OutboundDeliveryHook.js';
+import { catRegistry, createCatId } from '@cat-cafe/shared';
 
 function noopLog() {
   const noop = () => {};
@@ -15,6 +16,22 @@ function noopLog() {
     fatal: noop,
     child: () => noopLog(),
   };
+}
+
+function registerCoordinatorCat() {
+  if (catRegistry.has('abyssinian')) return;
+  catRegistry.register('abyssinian', {
+    id: createCatId('abyssinian'),
+    breedId: 'abyssinian',
+    displayName: '阿比西尼亚猫',
+    mentionPatterns: ['@abyssinian', '@远远'],
+    roleDescription: '协调猫',
+    personality: '稳',
+    clientId: 'claude',
+    defaultModel: 'claude-opus-4-6',
+    mcpSupport: true,
+    restrictions: ['禁止通过子 agent 间接执行'],
+  });
 }
 
 function mockAdapter(connectorId) {
@@ -39,11 +56,33 @@ describe('OutboundDeliveryHook', () => {
     bindingStore = new MemoryConnectorThreadBindingStore();
     feishuMock = mockAdapter('feishu');
     const adapters = new Map([['feishu', feishuMock.adapter]]);
+    registerCoordinatorCat();
     hook = new OutboundDeliveryHook({
       bindingStore,
       adapters,
       log: noopLog(),
     });
+  });
+
+  it('derives coordinatorCatIds from runtime registry when not provided', async () => {
+    bindingStore.bind('feishu', 'chat-1', 'thread-abc', 'user-1');
+    await assert.rejects(
+      hook.deliver('thread-abc', '请去 packages/api/src/index.ts 修改路由，再补单测', 'abyssinian'),
+      /C1-coordinator-execution-boundary/,
+    );
+    assert.equal(feishuMock.sent.length, 0);
+  });
+
+  it('allows explicit coordinatorCatIds override to disable derived coordinator blocking', async () => {
+    hook = new OutboundDeliveryHook({
+      bindingStore,
+      adapters: new Map([['feishu', feishuMock.adapter]]),
+      log: noopLog(),
+      coordinatorCatIds: [],
+    });
+    bindingStore.bind('feishu', 'chat-1', 'thread-abc', 'user-1');
+    await hook.deliver('thread-abc', '请去 packages/api/src/index.ts 修改路由，再补单测', 'abyssinian');
+    assert.equal(feishuMock.sent.length, 1);
   });
 
   it('delivers reply to bound external chat', async () => {

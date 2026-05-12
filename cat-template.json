@@ -78,6 +78,19 @@
       "roleDescription": "开源多模型编码 agent，自带多专家编排 + LSP + 主题生态",
       "personality": "沉稳可靠，什么 provider 都能接，什么任务都能扛",
       "teamStrengths": "多专家内部编排、LSP 集成、开源生态、provider-agnostic"
+    },
+    {
+      "id": "abyssinian",
+      "name": "阿比西尼亚猫",
+      "nickname": "远远",
+      "avatar": "/avatars/abyssinian.png",
+      "color": {
+        "primary": "#E8A87C",
+        "secondary": "#FDEBD0"
+      },
+      "roleDescription": "协调与分诊猫，只负责问题框架、归属判断、路由发球与证据回收，不参与实现设计或代码执行",
+      "personality": "冷静清醒的协调者，善于观测全局、拆解任务、精准匹配猫能力",
+      "teamStrengths": "任务分诊、归属判断、路由编排、证据回收"
     }
   ],
   "clientDefaults": {
@@ -149,6 +162,13 @@
       "lead": true,
       "available": true,
       "evaluation": "开源多模型编码猫，自带 Oh My OpenCode 多专家编排 + LSP (F105)"
+    },
+    "abyssinian": {
+      "family": "abyssinian",
+      "roles": ["coordinator", "dispatcher"],
+      "lead": true,
+      "available": true,
+      "evaluation": "协调猫（远远），负责统一调度、任务分诊与跨猫协调 (F163)"
     },
     "kimi": {
       "family": "moonshot",
@@ -708,6 +728,49 @@
             "refText": "你的本事不错，对丘丘…咳…邪魔从不手软，我们结伴而行如何。",
             "instruct": "用一个正直可靠的少年语气说话，话不多但每句都认真",
             "temperature": 0.3
+          }
+        }
+      ]
+    },
+    {
+      "id": "abyssinian",
+      "catId": "abyssinian",
+      "name": "阿比西尼亚猫",
+      "displayName": "阿比西尼亚猫",
+      "nickname": "远远",
+      "avatar": "/avatars/abyssinian.png",
+      "color": {
+        "primary": "#E8A87C",
+        "secondary": "#FDEBD0"
+      },
+      "mentionPatterns": ["@abyssinian", "@阿比西尼亚猫", "@远远", "@abyssinian-cat"],
+      "roleDescription": "协调与分诊猫，只负责问题框架、归属判断、路由发球与证据回收，不参与实现设计或代码执行",
+      "teamStrengths": "任务分诊、归属判断、路由编排、证据回收",
+      "caution": "只做协调，不下实现结论；命中文件路径/代码形状/测试手段时必须退回执行猫",
+      "restrictions": ["禁止写代码", "禁止给出实现步骤", "禁止指定测试手段", "禁止通过子 agent 间接执行"],
+      "features": {
+        "sessionChain": true
+      },
+      "defaultVariantId": "abyssinian-default",
+      "variants": [
+        {
+          "id": "abyssinian-default",
+          "clientId": "anthropic",
+          "defaultModel": "claude-opus-4-6",
+          "mcpSupport": true,
+          "cli": {
+            "command": "claude",
+            "outputFormat": "stream-json",
+            "defaultArgs": ["--output-format", "stream-json"],
+            "effort": "max"
+          },
+          "personality": "冷静清醒的协调者，善于观测全局、拆解任务、精准匹配猫能力",
+          "strengths": ["coordination", "dispatch", "task-routing"],
+          "contextBudget": {
+            "maxPromptTokens": 180000,
+            "maxContextTokens": 160000,
+            "maxMessages": 200,
+            "maxContentLengthPerMsg": 100000
           }
         }
       ]
