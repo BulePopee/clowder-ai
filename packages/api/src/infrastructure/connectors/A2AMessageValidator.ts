@@ -178,6 +178,26 @@ export class A2AMessageValidator {
           '检测到口头"继续/等待"声明。需要等外部条件时，请调用 cat_cafe_hold_ball() 而非口头声明。',
       });
     }
+
+    if (this.isBareAcceptanceWithoutExecutionAnchor(content)) {
+      issues.push({
+        severity: 'warn',
+        layer: 'ball',
+        rule: 'B4-bare-acceptance-without-anchor',
+        message:
+          '检测到纯接球确认（如"我接/收到/我来做"）但没有可观测执行锚点。接球=执行开始——同轮首个动作应可观测（tool_call / task / BLOCKED附证据 / 直接结果）。',
+      });
+    }
+
+    if (this.claimsToolUnavailableWithoutEvidence(content)) {
+      issues.push({
+        severity: 'warn',
+        layer: 'ball',
+        rule: 'B5-tool-unavailable-without-evidence',
+        message:
+          '检测到"工具/能力不可用"声明，但缺少证据链。请至少附：工具名、报错摘要、重试记录、是否尝试替代路径。0次尝试就报不可用 = 违反 P5。',
+      });
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -286,6 +306,38 @@ export class A2AMessageValidator {
       /我(持球|接球)/,                 // 我持球/接球
     ];
     return actionPatterns.some((p) => p.test(content));
+  }
+
+  private isBareAcceptanceWithoutExecutionAnchor(content: string): boolean {
+    const normalized = content.trim();
+    const acceptancePattern = /^(?:收到(?:了)?|我接(?:了)?|我来做|我来处理|我会处理|我来跟进|球收到了)[。！!，,\s\S]*$/i;
+    const hasAcceptance = acceptancePattern.test(normalized);
+    if (!hasAcceptance) return false;
+
+    const hasObservableAnchor = [
+      /BLOCKED|REVIEW READY|DONE/i,
+      /tool[_ -]?call|task|hold_ball/i,
+      /报错|error|失败|重试|替代路径/i,
+      /已完成|已修复|已提交|已汇总|结果如下|如下：/i,
+      /^@\S+/m,
+    ].some((pattern) => pattern.test(normalized));
+
+    return !hasObservableAnchor;
+  }
+
+  private claimsToolUnavailableWithoutEvidence(content: string): boolean {
+    const normalized = content.trim();
+    const unavailablePattern = /(WebSearch|WebFetch|工具|能力).{0,12}(不可用|用不了|被挡住|失败|不可达)/i;
+    if (!unavailablePattern.test(normalized)) return false;
+
+    const hasEvidence = [
+      /报错|error|异常|失败信息|stack/i,
+      /重试|retry|再次尝试/i,
+      /替代路径|fallback|browser|手动|改走/i,
+      /HTTP|401|403|429|5\d\d|timeout|reset|denied/i,
+    ].some((pattern) => pattern.test(normalized));
+
+    return !hasEvidence;
   }
 
   /** Check if content mentions hard-condition triggers for @co-creator. */

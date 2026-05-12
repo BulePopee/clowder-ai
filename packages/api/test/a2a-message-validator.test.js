@@ -174,6 +174,32 @@ describe('A2AMessageValidator — 四层校验', () => {
       const holdIssue = result.issues.find((i) => i.rule === 'B3-verbal-hold');
       assert.equal(holdIssue, undefined, 'no catId → B3 skips');
     });
+
+    it('B4: warns on bare acceptance without observable execution anchor', () => {
+      const result = validator.validate('我接这个搜索分析任务，我会优先走多源搜索与归纳');
+      const acceptanceIssue = result.issues.find((i) => i.rule === 'B4-bare-acceptance-without-anchor');
+      assert.ok(acceptanceIssue, 'should detect bare acceptance without observable anchor');
+      assert.equal(acceptanceIssue.severity, 'warn');
+    });
+
+    it('B4: does NOT warn when acceptance includes observable anchor', () => {
+      const result = validator.validate('BLOCKED：WebSearch 403，已重试 2 次，准备改走 browser 作为替代路径');
+      const acceptanceIssue = result.issues.find((i) => i.rule === 'B4-bare-acceptance-without-anchor');
+      assert.equal(acceptanceIssue, undefined, 'observable anchor should suppress bare acceptance warning');
+    });
+
+    it('B5: warns on tool-unavailable claim without evidence chain', () => {
+      const result = validator.validate('WebSearch/WebFetch 不可用，换猫吧');
+      const evidenceIssue = result.issues.find((i) => i.rule === 'B5-tool-unavailable-without-evidence');
+      assert.ok(evidenceIssue, 'should detect missing evidence for unavailable-tool claim');
+      assert.equal(evidenceIssue.severity, 'warn');
+    });
+
+    it('B5: does NOT warn when unavailable-tool claim includes evidence chain', () => {
+      const result = validator.validate('BLOCKED：WebSearch 403 denied，已重试 2 次，下一步改走 browser 作为替代路径');
+      const evidenceIssue = result.issues.find((i) => i.rule === 'B5-tool-unavailable-without-evidence');
+      assert.equal(evidenceIssue, undefined, 'evidence chain should suppress unavailable-tool warning');
+    });
   });
 
   // ── Routing layer ───────────────────────────────────────────────────
