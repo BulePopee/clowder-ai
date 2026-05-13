@@ -191,6 +191,33 @@ describe('POST /api/preview/auto-open', () => {
     assert.equal(emitted[0].room, 'preview:global');
   });
 
+  it('allows auto-open for Hub frontend port 3003', async () => {
+    emitted.length = 0;
+    const res = await app2.inject({
+      method: 'POST',
+      url: '/api/preview/auto-open',
+      payload: { port: 3003, path: '/' },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.allowed, true);
+    assert.equal(body.port, 3003);
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].room, 'preview:global');
+  });
+
+  it('still rejects API port 3004 for auto-open', async () => {
+    emitted.length = 0;
+    const res = await app2.inject({
+      method: 'POST',
+      url: '/api/preview/auto-open',
+      payload: { port: 3004 },
+    });
+    const body = JSON.parse(res.body);
+    assert.equal(body.allowed, false);
+    assert.equal(emitted.length, 0);
+  });
+
   it('rejects excluded port (6399)', async () => {
     emitted.length = 0;
     const res = await app2.inject({

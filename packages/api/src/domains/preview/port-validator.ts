@@ -51,8 +51,9 @@ export function validatePort(rawPort: number | string, opts: PortValidationOptio
     return { allowed: false, reason: 'Port must be a valid number' };
   }
 
-  const { host, gatewaySelfPort, runtimePorts } = opts;
+  const { host, gatewaySelfPort, runtimePorts, allowFrontendPort } = opts;
   const excludedPorts = [...DEFAULT_EXCLUDED_PORTS, ...(opts.excludedPorts ?? []), ...(runtimePorts ?? [])];
+  const isAllowedFrontendPort = allowFrontendPort === true && port === 3003;
 
   if (host && !LOOPBACK_HOSTS.has(host)) {
     return { allowed: false, reason: `Only loopback hosts allowed (got: ${host})` };
@@ -66,7 +67,7 @@ export function validatePort(rawPort: number | string, opts: PortValidationOptio
     return { allowed: false, reason: 'Cannot proxy to gateway self port (recursive proxy)' };
   }
 
-  if (excludedPorts.includes(port)) {
+  if (excludedPorts.includes(port) && !isAllowedFrontendPort) {
     return { allowed: false, reason: `Port ${port} is excluded (Clowder AI service port)` };
   }
 

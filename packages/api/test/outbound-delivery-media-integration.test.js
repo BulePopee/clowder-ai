@@ -427,4 +427,41 @@ describe('OutboundDeliveryHook — media delivery integration', () => {
     assert.ok(allText.includes('合成失败的语音'), 'audio text must survive resolver failure');
     assert.ok(warnCalls.length > 0, 'resolver failure should be logged as warning');
   });
+
+  it('Phase J: file block is sent via sendMedia when mediaPathResolver returns absPath', async () => {
+    const { OutboundDeliveryHook } = await import('../dist/infrastructure/connectors/OutboundDeliveryHook.js');
+
+    const sendMediaCalls = [];
+    const mockAdapter = {
+      connectorId: 'feishu',
+      async sendReply() {},
+      async sendRichMessage() {},
+      async sendMedia(chatId, payload) {
+        sendMediaCalls.push({ chatId, payload });
+      },
+    };
+
+    const hook = new OutboundDeliveryHook({
+      bindingStore: {
+        async getByThread() {
+          return [{ connectorId: 'feishu', externalChatId: 'chat-file', threadId: 'T-file', userId: 'u1', createdAt: 0 }];
+        },
+      },
+      adapters: new Map([['feishu', mockAdapter]]),
+      log: { info() {}, warn() {}, error() {}, debug() {} },
+      mediaPathResolver: (url) => {
+        if (url.startsWith('/uploads/')) return `D:\\clowder-ai\\packages\\api\\uploads\\${url.slice('/uploads/'.length)}`;
+        return undefined;
+      },
+    });
+
+    await hook.deliver('T-file', 'Here is the doc', undefined, [
+      { id: 'f1', kind: 'file', v: 1, url: '/uploads/doc-abc123.md', fileName: 'tutorial.md' },
+    ]);
+
+    assert.equal(sendMediaCalls.length, 1, 'sendMedia should be called for file block');
+    assert.equal(sendMediaCalls[0].payload.type, 'file');
+    assert.ok(sendMediaCalls[0].payload.absPath.endsWith('doc-abc123.md'));
+    assert.equal(sendMediaCalls[0].payload.fileName, 'tutorial.md');
+  });
 });

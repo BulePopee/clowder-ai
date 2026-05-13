@@ -207,7 +207,7 @@ export class FeishuAdapter implements IStreamableOutboundAdapter {
         if (!fileKey) return null;
         return {
           ...base,
-          text: fileName ? `[文件] ${fileName}` : '[文件]',
+          text: fileName?.trim() || '[文件]',
           attachments: [{ type: 'file', feishuKey: fileKey, ...(fileName ? { fileName } : {}) }],
         };
       }

@@ -32,4 +32,6 @@ export interface PortValidationOptions {
   gatewaySelfPort?: number;
   /** Runtime-configured ports to exclude (read from env at startup) */
   runtimePorts?: number[];
+  /** Allow previewing Hub's own frontend port when explicitly requested. */
+  allowFrontendPort?: boolean;
 }

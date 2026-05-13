@@ -223,6 +223,48 @@ describe('FeishuAdapter', () => {
       assert.deepEqual(result.attachments, [{ type: 'image', feishuKey: 'img_group_001' }]);
     });
 
+    it('uses file name as the parsed text for file messages', () => {
+      const adapter = new FeishuAdapter('app-id', 'app-secret', noopLog());
+      const event = {
+        header: { event_type: 'im.message.receive_v1' },
+        event: {
+          sender: { sender_id: { open_id: 'ou_sender_file' }, sender_type: 'user' },
+          message: {
+            message_id: 'om_file_001',
+            chat_id: 'oc_chat_file',
+            chat_type: 'p2p',
+            content: JSON.stringify({ file_key: 'file_key_001', file_name: 'report.pdf' }),
+            message_type: 'file',
+          },
+        },
+      };
+      const result = adapter.parseEvent(event);
+      assert.ok(result);
+      assert.equal(result.text, 'report.pdf');
+      assert.deepEqual(result.attachments, [{ type: 'file', feishuKey: 'file_key_001', fileName: 'report.pdf' }]);
+    });
+
+    it('falls back to [文件] only when file name is absent', () => {
+      const adapter = new FeishuAdapter('app-id', 'app-secret', noopLog());
+      const event = {
+        header: { event_type: 'im.message.receive_v1' },
+        event: {
+          sender: { sender_id: { open_id: 'ou_sender_file' }, sender_type: 'user' },
+          message: {
+            message_id: 'om_file_002',
+            chat_id: 'oc_chat_file',
+            chat_type: 'p2p',
+            content: JSON.stringify({ file_key: 'file_key_002' }),
+            message_type: 'file',
+          },
+        },
+      };
+      const result = adapter.parseEvent(event);
+      assert.ok(result);
+      assert.equal(result.text, '[文件]');
+      assert.deepEqual(result.attachments, [{ type: 'file', feishuKey: 'file_key_002' }]);
+    });
+
     it('returns null for unknown chat_type (not p2p or group)', () => {
       const adapter = new FeishuAdapter('app-id', 'app-secret', noopLog());
       const event = {
@@ -344,7 +386,7 @@ describe('FeishuAdapter', () => {
       };
       const result = adapter.parseEvent(event);
       assert.ok(result);
-      assert.equal(result.text, '[文件] doc.pdf');
+      assert.equal(result.text, 'doc.pdf');
       assert.deepEqual(result.attachments, [{ type: 'file', feishuKey: 'file-key-xyz', fileName: 'doc.pdf' }]);
     });
 

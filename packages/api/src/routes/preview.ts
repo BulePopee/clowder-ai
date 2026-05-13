@@ -97,7 +97,12 @@ export const previewRoutes: FastifyPluginAsync<PreviewRouteOpts> = async (app, o
         return { allowed: false, reason: 'Preview gateway unavailable' };
       }
       const { port, path, threadId, worktreeId } = req.body;
-      const result = validatePort(port, { host: 'localhost', gatewaySelfPort: gatewayPort, runtimePorts });
+      const result = validatePort(port, {
+        host: 'localhost',
+        gatewaySelfPort: gatewayPort,
+        runtimePorts,
+        allowFrontendPort: true,
+      });
       if (!result.allowed) {
         return result;
       }
