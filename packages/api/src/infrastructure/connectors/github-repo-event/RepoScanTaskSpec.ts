@@ -13,12 +13,15 @@ import type {
   ConnectorDeliveryInput,
   ConnectorDeliveryResult,
 } from '../../email/deliver-connector-message.js';
-import type { ExecuteContext, TaskSpec_P1 } from '../../scheduler/types.js';
+import type { ExecuteContext, GateCtx, TaskSpec_P1, WorkItem } from '../../scheduler/types.js';
 import type { IConnectorThreadBindingStore } from '../ConnectorThreadBindingStore.js';
 import type { ReconciliationDedup } from './ReconciliationDedup.js';
 import type { RepoInboxSignal } from './types.js';
 
 const CONNECTOR_ID = 'github-repo-event';
+const DEFAULT_MAX_WORK_ITEMS_PER_RUN = 5;
+/** Repo owner's own PRs/issues should not trigger community intake. */
+const SKIP_AUTHOR_ASSOCIATIONS = new Set(['OWNER']);
 
 export interface GhPrItem {
   number: number;
@@ -41,17 +44,30 @@ export interface RepoScanTaskSpecOptions {
   repoAllowlist: string[];
   inboxCatId: string;
   defaultUserId: string;
-  reconciliationDedup: Pick<ReconciliationDedup, 'isNotified' | 'markNotified'>;
+  reconciliationDedup: Pick<
+    ReconciliationDedup,
+    'isNotified' | 'markNotified' | 'isBaselineEstablished' | 'markBaselineEstablished'
+  >;
   bindingStore: Pick<IConnectorThreadBindingStore, 'getByExternal'>;
   deliverFn: (deps: ConnectorDeliveryDeps, input: ConnectorDeliveryInput) => Promise<ConnectorDeliveryResult>;
   deliveryDeps: ConnectorDeliveryDeps;
   invokeTrigger: {
-    trigger(threadId: string, catId: CatId, userId: string, message: string, messageId: string): void;
+    trigger(
+      threadId: string,
+      catId: CatId,
+      userId: string,
+      message: string,
+      messageId: string,
+    ): void | Promise<unknown>;
   };
   fetchOpenPRs: (repo: string) => Promise<GhPrItem[]>;
   fetchOpenIssues: (repo: string) => Promise<GhIssueItem[]>;
   log: { info(...args: unknown[]): void; warn(...args: unknown[]): void };
   pollIntervalMs?: number;
+  maxWorkItemsPerRun?: number;
+  skipHistoricalOnFirstRun?: boolean;
+  /** F202-2B: Override task ID for plugin-scoped schedule instances */
+  id?: string;
 }
 
 function formatReconciliationMessage(signal: RepoInboxSignal): string {
@@ -65,25 +81,51 @@ function formatReconciliationMessage(signal: RepoInboxSignal): string {
 }
 
 export function createRepoScanTaskSpec(opts: RepoScanTaskSpecOptions): TaskSpec_P1<RepoInboxSignal> {
+  const maxWorkItemsPerRun = Math.max(1, opts.maxWorkItemsPerRun ?? DEFAULT_MAX_WORK_ITEMS_PER_RUN);
+  const skipHistoricalOnFirstRun = opts.skipHistoricalOnFirstRun ?? true;
+  let nextWorkItemOffset = 0;
+
+  function selectWorkItems(workItems: WorkItem<RepoInboxSignal>[]): WorkItem<RepoInboxSignal>[] {
+    if (workItems.length <= maxWorkItemsPerRun) {
+      nextWorkItemOffset = 0;
+      return workItems;
+    }
+
+    const start = nextWorkItemOffset % workItems.length;
+    const selected: WorkItem<RepoInboxSignal>[] = [];
+    for (let i = 0; i < maxWorkItemsPerRun; i += 1) {
+      selected.push(workItems[(start + i) % workItems.length]!);
+    }
+    nextWorkItemOffset = (start + maxWorkItemsPerRun) % workItems.length;
+    return selected;
+  }
+
   return {
-    id: 'repo-scan',
+    id: opts.id ?? 'repo-scan',
     profile: 'poller',
     trigger: { type: 'interval', ms: opts.pollIntervalMs ?? 300_000 },
     admission: {
-      async gate() {
+      async gate(_ctx: GateCtx) {
         if (opts.repoAllowlist.length === 0) {
           return { run: false, reason: 'no repos in allowlist' };
         }
 
-        const workItems: { signal: RepoInboxSignal; subjectKey: string }[] = [];
+        const workItems: WorkItem<RepoInboxSignal>[] = [];
+        let baselinedItemCount = 0;
+        let baselinedRepoCount = 0;
 
         for (const repo of opts.repoAllowlist) {
           try {
+            const repoWorkItems: WorkItem<RepoInboxSignal>[] = [];
+            const baselineEstablished =
+              !skipHistoricalOnFirstRun || (await opts.reconciliationDedup.isBaselineEstablished(repo));
+
             const prs = await opts.fetchOpenPRs(repo);
             for (const pr of prs) {
               if (pr.draft) continue;
+              if (SKIP_AUTHOR_ASSOCIATIONS.has(pr.author_association)) continue;
               if (await opts.reconciliationDedup.isNotified(repo, 'pr', pr.number)) continue;
-              workItems.push({
+              repoWorkItems.push({
                 signal: {
                   eventType: 'pull_request.opened',
                   repoFullName: repo,
@@ -102,8 +144,9 @@ export function createRepoScanTaskSpec(opts: RepoScanTaskSpecOptions): TaskSpec_
 
             const issues = await opts.fetchOpenIssues(repo);
             for (const issue of issues) {
+              if (SKIP_AUTHOR_ASSOCIATIONS.has(issue.author_association)) continue;
               if (await opts.reconciliationDedup.isNotified(repo, 'issue', issue.number)) continue;
-              workItems.push({
+              repoWorkItems.push({
                 signal: {
                   eventType: 'issues.opened',
                   repoFullName: repo,
@@ -119,15 +162,40 @@ export function createRepoScanTaskSpec(opts: RepoScanTaskSpecOptions): TaskSpec_
                 subjectKey: `repo-${repo}#issue-${issue.number}`,
               });
             }
+
+            if (!baselineEstablished) {
+              await Promise.all(
+                repoWorkItems.map((item) =>
+                  opts.reconciliationDedup.markNotified(
+                    item.signal.repoFullName,
+                    item.signal.subjectType,
+                    item.signal.number,
+                  ),
+                ),
+              );
+              await opts.reconciliationDedup.markBaselineEstablished(repo);
+              baselinedItemCount += repoWorkItems.length;
+              baselinedRepoCount += 1;
+              continue;
+            }
+
+            workItems.push(...repoWorkItems);
           } catch {
             opts.log.warn(`[repo-scan] Failed to scan ${repo}, skipping`);
           }
         }
 
         if (workItems.length === 0) {
+          if (baselinedRepoCount > 0) {
+            return {
+              run: false,
+              reason: `baseline established for ${baselinedItemCount} existing repo items across ${baselinedRepoCount} repo(s)`,
+            };
+          }
           return { run: false, reason: 'no unnotified items' };
         }
-        return { run: true, workItems };
+
+        return { run: true, workItems: selectWorkItems(workItems) };
       },
     },
     run: {
@@ -168,13 +236,15 @@ export function createRepoScanTaskSpec(opts: RepoScanTaskSpecOptions): TaskSpec_
         await opts.reconciliationDedup.markNotified(signal.repoFullName, signal.subjectType, signal.number);
 
         try {
-          opts.invokeTrigger.trigger(
-            binding.threadId,
-            opts.inboxCatId as CatId,
-            opts.defaultUserId,
-            content,
-            delivered.messageId,
-          );
+          void Promise.resolve(
+            opts.invokeTrigger.trigger(
+              binding.threadId,
+              opts.inboxCatId as CatId,
+              opts.defaultUserId,
+              content,
+              delivered.messageId,
+            ),
+          ).catch(() => opts.log.warn(`[repo-scan] trigger failed for ${signal.repoFullName}#${signal.number}`));
         } catch {
           opts.log.warn(`[repo-scan] trigger failed for ${signal.repoFullName}#${signal.number}`);
         }

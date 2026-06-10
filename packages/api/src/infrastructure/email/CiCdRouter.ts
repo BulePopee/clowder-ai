@@ -39,6 +39,13 @@ export interface CiCdRouterOptions {
   readonly deliveryDeps: ConnectorDeliveryDeps;
   readonly log: FastifyBaseLogger;
   readonly notifySkip?: (threadId: string, reason: string) => void;
+  /** F192 Phase G: emit A1 world truth signal when PR merges/reverts */
+  readonly onPrLifecycle?: (event: {
+    type: 'merge' | 'revert';
+    ref: string;
+    outcome: 'success' | 'failure';
+    threadId: string;
+  }) => void;
 }
 
 export class CiCdRouter {
@@ -67,8 +74,27 @@ export class CiCdRouter {
 
     if (poll.prState === 'merged' || poll.prState === 'closed') {
       // #320 KD-17: lifecycle close = mark task done (not delete)
+      // F200 AC-D2.3: persist prState so signal detection can distinguish merged vs closed
       await taskStore.update(task.id, { status: 'done' });
+      await taskStore.patchAutomationState(task.id, { ci: { prState: poll.prState } });
       log.info(`[CiCdRouter] PR ${poll.repoFullName}#${poll.prNumber} ${poll.prState} — task marked done`);
+
+      // F192 Phase G: emit A1 world truth signal on merge only.
+      // 'closed' = PR abandoned without merge — NOT a code revert.
+      // Code reverts are separate git events (revert commits), not PR lifecycle.
+      if (poll.prState === 'merged' && this.opts.onPrLifecycle) {
+        try {
+          this.opts.onPrLifecycle({
+            type: 'merge',
+            ref: `PR#${poll.prNumber}`,
+            outcome: 'success',
+            threadId: task.threadId,
+          });
+        } catch {
+          // Best-effort: don't break CI/CD routing
+        }
+      }
+
       return { kind: 'skipped', reason: `PR ${poll.prState}` };
     }
 
@@ -89,11 +115,17 @@ export class CiCdRouter {
 
   private async deliver(
     poll: CiPollResult,
-    task: { id: string; threadId: string; ownerCatId: string | null; userId?: string },
+    task: {
+      id: string;
+      threadId: string;
+      ownerCatId: string | null;
+      userId?: string;
+      automationState?: { trackingInstructions?: string };
+    },
     fingerprint: string,
   ): Promise<CiRouteResult> {
     const { taskStore, log } = this.opts;
-    const content = buildCiMessageContent(poll);
+    const content = buildCiMessageContent(poll, task.automationState?.trackingInstructions);
 
     const source: ConnectorSource = {
       connector: 'github-ci',
@@ -135,7 +167,7 @@ export class CiCdRouter {
   }
 }
 
-export function buildCiMessageContent(poll: CiPollResult): string {
+export function buildCiMessageContent(poll: CiPollResult, trackingInstructions?: string): string {
   const bucketEmoji = poll.aggregateBucket === 'pass' ? '✅' : '❌';
   const bucketLabel = poll.aggregateBucket === 'pass' ? 'CI 通过' : 'CI 失败';
 
@@ -158,6 +190,11 @@ export function buildCiMessageContent(poll: CiPollResult): string {
 
   if (poll.aggregateBucket === 'fail') {
     lines.push('', '请检查 CI 失败原因并修复。');
+  }
+
+  // F202 Phase 2C (AC-C2): append user-provided tracking instructions
+  if (trackingInstructions) {
+    lines.push('', '📌 **Tracking Instructions**', trackingInstructions);
   }
 
   return lines.join('\n');

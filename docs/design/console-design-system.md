@@ -1,3 +1,12 @@
+---
+feature_ids: [F190]
+related_features: [F056, F199, F206]
+topics: [console, design-system, settings, appshell, community]
+doc_kind: design
+created: 2026-05-19
+source: clowder-ai#645 docs/design/console-design-system.md
+---
+
 # Console Design System
 
 > Cat Cafe Console 的视觉语言规范。所有前端组件必须遵循本文档。

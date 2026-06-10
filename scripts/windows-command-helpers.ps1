@@ -62,6 +62,9 @@ function Get-ToolCommandCandidates {
     if ($env:APPDATA) {
         $candidates += @((Join-Path $env:APPDATA "npm\$Name.cmd"), (Join-Path $env:APPDATA "npm\$Name.ps1"), (Join-Path $env:APPDATA "npm\$Name"))
     }
+    if ($Name -eq "agy" -and $env:LOCALAPPDATA) {
+        $candidates += @((Join-Path $env:LOCALAPPDATA "agy\bin\agy.exe"))
+    }
     foreach ($npmPrefix in (Get-NpmConfigPrefixCandidates)) {
         $candidates += @((Join-Path $npmPrefix "$Name.cmd"), (Join-Path $npmPrefix "$Name.ps1"), (Join-Path $npmPrefix $Name))
     }
@@ -175,5 +178,8 @@ function Invoke-ToolCommand {
     param([string]$Name, [string[]]$CommandArgs)
     $toolCommand = Resolve-ToolCommand -Name $Name
     if (-not $toolCommand) { throw "$Name command not found" }
-    & $toolCommand @CommandArgs
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & $toolCommand @CommandArgs }
+    finally { $ErrorActionPreference = $prevEAP }
 }

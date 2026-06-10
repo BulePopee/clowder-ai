@@ -565,7 +565,22 @@ export function buildCatCafeMcpDescriptor(projectRoot: string): McpServerDescrip
   };
 }
 
-const CAT_CAFE_SPLIT_SERVER_IDS = ['cat-cafe-collab', 'cat-cafe-memory', 'cat-cafe-signals'] as const;
+// F193 Phase C: split-only — add cat-cafe-limb (was previously hosted by all-in-one
+// `cat-cafe` server only via registerFullToolset). F207 Phase B0 adds the
+// finance read-only data plane as its own split server. The split servers
+// replace the legacy all-in-one topology for fresh managed installs.
+const CAT_CAFE_SPLIT_SERVER_IDS = [
+  'cat-cafe-collab',
+  'cat-cafe-memory',
+  'cat-cafe-signals',
+  'cat-cafe-limb',
+  'cat-cafe-finance',
+] as const;
+
+const CAT_CAFE_SUPPLEMENTAL_SPLIT_SERVERS = [
+  { id: 'cat-cafe-limb', entrypoint: 'limb.js' },
+  { id: 'cat-cafe-finance', entrypoint: 'finance.js' },
+] as const;
 
 /**
  * Resolve the runtime binary root (where Clowder AI MCP server code lives).
@@ -613,6 +628,22 @@ function buildCatCafeSplitMcpDescriptors(binaryRoot: string): McpServerDescripto
       name: 'cat-cafe-signals',
       command: 'node',
       args: [resolve(binaryRoot, 'packages/mcp-server/dist/signals.js')],
+      enabled: true,
+      source: 'cat-cafe',
+    },
+    {
+      // F193 Phase C: limb tools get their own namespace (布偶猫专属能力).
+      name: 'cat-cafe-limb',
+      command: 'node',
+      args: [resolve(binaryRoot, 'packages/mcp-server/dist/limb.js')],
+      enabled: true,
+      source: 'cat-cafe',
+    },
+    {
+      // F207 Phase B0: finance facts get a dedicated read-only data plane.
+      name: 'cat-cafe-finance',
+      command: 'node',
+      args: [resolve(binaryRoot, 'packages/mcp-server/dist/finance.js')],
       enabled: true,
       source: 'cat-cafe',
     },
@@ -674,14 +705,28 @@ export function migrateLegacyCatCafeCapability(
   // `projectRoot` is workspace, NOT binary root. Use resolveBinaryRoot for the
   // binary path (codex review on PR #1396 R3). The opts.projectRoot field is
   // accepted for backward-compatible callers but ignored for path resolution.
-  const splitSet = new Set(CAT_CAFE_SPLIT_SERVER_IDS);
-  const hasSplit = config.capabilities.some((cap) =>
-    splitSet.has(cap.id as (typeof CAT_CAFE_SPLIT_SERVER_IDS)[number]),
-  );
-  if (hasSplit) return { migrated: false, config };
+  const splitSet = new Set<string>(CAT_CAFE_SPLIT_SERVER_IDS);
 
-  const legacyCatCafe = config.capabilities.find((cap) => cap.type === 'mcp' && cap.id === 'cat-cafe');
+  // Cloud round 4 P2 (PR #1605): hasSplit must filter by source.
+  // External MCP servers reusing split ids (cat-cafe-collab/memory/signals/limb/finance)
+  // are ID collisions, not "already split" — we should not skip migration on
+  // their account.
+  const hasManagedSplit = config.capabilities.some(
+    (cap) => cap.type === 'mcp' && cap.source === 'cat-cafe' && splitSet.has(cap.id),
+  );
+  if (hasManagedSplit) return { migrated: false, config };
+
+  const legacyCatCafe = config.capabilities.find(
+    (cap) => cap.type === 'mcp' && cap.source === 'cat-cafe' && cap.id === 'cat-cafe',
+  );
   if (!legacyCatCafe) return { migrated: false, config };
+
+  // Collision guard: if any planned managed split id is already taken by a
+  // non-managed entry, bail out. Adding duplicate ids would corrupt
+  // capabilities.json (cloud round 3 P2 + round 4 logic).
+  const existingIds = new Set(config.capabilities.filter((cap) => cap.type === 'mcp').map((cap) => cap.id));
+  const wouldCollide = CAT_CAFE_SPLIT_SERVER_IDS.some((id) => existingIds.has(id));
+  if (wouldCollide) return { migrated: false, config };
 
   const binaryRoot = resolveBinaryRoot(opts?.catCafeRepoRoot);
   const nextCapabilities = config.capabilities.filter((cap) => cap.id !== 'cat-cafe');
@@ -734,38 +779,162 @@ export function migrateResolverBackedCapabilities(config: CapabilitiesConfig): {
 }
 
 /**
- * F145 Phase C: Ensure the cat-cafe main server (index.js, hosts limb tools)
- * exists alongside split servers. Handles upgrades from pre-AC-C3 installs
- * where only split servers were bootstrapped.
+ * F193 Phase C: Replace legacy F145 `ensureCatCafeMainServer` semantics.
+ *
+ * **Old (F145 Phase C)**: when split servers exist but main `cat-cafe` doesn't
+ * → re-add main (because limb tools were piggybacked on the all-in-one server).
+ *
+ * **New (F193 Phase C, 2026-05-08 + F207 Phase B0)**: split-only direction.
+ *   1. If all-in-one `cat-cafe` entry exists → REMOVE it once supplemental splits are available
+ *   2. If core splits exist but supplemental splits are missing → ADD them
+ *      (limb for F193, finance for F207)
+ *
+ * Splits without main is the new canonical state.
+ *
+ * Existing call sites (capabilities.ts / capabilities-mcp-write.ts / orchestrate())
+ * still call this function under its old name — Phase D follow-up may rename.
+ * For Phase C, behavior change is what matters.
  */
 export function ensureCatCafeMainServer(
   config: CapabilitiesConfig,
   opts?: { catCafeRepoRoot?: string; projectRoot?: string },
 ): { migrated: boolean; config: CapabilitiesConfig } {
-  // `projectRoot` is workspace, NOT binary root (codex review PR #1396 R3).
   const splitSet = new Set<string>(CAT_CAFE_SPLIT_SERVER_IDS);
-  const hasSplit = config.capabilities.some((cap) => splitSet.has(cap.id));
-  if (!hasSplit) return { migrated: false, config };
 
-  const hasMain = config.capabilities.some((cap) => cap.type === 'mcp' && cap.id === 'cat-cafe');
-  if (hasMain) return { migrated: false, config };
+  // Cloud round 2 P2 (PR #1605): match by `source === 'cat-cafe'` AND id —
+  // an external MCP server that happens to reuse split IDs (cat-cafe-collab
+  // etc.) must NOT trigger this managed-cafe migration path. Without this
+  // filter, an ID-collision could silently remove a managed `cat-cafe` entry
+  // even though the project has no real split servers.
+  const isManagedSplit = (cap: CapabilityEntry): boolean =>
+    cap.type === 'mcp' && cap.source === 'cat-cafe' && splitSet.has(cap.id);
+  const isManagedMain = (cap: CapabilityEntry): boolean =>
+    cap.type === 'mcp' && cap.source === 'cat-cafe' && cap.id === 'cat-cafe';
 
-  const binaryRoot = resolveBinaryRoot(opts?.catCafeRepoRoot);
-  // Inherit enabled/overrides/env/workingDir from the first split server,
-  // so we don't re-enable a server the user explicitly disabled.
-  const firstSplit = config.capabilities.find((cap) => splitSet.has(cap.id));
-  const mainEntry = toCapabilityEntry(buildCatCafeMcpDescriptor(binaryRoot));
-  if (firstSplit) {
-    mainEntry.enabled = firstSplit.enabled;
-    if (firstSplit.overrides) mainEntry.overrides = firstSplit.overrides.map((o) => ({ ...o }));
-    if (firstSplit.mcpServer?.env) mainEntry.mcpServer!.env = { ...firstSplit.mcpServer.env };
-    if (firstSplit.mcpServer?.workingDir) mainEntry.mcpServer!.workingDir = firstSplit.mcpServer.workingDir;
+  // Cloud round 1 P2 (PR #1605): require the full canonical 3-split set
+  // (collab + memory + signals) before any migration. Limb and finance are
+  // supplemental splits we may add; the other three are the fundamental tool surface. Migrating
+  // a partial config (e.g. `cat-cafe + cat-cafe-collab` only) would silently
+  // remove the only source of memory/signal tools — a data-plane regression.
+  const splitIds = new Set(config.capabilities.filter(isManagedSplit).map((cap) => cap.id));
+  const hasFullSplitSet =
+    splitIds.has('cat-cafe-collab') && splitIds.has('cat-cafe-memory') && splitIds.has('cat-cafe-signals');
+  if (!hasFullSplitSet) return { migrated: false, config };
+
+  // Compute supplemental split availability before mutating anything.
+  // F193 PCFU AC-PCFU-1: detect external entries whose binary IS the repo's
+  // own split entrypoint. Suffix match on `packages/mcp-server/dist/{entrypoint}`
+  // is specific enough to avoid false positives (server id must also match)
+  // and handles binaryRoot/CAT_CAFE_RUNTIME_ROOT drift gracefully — the user
+  // might have absolute-pathed a prior worktree but the trailing structure
+  // remains identical because we ship the binary there.
+  //
+  // Cloud codex review #1883 P1 fix (2026-05-24): also require `enabled: true`.
+  // The R4 P1 fail-safe philosophy is "don't remove legacy unless the split is
+  // ACTUALLY available". A disabled external split won't expose tools via
+  // `resolveServersForCat`, so it doesn't satisfy the availability condition.
+  //
+  // Cloud codex review #1883 P2 fix (2026-05-24): normalize backslash to
+  // forward slash before suffix match. Windows `resolve(...)` yields
+  // backslash-separated paths; without normalization the suffix check fails
+  // silently on Windows installs that use same-repo external split shapes.
+  const isSameRepoExternalSplit = (cap: CapabilityEntry, id: string, entrypoint: string): boolean => {
+    if (cap.type !== 'mcp' || cap.id !== id || cap.source !== 'external') return false;
+    if (cap.enabled !== true) return false;
+    const arg0 = cap.mcpServer?.args?.[0];
+    if (typeof arg0 !== 'string') return false;
+    const posixArg = arg0.replace(/\\/g, '/');
+    return posixArg.endsWith(`packages/mcp-server/dist/${entrypoint}`);
+  };
+  const supplementalAvailability = CAT_CAFE_SUPPLEMENTAL_SPLIT_SERVERS.map(({ id, entrypoint }) => {
+    const hasManaged = config.capabilities.some((cap) => isManagedSplit(cap) && cap.id === id);
+    const hasAnyId = config.capabilities.some((cap) => cap.type === 'mcp' && cap.id === id);
+    const canAddManaged = !hasAnyId;
+    const hasSameRepoExternal = config.capabilities.some((cap) => isSameRepoExternalSplit(cap, id, entrypoint));
+    return {
+      id,
+      hasAnyId,
+      willHaveManaged: hasManaged || canAddManaged || hasSameRepoExternal,
+    };
+  });
+
+  // Capture legacy managed `cat-cafe` settings BEFORE any decision.
+  // Supplemental tools were piggybacked on the all-in-one `cat-cafe` server
+  // (via registerFullToolset), so the legacy entry's enabled/overrides/env
+  // represent user intent for these split tools (cloud round 1 P1: prevent
+  // silent re-enable when user had cat-cafe disabled).
+  const legacyMain = config.capabilities.find(isManagedMain);
+
+  // Cloud round 4 P1 (PR #1605): only remove legacy `cat-cafe` if managed
+  // supplemental splits will be available afterwards. Otherwise the user loses
+  // that tool surface entirely (legacy `cat-cafe` was the only managed server
+  // hosting it via registerFullToolset). Foreign external entries sharing the
+  // id are NOT a valid replacement.
+  const canProvideAllSupplementalSplits = supplementalAvailability.every((split) => split.willHaveManaged);
+  const shouldRemoveLegacyMain = legacyMain !== undefined && canProvideAllSupplementalSplits;
+
+  // If we can't safely complete migration (legacy main exists, but managed
+  // supplemental splits can't be added because of ID collision), bail out
+  // entirely to preserve the existing tool surface.
+  if (legacyMain !== undefined && !shouldRemoveLegacyMain) {
+    return { migrated: false, config };
   }
-  const firstSplitIdx = config.capabilities.findIndex((cap) => splitSet.has(cap.id));
-  const capabilities = [...config.capabilities];
-  capabilities.splice(firstSplitIdx, 0, mainEntry);
 
-  return { migrated: true, config: { ...config, capabilities } };
+  let migrated = false;
+  let capabilities = [...config.capabilities];
+
+  // Step 1: remove legacy all-in-one managed `cat-cafe` if present (and only
+  // if supplemental splits will be available, per R4 P1 above).
+  if (shouldRemoveLegacyMain) {
+    capabilities = capabilities.filter((cap) => !isManagedMain(cap));
+    migrated = true;
+  }
+
+  // Step 2: ensure managed supplemental splits exist alongside core splits.
+  //
+  // Cloud round 3 P2 (PR #1605): the existence check uses id alone. If ANY
+  // entry (managed OR external) already claims an id, we must NOT add another.
+  // Capability IDs must be unique in `capabilities.json`;
+  // downstream resolvers (CLI config writers, probe routes) key by id alone
+  // and would resolve to whichever comes first, hiding the duplicate.
+  const binaryRoot = resolveBinaryRoot(opts?.catCafeRepoRoot);
+  const descriptors = buildCatCafeSplitMcpDescriptors(binaryRoot);
+  for (const split of supplementalAvailability) {
+    if (split.hasAnyId) continue;
+    const descriptor = descriptors.find((d) => d.name === split.id);
+    if (descriptor) {
+      const splitEntry = toCapabilityEntry(descriptor);
+      // P1 inheritance precedence:
+      //   1. legacy managed `cat-cafe` (if exists) — it hosted these tools, so
+      //      its enabled/overrides/env represent user intent for the split
+      //   2. first existing managed split (fallback for fresh 3-split install
+      //      with no legacy main to inherit from)
+      const inheritFrom = legacyMain ?? capabilities.find(isManagedSplit);
+      if (inheritFrom) {
+        splitEntry.enabled = inheritFrom.enabled;
+        if (inheritFrom.overrides) splitEntry.overrides = inheritFrom.overrides.map((o) => ({ ...o }));
+        if (inheritFrom.mcpServer?.env) splitEntry.mcpServer!.env = { ...inheritFrom.mcpServer.env };
+        if (inheritFrom.mcpServer?.workingDir) splitEntry.mcpServer!.workingDir = inheritFrom.mcpServer.workingDir;
+      }
+      // Insert near other managed splits (keep config readable)
+      const lastSplitIdx = (() => {
+        let lastIdx = -1;
+        for (let i = 0; i < capabilities.length; i++) {
+          const cap = capabilities[i];
+          if (cap && isManagedSplit(cap)) lastIdx = i;
+        }
+        return lastIdx;
+      })();
+      if (lastSplitIdx >= 0) {
+        capabilities.splice(lastSplitIdx + 1, 0, splitEntry);
+      } else {
+        capabilities.push(splitEntry);
+      }
+      migrated = true;
+    }
+  }
+
+  return migrated ? { migrated: true, config: { ...config, capabilities } } : { migrated: false, config };
 }
 
 /**
@@ -842,8 +1011,10 @@ export async function bootstrapCapabilities(
 
   const capabilities: CapabilityEntry[] = [];
 
-  // Add Cat Cafe's own MCP (main server + split servers)
-  capabilities.push(toCapabilityEntry(buildCatCafeMcpDescriptor(catCafeRepoRoot)));
+  // F193/F207 split-only direction — only split servers
+  // (collab/memory/signals/limb/finance), no all-in-one. The legacy `cat-cafe` server
+  // (registerFullToolset) remains in code for backward compat / tests but is
+  // not generated for fresh installs.
   for (const entry of buildSplitCapabilityEntries(catCafeRepoRoot)) {
     capabilities.push(entry);
   }
@@ -860,6 +1031,38 @@ export async function bootstrapCapabilities(
   const resolverMigrated = migrateResolverBackedCapabilities(config);
   await writeCapabilitiesConfig(projectRoot, resolverMigrated.config);
   return resolverMigrated.config;
+}
+
+/**
+ * F193 Phase C: shared migration chain for any code path that mutates
+ * capabilities.json or generates CLI configs from it.
+ *
+ * Codex round 7 P1 (PR #1605): the GET /api/capabilities path already ran
+ * the full chain, but `capabilities-mcp-write.ts` (MCP install/delete) and
+ * `PATCH /api/capabilities` (toggle) skipped `migrateLegacyCatCafeCapability`
+ * + `migrateResolverBackedCapabilities`. Result: a legacy-only `cat-cafe`
+ * config staying legacy-only after install/delete/toggle, even though
+ * Phase C semantics require split-only canonical state.
+ *
+ * Single source of truth: every config read → full chain → write/CLI-gen.
+ * Order matters:
+ *   1. migrateLegacyCatCafeCapability — legacy 1-server → 5 split servers
+ *   2. migrateResolverBackedCapabilities — pencil resolver-backed paths
+ *   3. ensureCatCafeMainServer — split topology (remove legacy, add supplemental splits)
+ *   4. realignManagedCatCafeServerPaths — stable binary path realignment
+ */
+export function healCatCafeMcpTopology(
+  config: CapabilitiesConfig,
+  opts?: { catCafeRepoRoot?: string; projectRoot?: string },
+): { migrated: boolean; config: CapabilitiesConfig } {
+  const a = migrateLegacyCatCafeCapability(config, opts);
+  const b = migrateResolverBackedCapabilities(a.config);
+  const c = ensureCatCafeMainServer(b.config, opts);
+  const d = realignManagedCatCafeServerPaths(c.config, opts);
+  return {
+    migrated: a.migrated || b.migrated || c.migrated || d.migrated,
+    config: d.config,
+  };
 }
 
 // ────────── Orchestrate: Generate CLI configs from capabilities.json ──────────
@@ -1052,12 +1255,9 @@ export async function orchestrate(
     config = await bootstrapCapabilities(projectRoot, discoveryPaths, opts);
   } else {
     const rootOpts = opts?.catCafeRepoRoot ? { projectRoot, catCafeRepoRoot: opts.catCafeRepoRoot } : { projectRoot };
-    const migrated = migrateLegacyCatCafeCapability(config, rootOpts);
-    const resolverMigrated = migrateResolverBackedCapabilities(migrated.config);
-    const mainServerMigrated = ensureCatCafeMainServer(resolverMigrated.config, rootOpts);
-    const pathRealigned = realignManagedCatCafeServerPaths(mainServerMigrated.config, rootOpts);
-    config = pathRealigned.config;
-    if (migrated.migrated || resolverMigrated.migrated || mainServerMigrated.migrated || pathRealigned.migrated) {
+    const healed = healCatCafeMcpTopology(config, rootOpts);
+    config = healed.config;
+    if (healed.migrated) {
       await writeCapabilitiesConfig(projectRoot, config);
     }
   }

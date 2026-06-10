@@ -784,6 +784,57 @@ describe('InvocationQueue', () => {
     );
   });
 
+  it('hasActiveOrQueuedAgentForCat can exclude the current processing entry', () => {
+    const current = queue.enqueue({
+      threadId: 't1',
+      userId: 'system',
+      content: 'current multi-target handoff',
+      source: 'agent',
+      targetCats: ['opus-47', 'codex'],
+      intent: 'execute',
+      autoExecute: true,
+      callerCatId: 'opus',
+    });
+    queue.markProcessing('t1', 'system');
+
+    assert.equal(queue.hasActiveOrQueuedAgentForCat('t1', 'codex'), true);
+    assert.equal(
+      queue.hasActiveOrQueuedAgentForCat('t1', 'codex', { excludeEntryId: current.entry.id }),
+      false,
+      'current route entry must not block a later same-route A2A handoff back to an already-run target',
+    );
+  });
+
+  it('hasActiveOrQueuedAgentForCat still blocks other pending entries when excluding current entry', () => {
+    const current = queue.enqueue({
+      threadId: 't1',
+      userId: 'system',
+      content: 'current route',
+      source: 'agent',
+      targetCats: ['opus-47', 'codex'],
+      intent: 'execute',
+      autoExecute: true,
+      callerCatId: 'opus',
+    });
+    queue.markProcessing('t1', 'system');
+    queue.enqueue({
+      threadId: 't1',
+      userId: 'system',
+      content: 'already queued callback handoff',
+      source: 'agent',
+      targetCats: ['codex'],
+      intent: 'execute',
+      autoExecute: true,
+      callerCatId: 'opus',
+    });
+
+    assert.equal(
+      queue.hasActiveOrQueuedAgentForCat('t1', 'codex', { excludeEntryId: current.entry.id }),
+      true,
+      'a separate queued agent entry must still block duplicate text-scan A2A',
+    );
+  });
+
   it('hasActiveOrQueuedAgentForCat returns false after entry completes', () => {
     queue.enqueue({
       threadId: 't1',
@@ -921,8 +972,47 @@ describe('InvocationQueue', () => {
     assert.equal(
       queue.hasQueuedUserMessagesForThread('t1'),
       false,
-      'connector-sourced entries should not block A2A text-scan',
+      'connector-sourced entries should not block A2A text-scan (user-only method)',
     );
+  });
+
+  // ── F185 Phase B: text-scan fairness gate must use hasQueuedNonAgentForThread ──
+
+  it('hasQueuedNonAgentForThread blocks text-scan when connector entry is queued (F185-B AC-B1)', () => {
+    queue.enqueue(entry({ source: 'connector', targetCats: ['opus'] }));
+    assert.equal(
+      queue.hasQueuedNonAgentForThread('t1'),
+      true,
+      'connector-sourced entries must block A2A text-scan fairness gate',
+    );
+  });
+
+  it('hasQueuedNonAgentForThread does not block when only agent entries are queued (F185-B AC-B8)', () => {
+    queue.enqueue(entry({ source: 'agent', targetCats: ['opus'], callerCatId: 'codex' }));
+    assert.equal(queue.hasQueuedNonAgentForThread('t1'), false, 'pure agent queue must not trigger fairness gate');
+  });
+
+  // ── F185 Phase B P1-1: deferred A2A messageId preservation ──
+
+  it('enqueue preserves messageId when provided (F185-B deferred handoff)', () => {
+    const result = queue.enqueue(
+      entry({
+        source: 'agent',
+        sourceCategory: 'a2a',
+        callerCatId: 'opus',
+        messageId: 'msg-trigger-123',
+      }),
+    );
+    assert.equal(
+      result.entry.messageId,
+      'msg-trigger-123',
+      'deferred A2A entry must carry triggerMessageId as messageId',
+    );
+  });
+
+  it('enqueue defaults messageId to null when not provided', () => {
+    const result = queue.enqueue(entry({ source: 'user' }));
+    assert.equal(result.entry.messageId, null, 'messageId must default to null for normal entries');
   });
 
   // ── F175: priority / sourceCategory / position fields ──
@@ -1282,5 +1372,30 @@ describe('InvocationQueue', () => {
     queue.enqueue(entry());
     const d = queue.dequeue('t1', 'u1');
     assert.equal(d.callerTraceContext, undefined);
+  });
+
+  // findProcessingByCat (2026-06-02 Steer 抢占 tombstone support)
+  describe('findProcessingByCat', () => {
+    it('finds the processing entry targeting a cat (across users)', () => {
+      queue.enqueue(entry({ userId: 'u1', targetCats: ['opus'] }));
+      queue.markProcessing('t1', 'u1'); // → processing
+      queue.enqueue(entry({ userId: 'u2', targetCats: ['codex'] }));
+      queue.markProcessing('t1', 'u2');
+      const found = queue.findProcessingByCat('t1', 'opus');
+      assert.ok(found);
+      assert.equal(found.targetCats[0], 'opus');
+      assert.equal(found.status, 'processing');
+    });
+
+    it('returns null when the cat has no processing entry (only queued)', () => {
+      queue.enqueue(entry({ targetCats: ['opus'] })); // queued, not processing
+      assert.equal(queue.findProcessingByCat('t1', 'opus'), null);
+    });
+
+    it('returns null for a different cat', () => {
+      queue.enqueue(entry({ targetCats: ['opus'] }));
+      queue.markProcessing('t1', 'u1');
+      assert.equal(queue.findProcessingByCat('t1', 'codex'), null);
+    });
   });
 });

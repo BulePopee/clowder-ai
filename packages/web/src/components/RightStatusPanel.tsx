@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatCatName, useCatData } from '@/hooks/useCatData';
+import { catColorVar } from '@/lib/cat-slug';
 import type { CatInvocationInfo } from '@/stores/chatStore';
 import { useChatStore } from '@/stores/chatStore';
 import { apiFetch } from '@/utils/api-client';
@@ -18,7 +19,6 @@ import {
   modeLabel,
   statusLabel,
   statusTone,
-  truncateId,
 } from './status-helpers';
 import { CatInvocationTime, CollapsibleIds } from './status-panel-parts';
 
@@ -57,18 +57,18 @@ function CatInvocationCard({
 }) {
   const { getCatById } = useCatData();
   const cat = getCatById(catId);
-  const dotColor = cat?.color.primary ?? 'var(--console-cat-fallback)';
+  const dotColor = catColorVar(cat?.id, 'primary');
   return (
     <div className="text-xs">
-      <div className="flex items-center gap-1.5 mb-1">
+      <div className="flex items-center gap-1.5 mb-1 min-w-0">
         <span
-          className={`inline-block h-2.5 w-2.5 rounded-full ${isActive ? 'animate-pulse' : ''}`}
+          className={`shrink-0 inline-block h-2.5 w-2.5 rounded-full ${isActive ? 'animate-pulse' : ''}`}
           style={{ backgroundColor: dotColor }}
         />
-        <span className="font-medium text-cafe-secondary">{cat ? formatCatName(cat) : catId}</span>
+        <span className="truncate min-w-0 font-medium text-cafe-secondary">{cat ? formatCatName(cat) : catId}</span>
         {inv.sessionSeq !== undefined && (
           <span
-            className={`text-[10px] px-1 py-0.5 rounded ${
+            className={`shrink-0 text-micro px-1 py-0.5 rounded ${
               inv.sessionSealed
                 ? 'bg-conn-amber-bg text-conn-amber-text'
                 : 'bg-cafe-surface-elevated text-cafe-secondary'
@@ -124,13 +124,13 @@ function ThinkingModeToggle({ threadId }: { threadId: string }) {
   }, [threadId, isDebug, mode, updateLocal]);
 
   return (
-    <div className="flex items-center justify-between">
-      <span>
+    <div className="flex items-center justify-between gap-2 min-w-0">
+      <span className="truncate min-w-0">
         心里话: <span className="font-medium">{isDebug ? '调试' : '游戏'}</span>
       </span>
       <button
         onClick={toggle}
-        className="console-pill rounded-full px-3 py-1 text-[11px] transition-colors hover:text-cafe"
+        className="shrink-0 rounded-full px-3 py-1 text-label transition-colors hover:text-cafe"
         title={isDebug ? '切换到游戏模式（猫猫互相看不到心里话）' : '切换到调试模式（猫猫互相分享心里话）'}
       >
         {isDebug ? '切换游戏' : '切换调试'}
@@ -205,14 +205,14 @@ function BubbleDisplayToggle({
   }, [threadId, field, next, current, updateLocal, bubbleRestorePending]);
 
   return (
-    <div className="flex items-center justify-between">
-      <span>
+    <div className="flex items-center justify-between gap-2 min-w-0">
+      <span className="truncate min-w-0">
         {label}: <span className="font-medium">{currentLabel}</span>
       </span>
       <button
         onClick={cycle}
         disabled={bubbleRestorePending}
-        className="console-pill rounded-full px-3 py-1 text-[11px] transition-colors hover:text-cafe"
+        className="shrink-0 rounded-full px-3 py-1 text-label transition-colors hover:text-cafe"
       >
         {bubbleRestorePending ? '恢复中...' : BUBBLE_LABELS[next as keyof typeof BUBBLE_LABELS]}
       </button>
@@ -266,15 +266,15 @@ function RevealWhispersButton({ threadId }: { threadId: string }) {
   }, [threadId, status]);
 
   return (
-    <div className="flex items-center justify-between">
-      <span>悄悄话:</span>
+    <div className="flex items-center justify-between gap-2 min-w-0">
+      <span className="shrink-0">悄悄话:</span>
       {status === 'done' ? (
-        <span className="text-[11px] text-conn-emerald-text">已揭秘 {revealedCount} 条</span>
+        <span className="shrink-0 text-label text-conn-emerald-text">已揭秘 {revealedCount} 条</span>
       ) : (
         <button
           onClick={handleReveal}
           disabled={status === 'pending'}
-          className="console-pill rounded-full px-3 py-1 text-[11px] text-conn-amber-text transition-colors hover:opacity-90 disabled:opacity-50"
+          className="shrink-0 rounded-full px-3 py-1 text-label text-conn-amber-text transition-colors hover:opacity-90 disabled:opacity-50"
           title="揭晓本线程所有悄悄话"
         >
           {status === 'pending' ? '揭秘中...' : '揭秘全部'}
@@ -338,10 +338,10 @@ function RuntimeLogsButton() {
 
   return (
     <section className={`${SIDEBAR_CARD} flex items-center justify-between px-3 py-2`}>
-      <h3 className="text-[11px] font-bold text-cafe-secondary">运行日志</h3>
+      <h3 className="text-label font-bold text-cafe">运行日志</h3>
       <button
         onClick={handleClick}
-        className="text-[11px] font-bold text-cafe-secondary transition-colors hover:text-cafe"
+        className="text-label font-bold text-cafe transition-colors hover:text-cafe"
         title="在 Workspace 面板中打开运行日志目录"
       >
         查看日志
@@ -363,13 +363,17 @@ export function RightStatusPanel({
   initialHistoryOpen = false,
 }: RightStatusPanelProps) {
   // F26: Split into active (working now) vs history (appeared before)
+  // review-#784 P2 + AC-Z15: pass intentMode so deriveActiveCats preserves the
+  // full targetCats union during ideate rounds (matches ParallelStatusBar /
+  // MobileStatusSheet behavior; without this, finished-cat slots get demoted
+  // to history while the round is still running).
   const { activeCats, historyCats } = useMemo(() => {
     const snapshotCats = collectSnapshotActiveCats(catInvocations);
-    const active = deriveActiveCats({ targetCats, snapshotCats, activeInvocations, hasActiveInvocation });
+    const active = deriveActiveCats({ targetCats, snapshotCats, activeInvocations, hasActiveInvocation, intentMode });
     const allParticipants = new Set([...active, ...Object.keys(catInvocations)]);
     const history = [...allParticipants].filter((c) => !active.includes(c));
     return { activeCats: active, historyCats: history };
-  }, [targetCats, catInvocations, activeInvocations, hasActiveInvocation]);
+  }, [targetCats, catInvocations, activeInvocations, hasActiveInvocation, intentMode]);
 
   const { getCatById } = useCatData();
   const [historyOpen, setHistoryOpen] = useState(initialHistoryOpen);
@@ -396,21 +400,21 @@ export function RightStatusPanel({
       }}
     >
       <div className="px-0.5 pb-1">
-        <p className="text-[15px] font-bold text-cafe">状态栏</p>
-        <span className="text-[10px] text-cafe-secondary">当前模式：{modeLabel(intentMode)}</span>
+        <p className="text-sm font-bold text-cafe">状态栏</p>
+        <span className="text-micro text-cafe-secondary">当前模式：{modeLabel(intentMode)}</span>
       </div>
 
       <section className={`${SIDEBAR_CARD} p-2.5`}>
-        <h3 className="text-[11px] font-bold text-cafe mb-2">猫猫状态</h3>
+        <h3 className="text-label font-bold text-cafe mb-2">猫猫状态</h3>
         <div className="space-y-2">
           {activeCats.length > 0 ? (
             activeCats.map((catId) => {
               const cat = getCatById(catId);
-              const dotColor = cat?.color.primary ?? 'var(--console-cat-fallback)';
+              const dotColor = catColorVar(cat?.id, 'primary');
               const status = catStatuses[catId] ?? 'pending';
               const inv = catInvocations[catId];
               return (
-                <div key={catId} className="console-list-card rounded-xl p-2 shadow-[0_4px_16px_rgba(43,33,26,0.06)]">
+                <div key={catId} className="console-list-card rounded-xl p-2">
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: dotColor }} />
@@ -423,7 +427,7 @@ export function RightStatusPanel({
               );
             })
           ) : (
-            <div className="text-[11px] text-cafe-secondary">空闲</div>
+            <div className="text-label text-cafe-muted">空闲</div>
           )}
         </div>
       </section>
@@ -432,7 +436,7 @@ export function RightStatusPanel({
         <section className={`${SIDEBAR_CARD} p-2.5`}>
           <button
             onClick={() => setHistoryOpen((v) => !v)}
-            className="flex w-full items-center justify-between text-[11px] font-bold text-cafe hover:text-cafe-secondary"
+            className="w-full flex items-center justify-between text-label font-bold text-cafe hover:text-cafe"
           >
             <span>历史参与 ({historyCats.length})</span>
             <svg
@@ -455,7 +459,7 @@ export function RightStatusPanel({
                     <div key={catId} className="flex items-center gap-2 text-xs text-cafe-muted">
                       <span
                         className="inline-block h-2 w-2 rounded-full opacity-50"
-                        style={{ backgroundColor: cat?.color.primary ?? 'var(--console-cat-fallback)' }}
+                        style={{ backgroundColor: catColorVar(cat?.id, 'primary') }}
                       />
                       {cat ? formatCatName(cat) : catId}
                     </div>
@@ -469,8 +473,8 @@ export function RightStatusPanel({
       )}
 
       <section className={`${SIDEBAR_CARD} p-2.5`}>
-        <h3 className="text-[11px] font-bold text-cafe mb-2">消息统计</h3>
-        <div className="console-list-card rounded-xl p-2.5 shadow-[0_4px_16px_rgba(43,33,26,0.06)] text-[11px] text-cafe-secondary space-y-1">
+        <h3 className="text-label font-bold text-cafe mb-2">消息统计</h3>
+        <div className="console-list-card rounded-xl p-2.5 text-label text-cafe-secondary space-y-1">
           <div>
             总数 {messageSummary.total} 猫猫消息 {messageSummary.assistant}
           </div>
@@ -490,16 +494,16 @@ export function RightStatusPanel({
       />
 
       <section className={`${SIDEBAR_CARD} p-2.5`}>
-        <h3 className="text-[11px] font-bold text-cafe mb-2">对话信息</h3>
-        <div className="console-list-card rounded-xl p-2.5 shadow-[0_4px_16px_rgba(43,33,26,0.06)] text-[11px] text-cafe-secondary space-y-1.5">
-          <div>
-            Thread:{' '}
+        <h3 className="text-label font-bold text-cafe mb-2">对话信息</h3>
+        <div className="console-list-card rounded-xl p-2.5 text-label text-cafe-secondary space-y-1.5">
+          <div className="flex items-baseline gap-1 min-w-0">
+            <span className="shrink-0">Thread:</span>
             <button
-              className="text-cafe-secondary font-mono hover:text-cafe cursor-pointer transition-colors"
+              className="truncate min-w-0 text-cafe-secondary font-mono hover:text-cafe cursor-pointer transition-colors"
               title={`点击复制: ${threadId}`}
               onClick={() => copyText(threadId)}
             >
-              {truncateId(threadId, 12)}
+              {threadId}
             </button>
           </div>
           <BubbleDisplayToggle threadId={threadId} label="Thinking" field="bubbleThinking" />

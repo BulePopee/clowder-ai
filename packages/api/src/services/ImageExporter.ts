@@ -1,4 +1,6 @@
-import puppeteer, { type Browser } from 'puppeteer';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import puppeteer, { type Browser } from 'puppeteer-core';
 import sharp from 'sharp';
 import { createModuleLogger } from '../infrastructure/logger.js';
 
@@ -7,6 +9,76 @@ const log = createModuleLogger('image-exporter');
 /** Chunk height for scroll-and-stitch. 4000px is well under Chrome's ~16384 GPU limit. */
 const CHUNK_HEIGHT = 4000;
 const VIEWPORT_WIDTH = 1280;
+
+function resolveConfiguredChromePath(): string | null {
+  const envPath = process.env.CHROME_EXECUTABLE_PATH;
+  if (!envPath) return null;
+  if (fs.existsSync(envPath)) {
+    log.info({ path: envPath }, 'Using CHROME_EXECUTABLE_PATH from env');
+    return envPath;
+  }
+  log.warn({ path: envPath }, 'CHROME_EXECUTABLE_PATH set but file not found, falling back to auto-detect');
+  return null;
+}
+
+function findLinuxBrowserCandidates(): string[] {
+  const candidates: string[] = [];
+  for (const name of ['google-chrome', 'google-chrome-stable', 'microsoft-edge', 'chromium', 'chromium-browser']) {
+    try {
+      const resolved = execFileSync('which', [name], { encoding: 'utf8' }).trim();
+      if (resolved) candidates.push(resolved);
+    } catch {
+      // not found, continue
+    }
+  }
+  return candidates;
+}
+
+function browserCandidatesForPlatform(): string[] {
+  if (process.platform === 'darwin') {
+    return [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ];
+  }
+
+  if (process.platform === 'win32') {
+    return [
+      process.env.PROGRAMFILES ? `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe` : null,
+      process.env['PROGRAMFILES(X86)']
+        ? `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`
+        : null,
+      process.env.PROGRAMFILES ? `${process.env.PROGRAMFILES}\\Microsoft\\Edge\\Application\\msedge.exe` : null,
+    ].filter((candidate): candidate is string => Boolean(candidate));
+  }
+
+  if (process.platform === 'linux') return findLinuxBrowserCandidates();
+  return [];
+}
+
+/**
+ * Detect a Chromium-based browser executable on the system.
+ * Priority: CHROME_EXECUTABLE_PATH env > system Chrome > Edge > Chromium.
+ * CDP (Chrome DevTools Protocol) requires a Chromium-based browser —
+ * Firefox/Safari are not supported.
+ */
+function detectChromePath(): string {
+  const configuredPath = resolveConfiguredChromePath();
+  if (configuredPath) return configuredPath;
+
+  const candidates = browserCandidatesForPlatform();
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      log.info({ path: candidate }, 'Detected Chromium-based browser');
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `No Chromium-based browser found. Set CHROME_EXECUTABLE_PATH or install Chrome/Edge/Chromium. Searched: ${candidates.join(', ')}`,
+  );
+}
 
 /**
  * ImageExporter service for capturing screenshots of web pages using Chrome headless.
@@ -25,6 +97,7 @@ export class ImageExporter {
     try {
       if (!this.browser) {
         this.browser = await puppeteer.launch({
+          executablePath: detectChromePath(),
           headless: true,
           args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
         });

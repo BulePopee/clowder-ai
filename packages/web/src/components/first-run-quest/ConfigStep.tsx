@@ -213,8 +213,8 @@ export function ConfigStep({ client, clientId, onComplete }: ConfigStepProps) {
         onClick={() => onComplete({ accountRef: selectedProfileId, model: selectedModel })}
         className={`w-full rounded-lg py-2.5 text-sm font-semibold transition ${
           canProceed
-            ? 'bg-conn-amber-text text-[var(--cafe-surface)] hover:opacity-90'
-            : 'cursor-not-allowed bg-cafe-surface-elevated text-cafe-muted'
+            ? 'bg-[var(--semantic-warning)] text-[var(--cafe-surface)] hover:opacity-90'
+            : 'cursor-not-allowed bg-cafe-surface text-cafe-muted'
         }`}
       >
         {canProceed ? '创建猫猫' : '请先完成连接测试'}

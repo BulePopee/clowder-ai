@@ -41,7 +41,7 @@ export function QuickCreateForm({ disabled, onCreate }: QuickCreateFormProps) {
   return (
     <form
       onSubmit={handleSubmit}
-      className="grid grid-cols-12 gap-2 rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_12px_30px_rgba(43,33,26,0.08)]"
+      className="grid grid-cols-12 gap-2 rounded-xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
     >
       <label htmlFor="mc-create-title" className="col-span-3">
         <span className="sr-only">任务标题</span>
@@ -55,7 +55,7 @@ export function QuickCreateForm({ disabled, onCreate }: QuickCreateFormProps) {
             if (event.key === 'Enter' && ime.isComposing()) event.preventDefault();
           }}
           placeholder="任务标题"
-          className="console-form-input w-full text-xs"
+          className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-create-title"
         />
       </label>
@@ -71,7 +71,7 @@ export function QuickCreateForm({ disabled, onCreate }: QuickCreateFormProps) {
             if (event.key === 'Enter' && ime.isComposing()) event.preventDefault();
           }}
           placeholder="一句话描述任务价值"
-          className="console-form-input w-full text-xs"
+          className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-create-summary"
         />
       </label>
@@ -81,7 +81,7 @@ export function QuickCreateForm({ disabled, onCreate }: QuickCreateFormProps) {
           id="mc-create-priority"
           value={priority}
           onChange={(event) => setPriority(event.target.value as BacklogPriority)}
-          className="console-form-input w-full text-xs"
+          className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-create-priority"
         >
           <option value="p0">P0</option>
@@ -102,14 +102,14 @@ export function QuickCreateForm({ disabled, onCreate }: QuickCreateFormProps) {
             if (event.key === 'Enter' && ime.isComposing()) event.preventDefault();
           }}
           placeholder="tags: redis,ui"
-          className="console-form-input w-full text-xs"
+          className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-create-tags"
         />
       </label>
       <button
         type="submit"
         disabled={disabled}
-        className="console-button-primary col-span-1 disabled:cursor-not-allowed disabled:opacity-40"
+        className="col-span-1 rounded-lg bg-cafe-accent px-2 py-1.5 text-xs font-semibold text-[var(--cafe-surface)] transition-colors hover:bg-cafe-interactive disabled:cursor-not-allowed disabled:opacity-40"
         data-testid="mc-create-submit"
       >
         创建

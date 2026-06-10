@@ -45,10 +45,10 @@ export function ProfileCard({
   const borderClass = !isSelected
     ? 'border-[var(--console-border-soft)] hover:border-conn-amber-ring'
     : testResult?.ok
-      ? 'border-conn-emerald-ring bg-conn-emerald-bg/40 shadow-sm'
+      ? 'border-[var(--semantic-success)] bg-conn-green-bg/40 shadow-sm'
       : testResult && !testResult.ok
-        ? 'border-conn-red-ring bg-conn-red-bg/30 shadow-sm'
-        : 'border-conn-amber-ring bg-conn-amber-bg/60 shadow-sm';
+        ? 'border-[var(--semantic-critical)] bg-conn-red-bg/30 shadow-sm'
+        : 'border-[var(--semantic-warning)] bg-conn-amber-bg/60 shadow-sm';
 
   const [modelError, setModelError] = useState('');
 
@@ -86,7 +86,9 @@ export function ProfileCard({
   return (
     <div className={`rounded-lg border transition-all duration-200 ${borderClass}`}>
       <button type="button" onClick={onSelect} className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm">
-        <span className={`h-2 w-2 rounded-full ${isSelected ? 'bg-conn-amber-bg' : 'bg-cafe-surface-elevated'}`} />
+        <span
+          className={`h-2 w-2 rounded-full ${isSelected ? 'bg-[var(--semantic-warning)]' : 'bg-cafe-surface-sunken'}`}
+        />
         <span className="flex-1 font-medium text-cafe">{profile.displayName ?? profile.name ?? profile.id}</span>
         <span className="text-xs text-cafe-muted">{profile.authType === 'oauth' ? 'OAuth' : 'API Key'}</span>
         <svg
@@ -101,14 +103,14 @@ export function ProfileCard({
       </button>
 
       {isExpanded && (
-        <div className="space-y-2 border-t border-conn-amber-ring px-3 py-2">
+        <div className="space-y-2 border-t border-[var(--semantic-warning-surface)] px-3 py-2">
           <div className="flex items-start justify-between">
             <div className="space-y-0.5">
               {profile.authType === 'oauth' ? (
                 <p className="text-xs text-cafe-muted">OAuth 认证账号</p>
               ) : (
                 <>
-                  <p className="truncate text-[11px] text-cafe-muted">
+                  <p className="truncate text-xs text-cafe-muted">
                     {profile.baseUrl || (profile.clientId && PROVIDER_DEFAULT_HOST[profile.clientId]) || ''}
                   </p>
                   <p className="text-xs text-cafe-muted">API Key: {profile.hasApiKey ? '已配置' : '未配置'}</p>
@@ -121,7 +123,7 @@ export function ProfileCard({
                 e.stopPropagation();
                 onEdit();
               }}
-              className="shrink-0 text-[11px] text-conn-amber-text hover:text-conn-amber-text"
+              className="shrink-0 text-xs text-conn-amber-text hover:text-conn-amber-text"
             >
               编辑
             </button>
@@ -129,7 +131,7 @@ export function ProfileCard({
 
           {/* Model chips with add/delete */}
           <div>
-            <p className="mb-1 text-[11px] font-medium text-cafe-muted">模型</p>
+            <p className="mb-1 text-xs font-medium text-cafe-muted">模型</p>
             <div className="flex flex-wrap gap-1.5">
               {models.map((m) => (
                 <button
@@ -138,8 +140,8 @@ export function ProfileCard({
                   onClick={() => onModelSelect(m)}
                   className={`group flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
                     selectedModel === m
-                      ? 'border-conn-purple-ring bg-conn-purple-bg text-conn-purple-text'
-                      : 'border-[var(--console-border-soft)] text-cafe-muted hover:border-conn-purple-ring'
+                      ? 'border-[var(--color-cafe-accent)] bg-[var(--accent-50)] text-[var(--color-cafe-accent)]'
+                      : 'border-[var(--console-border-soft)] text-cafe-muted hover:border-[var(--color-cafe-accent)]'
                   }`}
                 >
                   {m}
@@ -172,12 +174,12 @@ export function ProfileCard({
                       if (e.key === 'Escape') setAddingModel(false);
                     }}
                     placeholder="model-id"
-                    className="w-36 rounded border border-conn-purple-ring px-2 py-0.5 text-xs"
+                    className="w-36 rounded border border-[var(--color-cafe-accent)] px-2 py-0.5 text-xs"
                   />
                   <button
                     type="button"
                     onClick={handleAdd}
-                    className="text-xs text-conn-purple-text hover:text-conn-purple-text"
+                    className="text-xs text-[var(--color-cafe-accent)] hover:text-[var(--color-cafe-accent)]"
                   >
                     ✓
                   </button>
@@ -193,16 +195,16 @@ export function ProfileCard({
                 <button
                   type="button"
                   onClick={() => setAddingModel(true)}
-                  className="rounded-lg border border-dashed border-[var(--console-border-soft)] px-2.5 py-1 text-xs text-cafe-muted hover:border-conn-purple-ring hover:text-conn-purple-text"
+                  className="rounded-lg border border-dashed border-[var(--console-border-soft)] px-2.5 py-1 text-xs text-cafe-muted hover:border-[var(--color-cafe-accent)] hover:text-[var(--color-cafe-accent)]"
                 >
                   + 添加
                 </button>
               )}
             </div>
             {models.length === 0 && !addingModel && (
-              <p className="mt-1 text-[11px] text-cafe-muted">{'暂无模型，请点击"+ 添加"后测试'}</p>
+              <p className="mt-1 text-xs text-cafe-muted">{'暂无模型，请点击"+ 添加"后测试'}</p>
             )}
-            {modelError && <p className="mt-1 text-[11px] text-conn-red-text">{modelError}</p>}
+            {modelError && <p className="mt-1 text-xs text-conn-red-text">{modelError}</p>}
           </div>
 
           {/* Test button */}
@@ -215,7 +217,7 @@ export function ProfileCard({
                 testing
                   ? 'cursor-wait border-conn-amber-ring bg-conn-amber-bg text-conn-amber-text'
                   : testResult?.ok
-                    ? 'border-conn-emerald-ring bg-conn-emerald-bg text-conn-emerald-text'
+                    ? 'border-[var(--semantic-success)] bg-conn-green-bg text-conn-green-text'
                     : 'border-conn-amber-ring bg-conn-amber-bg text-conn-amber-text hover:bg-conn-amber-bg'
               } disabled:opacity-60`}
             >
@@ -228,7 +230,7 @@ export function ProfileCard({
               {testing ? '测试中' : testResult?.ok ? '已通过' : '测试连接'}
             </button>
             {testResult && (
-              <span className={`text-xs ${testResult.ok ? 'text-conn-emerald-text' : 'text-conn-red-text'}`}>
+              <span className={`text-xs ${testResult.ok ? 'text-conn-green-text' : 'text-conn-red-text'}`}>
                 {testResult.message}
               </span>
             )}

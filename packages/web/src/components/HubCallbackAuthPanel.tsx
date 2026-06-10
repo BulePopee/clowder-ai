@@ -81,8 +81,8 @@ function CatRoster({ byCat, max = 6 }: { byCat: Record<string, number>; max?: nu
           {/* CallbackAuthCatAvatar reads status + popover from the global store
               so this in-panel roster matches what ThreadItem participants show. */}
           <CallbackAuthCatAvatar catId={catId} size={48} />
-          <div className="truncate text-[10px] text-cafe">{catId}</div>
-          <div className="text-[10px] text-cafe-muted">{count} fail</div>
+          <div className="truncate text-micro text-cafe">{catId}</div>
+          <div className="text-micro text-cafe-muted">{count} fail</div>
         </div>
       ))}
     </div>
@@ -125,7 +125,7 @@ export function HubCallbackAuthPanel() {
   const markViewed = useCallbackAuthMarkViewed();
 
   // F174 D2b-2 rev3: opening this panel = "看过 callback auth" → POST mark-viewed
-  // → HubButton unread badge clears. Implements GitHub bell icon / iOS app badge
+  // → ActivityBar unread badge clears. Implements GitHub bell icon / iOS app badge
   // mental model. Effect runs once on mount (markViewed is a stable zustand
   // action). Errors silently swallowed inside markViewed (badge updates on
   // next successful poll regardless).

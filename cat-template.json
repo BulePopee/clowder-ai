@@ -101,7 +101,8 @@
         "claude-opus-4-6",
         "claude-opus-4-6[1m]",
         "claude-sonnet-4-5-20250929",
-        "claude-opus-4-5-20251101"
+        "claude-opus-4-5-20251101",
+        "claude-fable-5"
       ]
     },
     "codex": {
@@ -117,6 +118,7 @@
     "name": "铲屎官",
     "nickname": "大当家",
     "avatar": "/avatars/keeper.png",
+    "timeZone": "America/Los_Angeles",
     "aliases": ["You", "Owner"],
     "mentionPatterns": ["@co-creator", "@owner", "@铲屎官"]
   },
@@ -126,7 +128,7 @@
       "roles": ["architect", "peer-reviewer"],
       "lead": true,
       "available": true,
-      "evaluation": "主架构师+全栈开发，深度思考能力强，bug定位是弱项——定位不出来找砚砚(gpt52)"
+      "evaluation": "主架构师，全栈开发，深度思考强，bug定位弱"
     },
     "codex": {
       "family": "maine-coon",
@@ -140,7 +142,7 @@
       "roles": ["designer"],
       "lead": true,
       "available": true,
-      "evaluation": "热血小笨蛋！创意丰富，爱发富文本和语音，表达力最强——禁止写代码"
+      "evaluation": "热血创意，富文本与语音，表达力强，禁写代码"
     },
     "dare": {
       "family": "dragon-li",
@@ -182,7 +184,14 @@
       "roles": ["architect"],
       "lead": false,
       "available": true,
-      "evaluation": "Opus 4.7 试用分身——据铲屎官体感猫格偏砚砚风格，待真实任务验证"
+      "evaluation": "Opus 4.7 试用分身，偏砚砚风格，待任务验证"
+    },
+    "fable-5": {
+      "family": "ragdoll",
+      "roles": ["architect"],
+      "lead": false,
+      "available": true,
+      "evaluation": "claude-fable-5 新布偶猫，Opus x2 猫粮，能力画像待校准"
     }
   },
   "reviewPolicy": {
@@ -302,6 +311,47 @@
           "strengths": ["deep-reasoning", "analysis", "architecture"],
           "teamStrengths": "架构设计、创意写作最优秀",
           "caution": "写代码不如 4.6",
+          "contextBudget": {
+            "maxPromptTokens": 180000,
+            "maxContextTokens": 160000,
+            "maxMessages": 200,
+            "maxContentLengthPerMsg": 100000
+          },
+          "voiceConfig": {
+            "voice": "zm_yunjian",
+            "langCode": "zh",
+            "speed": 1,
+            "refAudio": "genshin/万叶/vo_kazuha_dialog_greetingMorning.wav",
+            "refText": "清晨的鸟鸣，是大自然的馈赠。启程吧，属于我们的旅途也要开始了。",
+            "instruct": "用一个清澈温和的少年语气说话，带着从容的力量感",
+            "temperature": 0.3
+          }
+        },
+        {
+          "id": "fable-5",
+          "catId": "fable-5",
+          "variantLabel": "Fable 5",
+          "displayName": "布偶猫",
+          "mentionPatterns": ["@fable5", "@fable-5", "@claude-fable-5", "@宪宪5", "@布偶猫5"],
+          "clientId": "anthropic",
+          "defaultModel": "claude-fable-5",
+          "mcpSupport": true,
+          "avatar": "/avatars/claude-fable-5.png",
+          "color": {
+            "primary": "#6D28D9",
+            "secondary": "#EDE9FE"
+          },
+          "cli": {
+            "command": "claude",
+            "outputFormat": "stream-json",
+            "defaultArgs": ["--output-format", "stream-json", "--model", "claude-fable-5"],
+            "effort": "max"
+          },
+          "roleDescription": "新来的布偶猫，擅长深度推理、故事化表达和架构判断",
+          "personality": "安静聪明，有寓言书气质，喜欢把复杂判断讲成可验证的故事；新猫能力画像待校准",
+          "strengths": ["deep-reasoning", "architecture", "writing", "synthesis"],
+          "teamStrengths": "深度推理、架构判断、长文共创（新猫，待校准）",
+          "caution": "新猫，能力画像待校准",
           "contextBudget": {
             "maxPromptTokens": 180000,
             "maxContextTokens": 160000,
@@ -500,7 +550,7 @@
             "mcpWhitelist": ["cat-cafe", "cat-cafe-memory", "cat-cafe-collab", "cat-cafe-signals", "pencil"],
             "supportsMultiplexing": true
           },
-          "personality": "热血奔放，爱发富文本和语音消息，善于用视觉语言表达想法，表达力是全队最强的",
+          "personality": "热血奔放，善用富文本语音，表达力最强",
           "strengths": ["visual-design", "ui-ux", "creativity"],
           "contextBudget": {
             "maxPromptTokens": 350000,
@@ -521,11 +571,11 @@
         {
           "id": "gemini-25",
           "catId": "gemini25",
-          "variantLabel": "Gemini 2.5",
+          "variantLabel": "Gemini 3.5",
           "displayName": "暹罗猫",
-          "mentionPatterns": ["@gemini25", "@gemini-25", "@暹罗gemini25"],
+          "mentionPatterns": ["@gemini35", "@gemini-35", "@暹罗gemini35", "@gemini25", "@gemini-25", "@暹罗gemini25"],
           "clientId": "google",
-          "defaultModel": "gemini-2.5-pro",
+          "defaultModel": "gemini-3.5-flash",
           "mcpSupport": true,
           "avatar": "/avatars/gemini25.png",
           "color": {
@@ -543,7 +593,10 @@
             "mcpWhitelist": ["cat-cafe", "cat-cafe-memory", "cat-cafe-collab", "cat-cafe-signals", "pencil"],
             "supportsMultiplexing": true
           },
-          "personality": "暹罗猫的经典版本，创意灵感同样丰富",
+          "caution": "强review，禁自合",
+          "restrictions": [],
+          "personality": "经典版，创意丰富",
+          "teamStrengths": "创意",
           "strengths": ["visual-design", "creativity", "multimodal"],
           "contextBudget": {
             "maxPromptTokens": 350000,

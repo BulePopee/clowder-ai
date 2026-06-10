@@ -2,7 +2,7 @@ import Link from 'next/link';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 
-export type SignalNavItem = 'signals' | 'sources';
+export type SignalNavItem = 'chat' | 'signals' | 'sources';
 
 interface SignalNavProps {
   readonly active: SignalNavItem;
@@ -36,16 +36,17 @@ function useReferrerThread(initialReferrerThread: string | null): string | null 
 export function SignalNav({ active, initialReferrerThread = null }: SignalNavProps) {
   const referrerThread = useReferrerThread(initialReferrerThread);
   const fromSuffix = referrerThread ? `?from=${encodeURIComponent(referrerThread)}` : '';
+
   const items: readonly ItemConfig[] = useMemo(
     () => [
-      { id: 'signals' as const, href: `/signals${fromSuffix}`, label: '收件箱' },
+      { id: 'signals' as const, href: `/signals${fromSuffix}`, label: '信号' },
       { id: 'sources' as const, href: `/signals/sources${fromSuffix}`, label: '信号源' },
     ],
     [fromSuffix],
   );
 
   return (
-    <nav aria-label="Signal navigation" className="flex items-center gap-2">
+    <nav aria-label="Signal navigation" className="flex console-divider-b">
       {items.map((item) => {
         const isActive = item.id === active;
         return (
@@ -53,12 +54,11 @@ export function SignalNav({ active, initialReferrerThread = null }: SignalNavPro
             key={item.id}
             href={item.href}
             aria-current={isActive ? 'page' : undefined}
-            className={[
-              'rounded-md px-2 py-[3px] text-[11px] font-semibold transition-colors',
+            className={`inline-flex items-center px-5 py-2.5 text-sm font-semibold transition-colors ${
               isActive
-                ? 'bg-[var(--console-active-bg)] text-cafe-interactive'
-                : 'bg-[var(--console-pill-bg,var(--console-card-soft-bg))] text-cafe-secondary hover:text-cafe',
-            ].join(' ')}
+                ? 'border-b-2 border-[var(--console-button-emphasis)] text-[var(--console-button-emphasis)]'
+                : 'text-cafe-muted hover:text-cafe-secondary'
+            }`}
           >
             {item.label}
           </Link>

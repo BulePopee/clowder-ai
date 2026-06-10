@@ -5,7 +5,7 @@ import { buildConnectorStatus } from '../dist/routes/connector-hub.js';
 describe('buildConnectorStatus', () => {
   it('returns all platforms as not configured when env is empty', () => {
     const result = buildConnectorStatus({});
-    assert.equal(result.length, 8);
+    assert.equal(result.length, 7);
 
     const xiaoyi = result.find((p) => p.id === 'xiaoyi');
     assert.ok(xiaoyi);
@@ -15,7 +15,7 @@ describe('buildConnectorStatus', () => {
     const feishu = result.find((p) => p.id === 'feishu');
     assert.ok(feishu);
     assert.equal(feishu.configured, false);
-    assert.equal(feishu.fields.length, 6);
+    assert.equal(feishu.fields.length, 4);
     for (const f of feishu.fields) {
       if (f.envName === 'FEISHU_CONNECTION_MODE') {
         assert.equal(f.currentValue, 'webhook', 'CONNECTION_MODE should default to webhook');
@@ -44,8 +44,12 @@ describe('buildConnectorStatus', () => {
 
     const weixin = result.find((p) => p.id === 'weixin');
     assert.ok(weixin);
-    assert.equal(weixin.configured, true, 'weixin has all-optional fields so configured=true from env alone');
-    assert.equal(weixin.fields.length, 4);
+    assert.equal(weixin.configured, false);
+    assert.equal(weixin.fields.length, 0);
+
+    // F202-2B: GitHub moved to plugin framework — no longer in CONNECTOR_PLATFORMS
+    const github = result.find((p) => p.id === 'github');
+    assert.equal(github, undefined);
   });
 
   it('marks feishu as configured when all 3 fields are set', () => {
@@ -222,4 +226,7 @@ describe('buildConnectorStatus', () => {
     assert.ok(wecomAgent);
     assert.equal(wecomAgent.configured, false);
   });
+
+  // F202-2B: "marks GitHub plugin as configured" test removed — GitHub config
+  // moved to plugin framework (plugin-config-store), no longer in connector-hub.
 });

@@ -1,405 +1,158 @@
-import { spawn } from 'node:child_process';
-import { closeSync, existsSync } from 'node:fs';
-import type { FastifyPluginAsync } from 'fastify';
-import { z } from 'zod';
-import { checkProcessByPattern, findPidsByPort, isServiceProcess } from '../domains/services/process-utils.js';
-import { getServiceConfig, setServiceConfig } from '../domains/services/service-config.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { getEnvironmentProfile } from '../domains/services/environment-detector.js';
+import { buildRecommendation } from '../domains/services/recommendation-matrix.js';
+import { getServiceConfig } from '../domains/services/service-config.js';
+import { findPidsByPort } from '../domains/services/service-lifecycle.js';
 import {
-  appendLog,
-  isValidModelId,
-  openLogFd,
-  readLogTail,
-  resolveScriptPath,
-} from '../domains/services/service-logs.js';
-import { MODEL_ENV_VARS } from '../domains/services/service-manifest.js';
-import {
-  getAllServiceStates,
-  getKnownServices,
-  getServiceById,
-  getServiceState,
-  resolveServiceEndpoint,
-} from '../domains/services/service-registry.js';
-import { resolveUserId } from '../utils/request-identity.js';
+  type FetchServiceHealth,
+  getServiceManifest,
+  resolveEffectiveServiceConfig,
+  resolveServiceEndpointMap,
+  resolveServiceState,
+  resolveServiceStates,
+} from '../domains/services/service-manifest.js';
+import { lifecycleOwnerError, requireLifecycleOwner } from './services-lifecycle-helpers.js';
+import { createServiceLifecycleLock } from './services-lifecycle-lock.js';
+import { resolveSuggestedServicePort } from './services-lifecycle-port.js';
+import { registerServiceLifecycleRoutes, type ServiceLifecycleRouteOptions } from './services-lifecycle-routes.js';
 
-function checkServiceOwner(request: Parameters<typeof resolveUserId>[0]): { status: 401 | 403; error: string } | null {
-  const userId = resolveUserId(request);
-  if (!userId) return { status: 401, error: 'Authentication required' };
-  const ownerId = process.env['DEFAULT_OWNER_USER_ID']?.trim();
-  if (ownerId && userId !== ownerId) return { status: 403, error: 'Only the owner can manage services' };
-  return null;
+export interface ServicesRouteOptions {
+  env?: NodeJS.ProcessEnv;
+  fetchHealth?: FetchServiceHealth;
+  lifecycle?: ServiceLifecycleRouteOptions;
 }
 
-export const servicesRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/api/services', async () => {
-    const states = await getAllServiceStates();
-    return { services: states };
+function resolveSessionUserId(request: FastifyRequest): string | null {
+  const userId = (request as FastifyRequest & { sessionUserId?: string }).sessionUserId;
+  if (typeof userId !== 'string') return null;
+  const trimmed = userId.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function requireIdentity(request: FastifyRequest, reply: FastifyReply): boolean {
+  if (resolveSessionUserId(request)) return true;
+  reply.status(401);
+  return false;
+}
+
+export const servicesRoutes: FastifyPluginAsync<ServicesRouteOptions> = async (app, options) => {
+  const getConfig = options.lifecycle?.serviceConfig?.get ?? getServiceConfig;
+  const lookupPidsByPort = options.lifecycle?.findPidsByPort ?? findPidsByPort;
+  const lifecycleLock = createServiceLifecycleLock();
+  const getEffectiveConfig = (service: NonNullable<ReturnType<typeof getServiceManifest>>) => {
+    return resolveEffectiveServiceConfig(service, getConfig(service.id), options.env ?? process.env);
+  };
+
+  app.get('/api/services', async (request, reply) => {
+    if (!requireIdentity(request, reply)) return { error: 'Authentication required' };
+    const services = await resolveServiceStates({
+      env: options.env,
+      fetchHealth: options.fetchHealth,
+      getConfig: (id) => {
+        const service = getServiceManifest(id);
+        return service ? getEffectiveConfig(service) : getConfig(id);
+      },
+      getLifecycleAction: lifecycleLock.getActiveAction,
+    });
+    return { services };
   });
 
   app.get('/api/services/endpoints', async (request, reply) => {
-    const userId = resolveUserId(request);
-    if (!userId) {
-      reply.status(401);
-      return { error: 'Authentication required' };
+    // unmasked: this route is consumed by useVoiceInput / chat-voice to
+    // actually issue STT/TTS/LLM-postprocess requests, so credential-in-URL
+    // setups (e.g. WHISPER_URL=https://user:pass@host) must round-trip
+    // intact. That makes the response a privilege-escalation surface --
+    // any non-owner authenticated user otherwise reads upstream secrets.
+    // Gate behind the same owner check used for lifecycle writes so the
+    // unmasked URL never leaves the owner's session boundary
+    // (codex P1 2026-05-26).
+    if (!requireLifecycleOwner(request, reply)) return lifecycleOwnerError(reply);
+    return {
+      endpoints: resolveServiceEndpointMap(
+        options.env,
+        (id) => {
+          const service = getServiceManifest(id);
+          return service ? getEffectiveConfig(service) : getConfig(id);
+        },
+        { mask: false },
+      ),
+    };
+  });
+
+  // Env-aware install preview: detects the host environment (OS / arch /
+  // GPU / Python) and returns the recommendation matrix entry for the
+  // service — models that work on this machine, plus any unsupported
+  // reason if the env is incompatible. Restored from F190 followup
+  // pre-sync work after upstream sync #720 inadvertently removed the
+  // env-detection + recommendation layer.
+  // Serve the offline-install guide from the local repo so the help link
+  // in InstallPreviewModal works in offline / air-gapped environments.
+  // The HTML is pre-rendered and checked in at docs/services-offline-install.html
+  // (regenerate from the .md source when it changes). Restored from
+  // pre-sync F190 work — codex P2 3268952331.
+  app.get('/api/services/docs/offline-install', async (_request, reply) => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const htmlPath = resolve(repoRoot, 'docs/services-offline-install.html');
+    if (!existsSync(htmlPath)) {
+      reply.status(404);
+      return { error: 'docs/services-offline-install.html not found — regenerate from the .md source' };
     }
-    const endpoints: Record<string, string | null> = {};
-    for (const manifest of getKnownServices()) {
-      endpoints[manifest.id] = resolveServiceEndpoint(manifest);
+    reply.header('cache-control', 'no-cache');
+    reply.type('text/html; charset=utf-8');
+    return readFileSync(htmlPath, 'utf-8');
+  });
+
+  app.get<{ Params: { id: string } }>('/api/services/:id/install-preview', async (request, reply) => {
+    if (!requireIdentity(request, reply)) return { error: 'Authentication required' };
+    const { id } = request.params;
+    const service = getServiceManifest(id);
+    if (!service) {
+      reply.status(404);
+      return { error: `Service "${id}" not found` };
     }
-    return { endpoints };
+    const profile = getEnvironmentProfile(true);
+    const recommendation = buildRecommendation(id, profile);
+
+    // Suggest a concrete port for the modal to pre-fill. If neither
+    // services.json nor *_PORT env pins one, scan from the manifest default
+    // so the eventual install persists a findable port instead of leaving
+    // "auto" as transient UI state.
+    const suggestedPort = await resolveSuggestedServicePort({
+      service,
+      config: getEffectiveConfig(service),
+      env: options.env ?? process.env,
+      lookupPidsByPort,
+    });
+
+    return { profile, recommendation, suggestedPort };
   });
 
   app.get<{ Params: { id: string } }>('/api/services/:id/health', async (request, reply) => {
-    const { id } = request.params;
-    const manifest = getServiceById(id);
-    if (!manifest) {
+    if (!requireIdentity(request, reply)) return { error: 'Authentication required' };
+    const service = getServiceManifest(request.params.id);
+    if (!service) {
       reply.status(404);
-      return { error: `Service "${id}" not found` };
+      return { error: `Service "${request.params.id}" not found` };
     }
-    const state = await getServiceState(manifest);
-    return state;
+
+    const state = await resolveServiceState(service, {
+      env: options.env,
+      fetchHealth: options.fetchHealth,
+      config: getEffectiveConfig(service),
+      lifecycleAction: lifecycleLock.getActiveAction(request.params.id),
+    });
+    return {
+      id: state.id,
+      endpoint: state.endpoint,
+      configured: state.configured,
+      status: state.status,
+      httpStatus: state.httpStatus,
+      error: state.error,
+    };
   });
 
-  app.post<{ Params: { id: string } }>('/api/services/:id/start', async (request, reply) => {
-    const ownerErr = checkServiceOwner(request);
-    if (ownerErr) {
-      reply.status(ownerErr.status);
-      return { error: ownerErr.error };
-    }
-    const { id } = request.params;
-    const manifest = getServiceById(id);
-    if (!manifest) {
-      reply.status(404);
-      return { error: `Service "${id}" not found` };
-    }
-    if (!manifest.scripts.start) {
-      reply.status(400);
-      return { error: `Service "${id}" has no start script` };
-    }
-
-    const current = await getServiceState(manifest);
-    if (current.status === 'running') {
-      return { ok: true, message: `${manifest.name} is already running` };
-    }
-
-    if (manifest.port) {
-      const existingProcess = await checkProcessByPattern(manifest.scripts.start);
-      if (existingProcess) {
-        return { ok: true, message: `${manifest.name} is still starting (existing process found)` };
-      }
-    }
-
-    const scriptPath = resolveScriptPath(manifest.scripts.start);
-    if (!existsSync(scriptPath)) {
-      reply.status(400);
-      return { error: `Start script not found: ${scriptPath}` };
-    }
-
-    const env: Record<string, string> = { ...process.env } as Record<string, string>;
-    const cfg = getServiceConfig(id);
-    if (cfg.selectedModel && isValidModelId(cfg.selectedModel)) {
-      const envKey = MODEL_ENV_VARS[id];
-      if (envKey) env[envKey] = cfg.selectedModel;
-    }
-
-    const logFd = openLogFd(id);
-    try {
-      const child = spawn('bash', [scriptPath], {
-        detached: true,
-        stdio: logFd != null ? ['ignore', logFd, logFd] : 'ignore',
-        env,
-      });
-      child.on('error', () => {});
-      if (!child.pid) {
-        reply.status(500);
-        return { error: `Failed to spawn start script for ${manifest.name}` };
-      }
-
-      const earlyExit = await new Promise<number | null>((resolve) => {
-        const timer = setTimeout(() => {
-          child.unref();
-          resolve(null);
-        }, 2000);
-        child.on('exit', (code) => {
-          clearTimeout(timer);
-          resolve(code);
-        });
-      });
-
-      if (earlyExit !== null) {
-        const logs = readLogTail(id, 20);
-        reply.status(500);
-        return { error: `${manifest.name} exited immediately (code ${earlyExit})`, logs };
-      }
-      return { ok: true, message: `${manifest.name} start initiated (pid: ${child.pid})` };
-    } catch {
-      reply.status(500);
-      return { error: `Failed to start ${manifest.name}: spawn error` };
-    } finally {
-      if (logFd != null) closeSync(logFd);
-    }
-  });
-
-  app.post<{ Params: { id: string } }>('/api/services/:id/stop', async (request, reply) => {
-    const ownerErr = checkServiceOwner(request);
-    if (ownerErr) {
-      reply.status(ownerErr.status);
-      return { error: ownerErr.error };
-    }
-    const { id } = request.params;
-    const manifest = getServiceById(id);
-    if (!manifest) {
-      reply.status(404);
-      return { error: `Service "${id}" not found` };
-    }
-
-    if (manifest.scripts.stop) {
-      const scriptPath = resolveScriptPath(manifest.scripts.stop);
-      if (existsSync(scriptPath)) {
-        try {
-          const child = spawn('bash', [scriptPath], { stdio: 'ignore' });
-          const code = await new Promise<number | null>((res, rej) => {
-            child.on('error', rej);
-            child.on('close', (c) => res(c));
-          });
-          if (code !== 0) {
-            reply.status(500);
-            return { ok: false, error: `Stop script for ${manifest.name} exited with code ${code}` };
-          }
-          return { ok: true, message: `${manifest.name} stopped via script` };
-        } catch {
-          reply.status(500);
-          return { ok: false, error: `Failed to run stop script for ${manifest.name}` };
-        }
-      }
-    }
-
-    if (!manifest.port) {
-      reply.status(400);
-      return { error: `Service "${id}" has no port or stop script` };
-    }
-
-    try {
-      const candidatePids = await findPidsByPort(manifest.port);
-      const killed: number[] = [];
-      for (const pid of candidatePids) {
-        if (!isServiceProcess(pid, manifest)) continue;
-        try {
-          process.kill(pid, 'SIGTERM');
-          killed.push(pid);
-        } catch {
-          /* already gone */
-        }
-      }
-      return { ok: true, message: `${manifest.name} stopped (${killed.length} process(es))` };
-    } catch {
-      reply.status(500);
-      return { ok: false, error: 'Failed to stop service' };
-    }
-  });
-
-  app.post<{ Params: { id: string }; Body: { model?: string } }>(
-    '/api/services/:id/install',
-    async (request, reply) => {
-      const ownerErr = checkServiceOwner(request);
-      if (ownerErr) {
-        reply.status(ownerErr.status);
-        return { error: ownerErr.error };
-      }
-      const { id } = request.params;
-      const body = (request.body ?? {}) as { model?: string };
-      const manifest = getServiceById(id);
-      if (!manifest) {
-        reply.status(404);
-        return { error: `Service "${id}" not found` };
-      }
-      if (!manifest.scripts.install) {
-        return { ok: true, message: `${manifest.name} has no install script (dependencies managed externally)` };
-      }
-
-      const scriptPath = resolveScriptPath(manifest.scripts.install);
-      if (!existsSync(scriptPath)) {
-        reply.status(400);
-        return { error: `Install script not found: ${scriptPath}` };
-      }
-
-      const env: Record<string, string> = { ...process.env } as Record<string, string>;
-      if (body.model) {
-        if (!isValidModelId(body.model)) {
-          reply.status(400);
-          return { error: 'Invalid model ID format (expected: org/model-name)' };
-        }
-        const envKey = MODEL_ENV_VARS[id];
-        if (envKey) env[envKey] = body.model;
-      }
-
-      try {
-        const child = spawn('bash', [scriptPath], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env,
-        });
-        let output = '';
-        const MAX_OUTPUT = 8192;
-        const appendOutput = (s: string) => {
-          output += s;
-          if (output.length > MAX_OUTPUT) output = output.slice(-MAX_OUTPUT);
-        };
-        child.stdout?.on('data', (d: Buffer) => {
-          const s = d.toString();
-          appendOutput(s);
-          appendLog(id, s);
-        });
-        child.stderr?.on('data', (d: Buffer) => {
-          const s = d.toString();
-          appendOutput(s);
-          appendLog(id, s);
-        });
-        const code = await new Promise<number | null>((res, rej) => {
-          child.on('error', rej);
-          child.on('close', (c) => res(c));
-        });
-
-        if (code !== 0) {
-          reply.status(422);
-          return { ok: false, error: `Install failed (exit ${code})`, output: output.slice(-2000) };
-        }
-
-        if (manifest.scripts.start && getServiceConfig(id).enabled) {
-          const startScript = resolveScriptPath(manifest.scripts.start);
-          if (existsSync(startScript)) {
-            const startEnv: Record<string, string> = { ...process.env } as Record<string, string>;
-            const cfg = getServiceConfig(id);
-            if (cfg.selectedModel && isValidModelId(cfg.selectedModel)) {
-              const ek = MODEL_ENV_VARS[id];
-              if (ek) startEnv[ek] = cfg.selectedModel;
-            }
-            const startFd = openLogFd(id);
-            const startChild = spawn('bash', [startScript], {
-              detached: true,
-              stdio: startFd != null ? ['ignore', startFd, startFd] : 'ignore',
-              env: startEnv,
-            });
-            startChild.on('error', () => {});
-            startChild.unref();
-            if (startFd != null) closeSync(startFd);
-          }
-        }
-
-        return { ok: true, message: `${manifest.name} installed successfully` };
-      } catch {
-        reply.status(500);
-        return { ok: false, error: `Failed to run install script for ${manifest.name}` };
-      }
-    },
-  );
-
-  app.post<{ Params: { id: string } }>('/api/services/:id/uninstall', async (request, reply) => {
-    const ownerErr = checkServiceOwner(request);
-    if (ownerErr) {
-      reply.status(ownerErr.status);
-      return { error: ownerErr.error };
-    }
-    const { id } = request.params;
-    const manifest = getServiceById(id);
-    if (!manifest) {
-      reply.status(404);
-      return { error: `Service "${id}" not found` };
-    }
-    if (!manifest.scripts.uninstall) {
-      return { ok: true, message: `${manifest.name} has no uninstall script` };
-    }
-
-    const scriptPath = resolveScriptPath(manifest.scripts.uninstall);
-    if (!existsSync(scriptPath)) {
-      reply.status(400);
-      return { error: `Uninstall script not found: ${scriptPath}` };
-    }
-
-    try {
-      const child = spawn('bash', [scriptPath], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
-      });
-      let output = '';
-      const MAX_OUTPUT = 8192;
-      const appendOutput = (s: string) => {
-        output += s;
-        if (output.length > MAX_OUTPUT) output = output.slice(-MAX_OUTPUT);
-      };
-      child.stdout?.on('data', (d: Buffer) => {
-        const s = d.toString();
-        appendOutput(s);
-        appendLog(id, s);
-      });
-      child.stderr?.on('data', (d: Buffer) => {
-        const s = d.toString();
-        appendOutput(s);
-        appendLog(id, s);
-      });
-      const code = await new Promise<number | null>((res, rej) => {
-        child.on('error', rej);
-        child.on('close', (c) => res(c));
-      });
-
-      if (code !== 0) {
-        reply.status(422);
-        return { ok: false, error: `Uninstall failed (exit ${code})`, output: output.slice(-2000) };
-      }
-      return { ok: true, message: `${manifest.name} uninstalled successfully` };
-    } catch {
-      reply.status(500);
-      return { ok: false, error: `Failed to run uninstall script for ${manifest.name}` };
-    }
-  });
-
-  app.get<{ Params: { id: string } }>('/api/services/:id/logs', async (request, reply) => {
-    const ownerErr = checkServiceOwner(request);
-    if (ownerErr) {
-      reply.status(ownerErr.status);
-      return { error: ownerErr.error };
-    }
-    const { id } = request.params;
-    const manifest = getServiceById(id);
-    if (!manifest) {
-      reply.status(404);
-      return { error: `Service "${id}" not found` };
-    }
-    const lines = readLogTail(id);
-    return { serviceId: id, lines };
-  });
-
-  app.post<{ Params: { id: string }; Body: { enabled: boolean; model?: string } }>(
-    '/api/services/:id/toggle',
-    async (request, reply) => {
-      const ownerErr = checkServiceOwner(request);
-      if (ownerErr) {
-        reply.status(ownerErr.status);
-        return { error: ownerErr.error };
-      }
-      const { id } = request.params;
-      const toggleSchema = z.object({ enabled: z.boolean(), model: z.string().optional() });
-      const parsed = toggleSchema.safeParse(request.body);
-      if (!parsed.success) {
-        reply.status(400);
-        return { error: 'Invalid body', details: parsed.error.issues };
-      }
-      const body = parsed.data;
-      const manifest = getServiceById(id);
-      if (!manifest) {
-        reply.status(404);
-        return { error: `Service "${id}" not found` };
-      }
-
-      const patch: { enabled: boolean; selectedModel?: string } = { enabled: body.enabled };
-      if (body.model) {
-        if (!isValidModelId(body.model)) {
-          reply.status(400);
-          return { error: 'Invalid model ID format (expected: org/model-name)' };
-        }
-        patch.selectedModel = body.model;
-      }
-      setServiceConfig(id, patch);
-
-      return { ok: true, config: getServiceConfig(id) };
-    },
-  );
+  await registerServiceLifecycleRoutes(app, options, lifecycleLock);
 };

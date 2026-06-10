@@ -5,9 +5,9 @@ import { useCallback, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
 
 const CATEGORY_STYLES: Record<RefluxCategory, { bg: string; text: string; label: string }> = {
-  methodology: { bg: 'bg-[var(--color-cafe-accent)]/10', text: 'text-[var(--color-cafe-accent)]', label: '方法论' },
-  risk_pattern: { bg: 'bg-conn-amber-bg', text: 'text-conn-amber-text', label: '风险模式' },
-  resolution_strategy: { bg: 'bg-conn-emerald-bg', text: 'text-conn-emerald-text', label: '解决策略' },
+  methodology: { bg: 'bg-[var(--semantic-info-surface)]', text: 'text-conn-blue-text', label: '方法论' },
+  risk_pattern: { bg: 'bg-[var(--semantic-warning-surface)]', text: 'text-conn-amber-text', label: '风险模式' },
+  resolution_strategy: { bg: 'bg-conn-green-bg', text: 'text-conn-emerald-text', label: '解决策略' },
 };
 
 const CATEGORY_OPTIONS: RefluxCategory[] = ['methodology', 'risk_pattern', 'resolution_strategy'];
@@ -62,12 +62,12 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
       <div className="flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold text-cafe">经验回流</div>
-          <div className="text-[10px] text-cafe-muted">方法论经验沉淀 — 只回流知识，不回流项目数据</div>
+          <div className="text-micro text-cafe-secondary">方法论经验沉淀 — 只回流知识，不回流项目数据</div>
         </div>
         <button
           type="button"
           onClick={() => setShowForm(!showForm)}
-          className="rounded-lg bg-[var(--cafe-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)]"
+          className="rounded-lg bg-[var(--mc-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)]"
         >
           {showForm ? '取消' : 'Capture Insight'}
         </button>
@@ -75,11 +75,11 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
 
       {/* Capture form */}
       {showForm && (
-        <div className="space-y-2 rounded-lg bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] p-4">
+        <div className="space-y-2 rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value as RefluxCategory)}
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           >
             {CATEGORY_OPTIONS.map((c) => (
               <option key={c} value={c}>
@@ -91,27 +91,27 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="标题"
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           />
           <textarea
             value={insight}
             onChange={(e) => setInsight(e.target.value)}
             placeholder="Insight..."
             rows={3}
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           />
           <textarea
             value={evidence}
             onChange={(e) => setEvidence(e.target.value)}
             placeholder="Evidence..."
             rows={2}
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           />
           <button
             type="button"
             onClick={() => void handleCreate()}
             disabled={submitting || !title.trim() || !insight.trim()}
-            className="w-full rounded-lg bg-[var(--cafe-accent)] py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)] disabled:opacity-40"
+            className="w-full rounded-lg bg-[var(--mc-accent)] py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)] disabled:opacity-40"
           >
             {submitting ? '提交中...' : '提交'}
           </button>
@@ -120,7 +120,7 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
 
       {/* Pattern list */}
       {patterns.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[var(--console-border-soft)] bg-[var(--console-card-bg)] p-6 text-center text-xs text-cafe-muted">
+        <div className="rounded-lg bg-[var(--console-shell-bg)] p-6 text-center text-xs text-cafe-secondary">
           暂无经验记录
         </div>
       ) : (
@@ -128,10 +128,13 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
           {patterns.map((p) => {
             const style = CATEGORY_STYLES[p.category];
             return (
-              <div key={p.id} className="rounded-lg bg-[var(--console-field-bg)] p-3 text-xs">
+              <div
+                key={p.id}
+                className="rounded-xl bg-[var(--console-card-bg)] p-3 text-xs shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+              >
                 <div className="mb-1 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${style.bg} ${style.text}`}>
+                    <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${style.bg} ${style.text}`}>
                       {style.label}
                     </span>
                     <span className="font-medium text-cafe">{p.title}</span>
@@ -139,14 +142,14 @@ export function RefluxCapture({ projectId, patterns, onUpdate }: RefluxCapturePr
                   <button
                     type="button"
                     onClick={() => void handleDelete(p.id)}
-                    className="text-[10px] text-conn-red-text hover:opacity-80"
+                    className="text-micro text-conn-red-text hover:text-conn-red-text"
                   >
                     删除
                   </button>
                 </div>
                 <div className="text-cafe-secondary">{p.insight}</div>
                 {p.evidence && (
-                  <div className="mt-1 rounded bg-[var(--console-pill-bg)] px-2 py-1 text-[10px] text-cafe-muted">
+                  <div className="mt-1 rounded bg-[var(--console-hover-bg)] px-2 py-1 text-micro text-cafe-secondary">
                     {p.evidence}
                   </div>
                 )}

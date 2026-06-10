@@ -83,7 +83,9 @@ export function transformClaudeEvent(
 
     if (s.type === 'message_stop') {
       streamState.currentMessageId = undefined;
-      return null;
+      // F153 Phase I: emit telemetry-only agent_loop marker (provider-agnostic anchor at LLM call boundary,
+      // per KD-31/KD-33). invoke-single-cat consumes this to increment recordAgentLoop; never reaches outputs.
+      return { type: 'agent_loop' as const, catId, timestamp: Date.now() };
     }
 
     // F045: Reset thinking buffer when a thinking block starts
@@ -204,6 +206,25 @@ export function transformClaudeEvent(
     if (messageId && skipFinalText) {
       streamState.partialTextMessageIds.delete(messageId);
     }
+    // #778: thinking-only final message — emit thinking as system_info so the
+    // frontend can attach it to a message bubble. Streaming thinking_delta
+    // normally captures content; this is a safety net for edge cases
+    // (network loss, non-streaming mode, lost deltas).
+    if (messages.length === 0) {
+      const thinkingBlock = content.find(
+        (b) => typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'thinking',
+      ) as { thinking?: string; text?: string } | undefined;
+      if (thinkingBlock) {
+        // Claude thinking blocks use `thinking` field; fall back to `text` for safety
+        const thinkingText = thinkingBlock.thinking ?? thinkingBlock.text ?? '';
+        return {
+          type: 'system_info' as AgentMessage['type'],
+          catId,
+          content: JSON.stringify({ type: 'thinking', catId, text: thinkingText }),
+          timestamp: Date.now(),
+        };
+      }
+    }
     return messages.length > 0 ? messages : null;
   }
 
@@ -221,22 +242,24 @@ export function transformClaudeEvent(
 
   // result/error → error message (F045: include errorSubtype)
   // Issue #24: Use subtype as fallback when errors array is empty
-  if (e.type === 'result' && e.subtype !== 'success') {
+  if (isResultErrorEvent(e)) {
     const rawErrors = Array.isArray(e.errors) ? e.errors : [];
     const errors = rawErrors.filter((item): item is string => typeof item === 'string').join('; ');
+    const resultText = typeof e.result === 'string' ? e.result : '';
     const subtype = typeof e.subtype === 'string' ? e.subtype : undefined;
     const subtypeLabels: Record<string, string> = {
       error_max_turns: 'Max turns exceeded',
       error_max_budget_usd: 'Budget limit reached',
       error_during_execution: 'Execution error',
       error_max_structured_output_retries: 'Structured output retries exceeded',
+      success: 'Claude result error',
     };
     const fallbackError = subtype ? (subtypeLabels[subtype] ?? `Agent error (${subtype})`) : 'Unknown error';
     return {
       type: 'error',
       catId,
-      error: errors || fallbackError,
-      content: JSON.stringify({ errorSubtype: subtype }),
+      error: errors || resultText || fallbackError,
+      content: JSON.stringify({ errorSubtype: subtype, isError: e.is_error === true }),
       timestamp: Date.now(),
     };
   }
@@ -248,7 +271,7 @@ export function transformClaudeEvent(
 export function isResultErrorEvent(event: unknown): boolean {
   if (typeof event !== 'object' || event === null) return false;
   const e = event as Record<string, unknown>;
-  return e.type === 'result' && e.subtype !== 'success';
+  return e.type === 'result' && (e.is_error === true || e.subtype !== 'success');
 }
 
 /** F8: Extract token usage from Claude result/success event.

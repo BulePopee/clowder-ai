@@ -17,7 +17,6 @@ import type { RedisClient } from '@cat-cafe/shared/utils';
 import * as lark from '@larksuiteoapi/node-sdk';
 import type { FastifyBaseLogger } from 'fastify';
 import { isCatAvailable } from '../../config/cat-config-loader.js';
-import { resolveServiceEndpoint } from '../../domains/services/service-registry.js';
 import type { ConnectorWebhookHandler, WebhookHandleResult } from '../../routes/connector-webhooks.js';
 import { getDefaultUploadDir } from '../../utils/upload-paths.js';
 import { deliverConnectorMessage } from '../email/deliver-connector-message.js';
@@ -27,14 +26,14 @@ import { FeishuTokenManager } from './adapters/FeishuTokenManager.js';
 import { TelegramAdapter } from './adapters/TelegramAdapter.js';
 import { WeComAgentAdapter } from './adapters/WeComAgentAdapter.js';
 import { WeComBotAdapter } from './adapters/WeComBotAdapter.js';
-import { WeixinAdapter } from './adapters/WeixinAdapter.js';
+import { WeixinAdapter, type WeixinSessionStateStore } from './adapters/WeixinAdapter.js';
 import { ConnectorCommandLayer, type ConnectorCommandLayerDeps } from './ConnectorCommandLayer.js';
 import {
   type IConnectorPermissionStore,
   MemoryConnectorPermissionStore,
   RedisConnectorPermissionStore,
 } from './ConnectorPermissionStore.js';
-import { ConnectorRouter } from './ConnectorRouter.js';
+import { ConnectorRouter, type RouteResult } from './ConnectorRouter.js';
 import { type IConnectorThreadBindingStore, MemoryConnectorThreadBindingStore } from './ConnectorThreadBindingStore.js';
 import { GitHubRepoWebhookHandler } from './github-repo-event/GitHubRepoWebhookHandler.js';
 import { ReconciliationDedup } from './github-repo-event/ReconciliationDedup.js';
@@ -92,6 +91,13 @@ export interface ConnectorGatewayDeps {
       timestamp: number;
     }): Promise<{ id: string }>;
     getById?(id: string): Promise<{ source?: ConnectorSource } | null>;
+    getByThreadBefore?(
+      threadId: string,
+      timestamp: number,
+      limit?: number,
+    ):
+      | Array<{ catId: string | null; userId?: string; content: string; timestamp: number }>
+      | Promise<Array<{ catId: string | null; userId?: string; content: string; timestamp: number }>>;
   };
   readonly threadStore: {
     create(userId: string, title?: string): { id: string } | Promise<{ id: string }>;
@@ -152,7 +158,7 @@ export interface ConnectorGatewayDeps {
       message: string,
       messageId: string,
       ...args: unknown[]
-    ): 'dispatched' | 'enqueued' | 'full';
+    ): Promise<'dispatched' | 'enqueued' | 'full'>;
   };
   readonly socketManager?:
     | {
@@ -177,6 +183,8 @@ export interface ConnectorGatewayDeps {
         close(opts?: unknown): void;
       })
     | undefined;
+  /** @internal Test-only: override Feishu token manager (e.g. stub for fail-closed tests) */
+  readonly _feishuTokenManagerOverride?: FeishuTokenManager | undefined;
 }
 
 export interface ConnectorGatewayHandle {
@@ -193,6 +201,41 @@ export interface ConnectorGatewayHandle {
   /** F132 bugfix: live adapter getter for health reporting (instance changes on restart) */
   readonly getWeComBotAdapter: () => WeComBotAdapter | null;
   stop(): Promise<void>;
+}
+
+const WEIXIN_SESSION_STATE_KEY = 'connectors:weixin:session-state';
+
+function createWeixinSessionStateStore(redis: RedisClient, log: FastifyBaseLogger): WeixinSessionStateStore {
+  return {
+    async load() {
+      const raw = await redis.get(WEIXIN_SESSION_STATE_KEY);
+      if (!raw) return null;
+      try {
+        const parsed = JSON.parse(raw) as { getUpdatesBuf?: unknown; contextTokens?: unknown };
+        const contextTokens =
+          parsed.contextTokens && typeof parsed.contextTokens === 'object'
+            ? Object.fromEntries(
+                Object.entries(parsed.contextTokens).filter(
+                  ([chatId, token]) => typeof chatId === 'string' && typeof token === 'string',
+                ),
+              )
+            : {};
+        return {
+          getUpdatesBuf: typeof parsed.getUpdatesBuf === 'string' ? parsed.getUpdatesBuf : '',
+          contextTokens,
+        };
+      } catch (err) {
+        log.warn({ err }, '[ConnectorGateway] Invalid persisted WeChat session state ignored');
+        return null;
+      }
+    },
+    async save(state) {
+      await redis.set(WEIXIN_SESSION_STATE_KEY, JSON.stringify(state));
+    },
+    async clear() {
+      await redis.del(WEIXIN_SESSION_STATE_KEY);
+    },
+  };
 }
 
 export function loadConnectorGatewayConfig(): ConnectorGatewayConfig {
@@ -215,7 +258,7 @@ export function loadConnectorGatewayConfig(): ConnectorGatewayConfig {
     wecomToken: process.env.WECOM_TOKEN,
     wecomEncodingAesKey: process.env.WECOM_ENCODING_AES_KEY,
     coCreatorUserId: process.env.DEFAULT_OWNER_USER_ID,
-    whisperUrl: resolveServiceEndpoint('whisper-stt') ?? process.env.WHISPER_URL,
+    whisperUrl: process.env.WHISPER_URL,
     connectorMediaDir: process.env.CONNECTOR_MEDIA_DIR,
     xiaoyiAk: process.env.XIAOYI_AK,
     xiaoyiSk: process.env.XIAOYI_SK,
@@ -314,6 +357,14 @@ export async function startConnectorGateway(
     agentRegistry: deps.agentRegistry,
     catRoster,
     commandRegistry: deps.commandRegistry,
+    ...(deps.messageStore.getByThreadBefore
+      ? {
+          messageStore: {
+            getByThreadBefore: (threadId: string, timestamp: number, limit?: number) =>
+              deps.messageStore.getByThreadBefore!(threadId, timestamp, limit),
+          },
+        }
+      : {}),
   });
 
   // Phase 5+6: Media service + STT provider (optional)
@@ -371,10 +422,12 @@ export async function startConnectorGateway(
     const feishu = new FeishuAdapter(config.feishuAppId!, config.feishuAppSecret!, log, {
       verificationToken: config.feishuVerificationToken,
     });
-    const feishuTokenManager = new FeishuTokenManager({
-      appId: config.feishuAppId!,
-      appSecret: config.feishuAppSecret!,
-    });
+    const feishuTokenManager =
+      deps._feishuTokenManagerOverride ??
+      new FeishuTokenManager({
+        appId: config.feishuAppId!,
+        appSecret: config.feishuAppSecret!,
+      });
     feishu._injectTokenManager(feishuTokenManager);
     adapters.set('feishu', feishu);
 
@@ -457,6 +510,36 @@ export async function startConnectorGateway(
       );
     }
 
+    async function routeFeishuCardAction(
+      cardAction: NonNullable<ReturnType<FeishuAdapter['parseCardAction']>>,
+    ): Promise<RouteResult | { kind: 'skipped'; reason: string }> {
+      const actionValue = cardAction.actionValue as { cmd?: string; args?: string };
+      const cmdFromBtn =
+        typeof actionValue.cmd === 'string' && actionValue.cmd.startsWith('/')
+          ? actionValue.args
+            ? `${actionValue.cmd} ${actionValue.args}`
+            : actionValue.cmd
+          : null;
+      const cmdFromSelect = !cmdFromBtn && cardAction.option?.startsWith('/') ? cardAction.option : null;
+      const cmdText = cmdFromBtn ?? cmdFromSelect;
+      const chatType = cardAction.chatType ?? (await feishu.resolveChatType(cardAction.chatId));
+      if (!chatType) {
+        log.warn({ chatId: cardAction.chatId }, '[Feishu] Card action rejected: chatType unknown (fail-closed)');
+        return { kind: 'skipped', reason: 'chat_type_unknown' };
+      }
+      const text = cmdText ?? JSON.stringify(cardAction.actionValue);
+      const sender = cmdText && cardAction.senderId ? { id: cardAction.senderId } : undefined;
+      return connectorRouter.route(
+        'feishu',
+        cardAction.chatId,
+        text,
+        `card-action-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        undefined,
+        sender,
+        chatType,
+      );
+    }
+
     if (feishuWsMode) {
       // ── Feishu WebSocket (long-connection) mode ──
       const eventDispatcher = new lark.EventDispatcher({}).register({
@@ -468,7 +551,6 @@ export async function startConnectorGateway(
             },
             '[Feishu] WS event received',
           );
-          // Wrap into the envelope format parseEvent expects: { header, event }
           const envelope = {
             header: { event_type: 'im.message.receive_v1' },
             event: data,
@@ -476,6 +558,16 @@ export async function startConnectorGateway(
           const parsed = feishu.parseEvent(envelope);
           if (!parsed) return;
           await routeFeishuParsedEvent(parsed);
+        },
+        'card.action.trigger': async (data: Record<string, unknown>) => {
+          log.info('[Feishu] WS card.action.trigger received');
+          const envelope = {
+            header: { event_type: 'card.action.trigger' },
+            event: data,
+          };
+          const cardAction = feishu.parseCardAction(envelope);
+          if (!cardAction) return;
+          await routeFeishuCardAction(cardAction);
         },
       });
 
@@ -531,13 +623,7 @@ export async function startConnectorGateway(
 
           const cardAction = feishu.parseCardAction(body);
           if (cardAction) {
-            const actionText = JSON.stringify(cardAction.actionValue);
-            const result = await connectorRouter.route(
-              'feishu',
-              cardAction.chatId,
-              actionText,
-              `card-action-${Date.now()}`,
-            );
+            const result = await routeFeishuCardAction(cardAction);
             return result.kind === 'skipped'
               ? { kind: 'skipped', reason: result.reason }
               : { kind: 'processed', messageId: result.kind === 'routed' ? result.messageId : 'card-action' };
@@ -836,7 +922,8 @@ export async function startConnectorGateway(
 
   // ── WeChat Personal (iLink Bot long polling) ──
   // Always create the adapter instance (for QR login routes); only start polling if we have a token.
-  const weixin = new WeixinAdapter(config.weixinBotToken ?? '', log);
+  const weixinSessionStateStore = deps.redis ? createWeixinSessionStateStore(deps.redis, log) : undefined;
+  const weixin = new WeixinAdapter(config.weixinBotToken ?? '', log, weixinSessionStateStore);
   adapters.set('weixin', weixin);
 
   const startWeixinPolling = () => {
@@ -851,6 +938,7 @@ export async function startConnectorGateway(
   };
 
   if (hasWeixin) {
+    await weixin.restoreSessionState();
     startWeixinPolling();
     log.info('[ConnectorGateway] WeChat adapter started (iLink Bot long polling)');
   } else {

@@ -16,6 +16,10 @@ function bashCmd(scriptPath) {
   return `bash "${scriptPath}"`;
 }
 
+function codexStopCmd(scriptPath) {
+  return `${bashCmd(scriptPath)} --codex-json`;
+}
+
 async function createProjectRoot() {
   const projectRoot = await mkdtemp(join(tmpdir(), 'agent-hooks-project-'));
   const hookDir = join(projectRoot, '.claude', 'hooks', 'user-level');
@@ -39,24 +43,30 @@ describe('agent hook sync targets', () => {
     await rm(targetRoot, { recursive: true, force: true });
   });
 
-  it('selects only user-level hook targets and renders Codex paths per target home', () => {
+  it('selects only user-level hook targets and renders Codex/Gemini paths per target home', () => {
     const targets = buildAgentHookTargets({ projectRoot, targetRoot });
     assert.deepEqual(
       targets.map((target) => target.name),
-      ['hooks/session-start', 'hooks/session-stop', 'codex-hooks'],
+      ['hooks/session-start', 'hooks/session-stop', 'codex-hooks', 'gemini-hooks'],
     );
+
+    const startScript = bashCmd(join(targetRoot, '.claude', 'hooks', 'session-start-recall.sh'));
+    const stopScript = bashCmd(join(targetRoot, '.claude', 'hooks', 'session-stop-check.sh'));
 
     const codexHooks = targets.find((target) => target.name === 'codex-hooks');
     assert.ok(codexHooks);
-    const rendered = JSON.parse(codexHooks.render());
+    const codexRendered = JSON.parse(codexHooks.render());
+    assert.equal(codexRendered.hooks.SessionStart[0].hooks[0].command, startScript);
     assert.equal(
-      rendered.hooks.SessionStart[0].hooks[0].command,
-      bashCmd(join(targetRoot, '.claude', 'hooks', 'session-start-recall.sh')),
+      codexRendered.hooks.Stop[0].hooks[0].command,
+      codexStopCmd(join(targetRoot, '.claude', 'hooks', 'session-stop-check.sh')),
     );
-    assert.equal(
-      rendered.hooks.Stop[0].hooks[0].command,
-      bashCmd(join(targetRoot, '.claude', 'hooks', 'session-stop-check.sh')),
-    );
+
+    const geminiHooks = targets.find((target) => target.name === 'gemini-hooks');
+    assert.ok(geminiHooks);
+    const geminiRendered = JSON.parse(geminiHooks.render());
+    assert.equal(geminiRendered.hooks.SessionStart[0].hooks[0].command, startScript);
+    assert.equal(geminiRendered.hooks.Stop[0].hooks[0].command, stopScript);
   });
 
   it('sync writes scripts, Codex hooks.json, and preserves unknown Claude settings hooks', async () => {
@@ -113,7 +123,7 @@ describe('agent hook sync targets', () => {
 
     const codex = JSON.parse(await readFile(join(targetRoot, '.codex', 'hooks.json'), 'utf8'));
     assert.equal(codex.hooks.SessionStart[0].hooks[0].command, bashCmd(startScript));
-    assert.equal(codex.hooks.Stop[0].hooks[0].command, bashCmd(stopScript));
+    assert.equal(codex.hooks.Stop[0].hooks[0].command, codexStopCmd(stopScript));
 
     for (const target of buildAgentHookTargets({ projectRoot, targetRoot })) {
       assert.equal(
@@ -372,6 +382,10 @@ describe('agent hook routes', () => {
       hooksJson.hooks.SessionStart[0].hooks[0].command,
       bashCmd(join(targetRoot, '.claude', 'hooks', 'session-start-recall.sh')),
     );
+    assert.equal(
+      hooksJson.hooks.Stop[0].hooks[0].command,
+      codexStopCmd(join(targetRoot, '.claude', 'hooks', 'session-stop-check.sh')),
+    );
   });
 
   it('rejects no-origin header-only sync requests before writing hook files', async () => {
@@ -508,6 +522,10 @@ describe('agent hook routes', () => {
     assert.equal(
       hooksJson.hooks.SessionStart[0].hooks[0].command,
       bashCmd(join(targetRoot, '.claude', 'hooks', 'session-start-recall.sh')),
+    );
+    assert.equal(
+      hooksJson.hooks.Stop[0].hooks[0].command,
+      codexStopCmd(join(targetRoot, '.claude', 'hooks', 'session-stop-check.sh')),
     );
   });
 

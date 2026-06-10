@@ -2,19 +2,20 @@
 
 import type { Slice, SliceStatus, SliceType } from '@cat-cafe/shared';
 import { useCallback, useState } from 'react';
+import typographyTokens from '@/styles/typography-tokens.json';
 import { apiFetch } from '@/utils/api-client';
 
 const TYPE_COLORS: Record<SliceType, string> = {
-  learning: '#5B9BD5',
-  value: '#7CB87C',
-  hardening: '#B07CC5',
+  learning: 'var(--mc-slice-learning)',
+  value: 'var(--mc-slice-value)',
+  hardening: 'var(--mc-slice-hardening)',
 };
 
 const STATUS_STYLES: Record<SliceStatus, { bg: string; text: string }> = {
-  planned: { bg: 'bg-cafe-surface-elevated', text: 'text-cafe-secondary' },
-  in_progress: { bg: 'bg-conn-amber-bg', text: 'text-conn-amber-text' },
-  delivered: { bg: 'bg-conn-emerald-bg', text: 'text-conn-emerald-text' },
-  validated: { bg: 'bg-[var(--color-cafe-accent)]/10', text: 'text-[var(--color-cafe-accent)]' },
+  planned: { bg: 'bg-[var(--console-card-bg)]', text: 'text-cafe-secondary' },
+  in_progress: { bg: 'bg-[var(--semantic-warning-surface)]', text: 'text-conn-amber-text' },
+  delivered: { bg: 'bg-conn-green-bg', text: 'text-conn-emerald-text' },
+  validated: { bg: 'bg-[var(--semantic-info-surface)]', text: 'text-conn-blue-text' },
 };
 
 const NEXT_STATUS: Record<SliceStatus, SliceStatus | null> = {
@@ -105,7 +106,7 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
         <button
           type="button"
           onClick={() => setShowForm(!showForm)}
-          className="rounded-lg bg-[var(--cafe-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)]"
+          className="rounded-lg bg-[var(--mc-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)]"
         >
           {showForm ? '取消' : 'Add Slice'}
         </button>
@@ -113,7 +114,7 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
 
       {/* Slice list */}
       {sorted.length === 0 && !showForm ? (
-        <div className="rounded-lg border border-dashed border-[var(--console-border-soft)] bg-[var(--console-card-bg)] p-6 text-center text-xs text-cafe-muted">
+        <div className="rounded-lg bg-[var(--console-shell-bg)] p-6 text-center text-xs text-cafe-secondary">
           暂无切片
         </div>
       ) : (
@@ -123,14 +124,17 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             const isExpanded = expanded.has(slice.id);
             const nextStatus = NEXT_STATUS[slice.status];
             return (
-              <div key={slice.id} className="rounded-lg bg-[var(--console-field-bg)] p-3 text-xs">
+              <div
+                key={slice.id}
+                className="rounded-xl bg-[var(--console-card-bg)] p-3 text-xs shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+              >
                 <div className="flex items-center gap-2">
                   <div className="flex flex-col gap-0.5">
                     <button
                       type="button"
                       disabled={idx === 0}
                       onClick={() => void handleReorder(slice.id, sorted[idx - 1].id)}
-                      className="text-[10px] text-[var(--cafe-accent)] disabled:opacity-20"
+                      className="text-micro text-cafe-secondary disabled:opacity-20"
                     >
                       ▲
                     </button>
@@ -138,35 +142,35 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
                       type="button"
                       disabled={idx === sorted.length - 1}
                       onClick={() => void handleReorder(slice.id, sorted[idx + 1].id)}
-                      className="text-[10px] text-[var(--cafe-accent)] disabled:opacity-20"
+                      className="text-micro text-cafe-secondary disabled:opacity-20"
                     >
                       ▼
                     </button>
                   </div>
                   <button type="button" onClick={() => toggle(slice.id)} className="flex flex-1 items-center gap-2">
                     <span
-                      className="rounded-full px-2 py-0.5 text-[10px] font-medium text-[var(--cafe-surface)]"
+                      className="rounded-full px-2 py-0.5 text-micro font-medium text-[var(--cafe-surface)]"
                       style={{ backgroundColor: TYPE_COLORS[slice.sliceType] }}
                     >
                       {slice.sliceType}
                     </span>
                     <span className="font-medium text-cafe">{slice.name}</span>
                   </button>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${sStyle.bg} ${sStyle.text}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${sStyle.bg} ${sStyle.text}`}>
                     {slice.status.replace('_', ' ')}
                   </span>
                   {nextStatus && (
                     <button
                       type="button"
                       onClick={() => void handleStatusChange(slice.id, nextStatus)}
-                      className="rounded bg-[var(--console-pill-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--cafe-accent)] hover:bg-[var(--console-pill-bg)]"
+                      className="rounded bg-[var(--console-hover-bg)] px-2 py-0.5 text-micro font-medium text-cafe-secondary hover:bg-[var(--console-border-soft)]"
                     >
                       → {nextStatus.replace('_', ' ')}
                     </button>
                   )}
                 </div>
                 {isExpanded && (
-                  <div className="mt-2 space-y-1 border-t border-[var(--console-border-soft)] pt-2 text-cafe-secondary">
+                  <div className="mt-2 space-y-1 console-divider-t pt-2 text-cafe-secondary">
                     {slice.description && (
                       <div>
                         <strong>Description:</strong> {slice.description}
@@ -205,12 +209,12 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
         <div
           style={{
             background: 'var(--console-card-bg)',
-            border: '1px solid var(--console-border-soft)',
             borderRadius: 10,
             padding: 14,
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
+            boxShadow: '0 8px 22px rgba(43,33,26,0.04)',
           }}
         >
           <input
@@ -218,20 +222,22 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             onChange={(e) => setName(e.target.value)}
             placeholder="Slice name"
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
             }}
           />
           <select
             value={sliceType}
             onChange={(e) => setSliceType(e.target.value as SliceType)}
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
             }}
           >
             <option value="learning">Learning</option>
@@ -244,10 +250,11 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             placeholder="Description"
             rows={2}
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
               resize: 'vertical',
             }}
           />
@@ -256,10 +263,11 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             onChange={(e) => setActor(e.target.value)}
             placeholder="Actor"
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
             }}
           />
           <input
@@ -267,10 +275,11 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             onChange={(e) => setWorkflow(e.target.value)}
             placeholder="Workflow"
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
             }}
           />
           <textarea
@@ -279,10 +288,11 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             placeholder="Verifiable outcome"
             rows={2}
             style={{
-              border: '1px solid var(--console-border-soft)',
-              borderRadius: 6,
+              border: '1px solid transparent',
+              borderRadius: 10,
               padding: '6px 10px',
-              fontSize: 13,
+              background: 'var(--console-field-bg, var(--console-card-bg))',
+              fontSize: typographyTokens.fontSizePx.compact,
               resize: 'vertical',
             }}
           />
@@ -291,11 +301,11 @@ export function SliceLadder({ projectId, slices, onUpdate }: SliceLadderProps) {
             onClick={() => void handleCreate()}
             disabled={submitting || !name.trim()}
             style={{
-              background: 'var(--cafe-accent)',
+              background: 'var(--mc-accent)',
               color: 'white',
               borderRadius: 8,
               padding: '6px 0',
-              fontSize: 13,
+              fontSize: typographyTokens.fontSizePx.compact,
               fontWeight: 500,
               border: 'none',
               cursor: 'pointer',

@@ -1,5 +1,5 @@
-import { MissionHubView } from '@/components/mission-control/MissionHubView';
+import { MissionControlPage } from '@/components/mission-control/MissionControlPage';
 
 export default function MissionHubPage() {
-  return <MissionHubView />;
+  return <MissionControlPage />;
 }

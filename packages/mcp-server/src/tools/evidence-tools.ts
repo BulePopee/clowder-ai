@@ -6,7 +6,10 @@
  * 不依赖 callback 鉴权 — evidence 路由是公开 GET。
  */
 
+import type { SuggestedCrossPostAction } from '@cat-cafe/shared';
 import { z } from 'zod';
+import { formatSuggestedCrossPostActionLines } from './cross-post-suggestion-format.js';
+import { composeCoverageIntentNudge } from './evidence-coverage-nudge.js';
 import type { ToolResult } from './file-tools.js';
 import { errorResult, successResult } from './file-tools.js';
 
@@ -15,6 +18,25 @@ const API_URL = process.env['CAT_CAFE_API_URL'] ?? 'http://localhost:3004';
 const DOC_SOURCE_TYPES = new Set(['feature', 'decision', 'phase', 'lesson', 'plan', 'research']);
 const EVIDENCE_RESULT_MARKER = 'Evidence search results:';
 let searchCount = 0;
+
+type EvidenceEntityMatch = {
+  entityId: string;
+  type?: string;
+  canonicalName?: string;
+  matchedAlias?: string;
+  surface?: string;
+  source?: string;
+  docAnchor?: string;
+  passageId?: string;
+  why?: string;
+  provenance?: Array<{ source?: string; anchor?: string; note?: string; date?: string }>;
+};
+
+type EvidenceDrillDown = {
+  tool: string;
+  params?: Record<string, string>;
+  hint?: string;
+};
 
 export const searchEvidenceInputSchema = {
   query: z.string().min(1).describe('Search query for project knowledge'),
@@ -57,6 +79,10 @@ export const searchEvidenceInputSchema = {
     .describe(
       'Comma-separated collection IDs to search (e.g. "world:lexander,global:methods"). Only effective with dimension=collection',
     ),
+  explain: z
+    .boolean()
+    .optional()
+    .describe('When true, include rankingFactors (bm25Score, consumptionPrior, mmrPenalty) on each result'),
 };
 
 export async function handleSearchEvidence(input: {
@@ -71,7 +97,9 @@ export async function handleSearchEvidence(input: {
   threadId?: string | undefined;
   dimension?: string | undefined;
   collections?: string | undefined;
+  explain?: boolean | undefined;
 }): Promise<ToolResult> {
+  const { dimension = 'project' } = input;
   const params = new URLSearchParams({ q: input.query });
   if (input.limit != null) params.set('limit', String(input.limit));
   if (input.scope) params.set('scope', input.scope);
@@ -81,8 +109,11 @@ export async function handleSearchEvidence(input: {
   if (input.dateTo) params.set('dateTo', input.dateTo);
   if (input.contextWindow != null) params.set('contextWindow', String(input.contextWindow));
   if (input.threadId) params.set('threadId', input.threadId);
-  if (input.dimension) params.set('dimension', input.dimension);
+  const currentThreadId = process.env['CAT_CAFE_THREAD_ID']?.trim();
+  if (currentThreadId) params.set('currentThreadId', currentThreadId);
+  params.set('dimension', dimension);
   if (input.collections) params.set('collections', input.collections);
+  if (input.explain) params.set('explain', 'true');
 
   const url = `${API_URL}/api/evidence/search?${params.toString()}`;
   const queryLabel = JSON.stringify(input.query);
@@ -92,6 +123,9 @@ export async function handleSearchEvidence(input: {
 
     if (!response.ok) {
       const text = await response.text();
+      console.error(
+        `[cat-cafe-search-evidence] HTTP error ${response.status} for ${url}\n  query=${queryLabel}\n  body=${text.slice(0, 500)}`,
+      );
       return errorResult(`Evidence search failed for ${queryLabel} (${response.status}): ${text}`);
     }
 
@@ -104,16 +138,28 @@ export async function handleSearchEvidence(input: {
         sourceType: string;
         authority?: string;
         boostSource?: string[];
+        matchReason?: string;
+        entityMatches?: EvidenceEntityMatch[];
+        drillDown?: EvidenceDrillDown;
+        sourcePath?: string;
+        rankingFactors?: { bm25Score?: number; consumptionPrior?: number; mmrPenalty?: number };
+        suggestedAction?: SuggestedCrossPostAction;
         passages?: Array<{
+          docAnchor?: string;
           passageId: string;
           content: string;
           speaker?: string;
           createdAt?: string;
+          threadId?: string;
+          messageId?: string;
           context?: Array<{
+            docAnchor?: string;
             passageId: string;
             content: string;
             speaker?: string;
             createdAt?: string;
+            threadId?: string;
+            messageId?: string;
           }>;
         }>;
       }>;
@@ -144,7 +190,9 @@ export async function handleSearchEvidence(input: {
 
     if (data.results.length === 0) {
       const noResultMsg = `${EVIDENCE_RESULT_MARKER} No results found for: ${input.query}`;
-      const parts = [degradedBanner, noResultMsg, depthLine].filter(Boolean);
+      const nudge = composeMemoryNavigationNudge(data); // F188 AC-F3 + KD-7
+      const coverageNudge = composeCoverageIntentNudge(input.query);
+      const parts = [degradedBanner, noResultMsg, nudge, coverageNudge, depthLine].filter(Boolean);
       return successResult(parts.join('\n\n'));
     }
 
@@ -165,11 +213,35 @@ export async function handleSearchEvidence(input: {
       lines.push(`[${r.confidence}] ${r.title}`);
       lines.push(`  anchor: ${r.anchor}`);
       lines.push(`  type: ${r.sourceType}`);
+      // F200 HW-4 根因②b: stable machine line so deriveSearchEvidence can
+      // pair a path-based shell/Read consumption back to this candidate.
+      if (r.sourcePath) lines.push(`  sourcePath: ${r.sourcePath}`);
       if (r.authority) {
         lines.push(`  authority: ${r.authority}`);
       }
       if (r.boostSource && r.boostSource.length > 0 && !r.boostSource.every((s) => s === 'legacy')) {
         lines.push(`  boost: ${r.boostSource.join(', ')}`);
+      }
+      if (r.matchReason) {
+        lines.push(`  match: ${r.matchReason}`);
+      }
+      if (r.entityMatches && r.entityMatches.length > 0) {
+        for (const entityMatch of r.entityMatches) {
+          lines.push(...formatEntityMatchLines(entityMatch));
+        }
+      }
+      if (r.drillDown) {
+        lines.push(...formatDrillDownLines(r.drillDown));
+      }
+      if (r.suggestedAction) {
+        lines.push(...formatSuggestedCrossPostActionLines(r.suggestedAction, { indent: '  ', detailIndent: '    ' }));
+      }
+      if (r.rankingFactors) {
+        const factors = Object.entries(r.rankingFactors)
+          .filter(([, v]) => v != null)
+          .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(3) : v}`)
+          .join(', ');
+        if (factors) lines.push(`  ranking: ${factors}`);
       }
       const snippet = r.snippet.length > 200 ? `${r.snippet.slice(0, 200)}...` : r.snippet;
       lines.push(`  > ${snippet.replace(/\n/g, ' ')}`);
@@ -207,13 +279,63 @@ export async function handleSearchEvidence(input: {
       lines.push('');
     }
 
+    // F188 Phase F AC-F3 + KD-7: deterministic nudge on low-hit (no high/mid doc anchors)
+    const nudgeText = composeMemoryNavigationNudge(data);
+    if (nudgeText) {
+      lines.push(nudgeText);
+      lines.push('');
+    }
+
+    const coverageNudge = composeCoverageIntentNudge(input.query);
+    if (coverageNudge) {
+      lines.push(coverageNudge);
+      lines.push('');
+    }
+
     lines.push(depthLine);
 
     return successResult(lines.join('\n'));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
+    const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+    console.error(
+      `[cat-cafe-search-evidence] fetch threw for ${url}\n  query=${queryLabel}\n  err=${message}\n  cause=${JSON.stringify(cause)}\n  stack=${stack?.split('\n').slice(0, 5).join('\n')}`,
+    );
     return errorResult(`Evidence search request failed for ${queryLabel}: ${message}`);
   }
+}
+
+/**
+ * F188 Phase F AC-F3 (KD-7): deterministic nudge to alternate memory entries.
+ * Triggered on:
+ *   - no_match (results length 0)
+ *   - low_hit (no high/mid confidence doc anchors among results)
+ *
+ * Replaces PostToolUse hook (KD-7 v1 strategy). FM-5 measures effectiveness:
+ * if猫 ignores nudge AND falls back to Bash grep, nudge has failed.
+ */
+function composeMemoryNavigationNudge(data: {
+  results: Array<{ confidence: string; sourceType: string }>;
+}): string | null {
+  if (data.results.length === 0) {
+    return [
+      '🧭 Memory navigation — no match, try a different entry:',
+      '  • 精确 anchor (F186 / ADR-019 等) → cat_cafe_graph_resolve',
+      '  • 零先验 / 扫一眼最近活动 → cat_cafe_list_recent(scope="all", since="7d")',
+    ].join('\n');
+  }
+  const hasHighOrMidDocHit = data.results.some(
+    (r) => (r.confidence === 'high' || r.confidence === 'mid') && DOC_SOURCE_TYPES.has(r.sourceType),
+  );
+  if (!hasHighOrMidDocHit) {
+    return [
+      '🧭 Memory navigation — low confidence hits, consider an alternate entry:',
+      '  • 看 anchor 周边关系 → cat_cafe_graph_resolve',
+      '  • 时间窗口扫描 → cat_cafe_list_recent',
+    ].join('\n');
+  }
+  return null;
 }
 
 function formatDegradedBanner(
@@ -222,11 +344,57 @@ function formatDegradedBanner(
   effectiveMode?: 'lexical' | 'semantic' | 'hybrid',
 ): string | null {
   if (!degraded) return null;
+  // Kept for legacy/web contract compatibility; F209 Phase A no longer emits this reason in production.
   if (degradeReason === 'raw_lexical_only') {
     const modeNote = effectiveMode ? ` (effectiveMode=${effectiveMode})` : '';
     return `[DEGRADED] depth=raw currently uses lexical retrieval only${modeNote}`;
   }
+  if (degradeReason === 'passage_embedding_unavailable') {
+    const modeNote = effectiveMode ? ` (effectiveMode=${effectiveMode})` : '';
+    return `[DEGRADED] raw passage embeddings unavailable; fell back to lexical retrieval${modeNote}`;
+  }
+  if (degradeReason === 'passage_vector_search_error') {
+    const modeNote = effectiveMode ? ` (effectiveMode=${effectiveMode})` : '';
+    return `[DEGRADED] raw passage vector search failed; fell back to lexical retrieval${modeNote}`;
+  }
   return '[DEGRADED] Evidence store error — results may be incomplete';
+}
+
+function formatEntityMatchLines(match: EvidenceEntityMatch): string[] {
+  const details = [
+    match.type ? `type=${match.type}` : null,
+    match.canonicalName ? `canonicalName=${match.canonicalName}` : null,
+    match.matchedAlias ? `matchedAlias=${match.matchedAlias}` : null,
+    match.surface ? `surface=${match.surface}` : null,
+    match.source ? `source=${match.source}` : null,
+    match.docAnchor ? `docAnchor=${match.docAnchor}` : null,
+    match.passageId ? `passageId=${match.passageId}` : null,
+  ].filter(Boolean);
+  const lines = [`  entity: ${match.entityId}${details.length > 0 ? ` (${details.join(', ')})` : ''}`];
+
+  if (match.why) {
+    lines.push(`    why: ${match.why}`);
+  }
+
+  const provenance = (match.provenance ?? [])
+    .map((p) => [p.source, p.anchor, p.note, p.date].filter(Boolean).join(' / '))
+    .filter(Boolean);
+  if (provenance.length > 0) {
+    lines.push(`    provenance: ${provenance.join('; ')}`);
+  }
+
+  return lines;
+}
+
+function formatDrillDownLines(drillDown: EvidenceDrillDown): string[] {
+  const params = Object.entries(drillDown.params ?? {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join(', ');
+  const lines = [`  drillDown: ${drillDown.tool}${params ? ` (${params})` : ''}`];
+  if (drillDown.hint) {
+    lines.push(`    hint: ${drillDown.hint}`);
+  }
+  return lines;
 }
 
 export const evidenceTools = [
@@ -234,7 +402,7 @@ export const evidenceTools = [
     name: 'cat_cafe_search_evidence',
     description:
       'Search project knowledge base — features, decisions, plans, lessons, session history. ' +
-      'This is the PRIMARY entry point for all memory recall. Start here before drilling down. ' +
+      'Semantic/fuzzy find entry point for memory recall. For precise anchors (F186, ADR-019), prefer cat_cafe_graph_resolve; for zero-prior scanning, prefer cat_cafe_list_recent; when unsure, start here with mode=hybrid. ' +
       'Supports scope (docs/threads/all), mode (lexical/semantic/hybrid), and depth (summary/raw). ' +
       'SCOPE STRATEGY (decide first!): ' +
       'docs = 结论/真相源 (features, ADRs, plans, lessons). ' +
@@ -249,9 +417,17 @@ export const evidenceTools = [
       'Mix Chinese + English keywords for better recall (记忆 + memory). ' +
       'Split broad topics into 2-3 targeted queries from different angles (e.g. "how it was built" vs "how it is governed"). ' +
       'Watch for antonym gaps: searching 记忆 misses 失忆/压缩/丢失 — search the opposite angle separately if needed. ' +
+      'SEARCH TIPS — coverage/source-map tasks: this is not an exhaustive all-mentions entrypoint. If the user asks "哪些 / 所有 / 历史上 / 提过 / 沉淀", follow the memory-search-best-practices skill: expand terms yourself, search docs + threads separately, then drill into canonical docs/source threads and report coverage gaps. ' +
       'READING RESULTS: confidence = search match quality (rank-based), authority = document reliability (path-based) — two independent dimensions. ' +
+      'RANKING (F200 live): Results are consumption-weighted — docs that cats actually read/used after searching rank higher. Constitutional docs (ADR/lesson/canon) never get demoted. New docs have 14-day grace period. Near-duplicates are MMR-deduplicated for diversity. No action needed — ranking is automatic. ' +
       'DEPTH: Start with summary (default). Use depth=raw only after narrowing scope to drill into specific passages. ' +
-      'BOUNDARY: Use this tool to FIND information across the project. For READING raw messages in a specific thread, use get_thread_context instead.',
+      'BOUNDARY: Use this tool to FIND information across the project. For READING raw messages in a specific thread, use get_thread_context instead. ' +
+      'F188 PHASE F 7-TOOL FAMILY (cross-reference, choose by scenario): ' +
+      'precise anchor + relations → cat_cafe_graph_resolve; ' +
+      'zero-prior / scan recent → cat_cafe_list_recent; ' +
+      'this tool (search_evidence) = semantic/fuzzy find; ' +
+      'session drill-down → list_session_chain / read_session_digest / read_session_events / read_invocation_detail. ' +
+      'When this tool returns low_hit or no_match, payload appends a deterministic nudge pointing to graph_resolve/list_recent (KD-7).',
     inputSchema: searchEvidenceInputSchema,
     handler: handleSearchEvidence,
   },

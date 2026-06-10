@@ -40,12 +40,12 @@ describe('scrollToMessage', () => {
     scrollToMessage('msg-456');
 
     expect(el.classList.contains('ring-2')).toBe(true);
-    expect(el.classList.contains('ring-conn-blue-ring')).toBe(true);
+    expect(el.classList.contains('ring-blue-400')).toBe(true);
 
     vi.advanceTimersByTime(1500);
 
     expect(el.classList.contains('ring-2')).toBe(false);
-    expect(el.classList.contains('ring-conn-blue-ring')).toBe(false);
+    expect(el.classList.contains('ring-blue-400')).toBe(false);
 
     vi.useRealTimers();
   });
@@ -53,5 +53,18 @@ describe('scrollToMessage', () => {
   it('does nothing when element is not found', () => {
     // Should not throw
     scrollToMessage('nonexistent-id');
+  });
+
+  it('returns true when the target element is found (lets callers retry until DOM is ready)', () => {
+    const el = document.createElement('div');
+    el.setAttribute('data-message-id', 'msg-789');
+    el.scrollIntoView = vi.fn();
+    document.body.appendChild(el);
+
+    expect(scrollToMessage('msg-789')).toBe(true);
+  });
+
+  it('returns false when no matching element exists', () => {
+    expect(scrollToMessage('missing-id')).toBe(false);
   });
 });

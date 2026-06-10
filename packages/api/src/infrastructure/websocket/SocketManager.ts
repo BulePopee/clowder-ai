@@ -21,6 +21,7 @@ const log = createModuleLogger('ws');
 interface QueueProcessorLike {
   clearPause(threadId: string, catId?: string): void;
   releaseSlot(threadId: string, catId: string): void;
+  suppressAutoResume(threadId: string, catId: string): void;
 }
 
 /**
@@ -205,19 +206,38 @@ export class SocketManager {
           log.warn({ socketId: socket.id, threadId: data.threadId }, 'Cancel attempt without room membership');
           return;
         }
+        // F211-REG6 instrument (observation-only): SocketManager hardcodes 'user_cancel' for every
+        // WS cancel_invocation, but the CVO reported spurious cancels he never triggered (Timeline
+        // 2026-05-29: WS flapped 6× in 2min). msSinceConnect is the discriminator — a cancel arriving
+        // milliseconds after a (re)connect is almost certainly reconnect/teardown noise, not a
+        // deliberate Stop click. Pin the real trigger before changing any attribution behavior.
+        log.info(
+          {
+            event: 'f211_reg6_ws_cancel_received',
+            socketId: socket.id,
+            threadId: data.threadId,
+            catId: data.catId ?? null,
+            scope: data.catId ? 'slot' : 'all',
+            msSinceConnect: Date.now() - socket.handshake.issued,
+            transport: socket.conn.transport.name,
+          },
+          'F211-REG6: cancel_invocation received — capturing real trigger provenance (genuine Stop vs reconnect-spurious)',
+        );
         if (data.catId) {
           // F108: Slot-specific cancel
           const result = this.invocationTracker.cancel(data.threadId, data.catId, userId, 'user_cancel');
           if (result.cancelled) {
-            const catIds = result.catIds.length > 0 ? result.catIds : [data.catId];
-            log.info({ threadId: data.threadId, catId: data.catId, cats: catIds }, 'Cancelled slot');
-            for (const msg of buildCancelMessages(result)) {
+            // F-parallel-cancel: scope the cancel broadcast + slot cleanup to the REQUESTED cat
+            // only. result.catIds carries the whole startAll batch (per-slot stores all catIds),
+            // so broadcasting it cleared sibling cats in the UI — this is the most direct cause of
+            // "取消一只两只一起取消" from the real Stop button. Mirrors queue.ts:568-575 scoped fix.
+            const scopedResult = { ...result, catIds: [data.catId] };
+            log.info({ threadId: data.threadId, catId: data.catId }, 'Cancelled slot (scoped)');
+            for (const msg of buildCancelMessages(scopedResult)) {
               this.broadcastAgentMessage(msg, data.threadId);
             }
-            for (const catId of catIds) {
-              this.queueProcessor?.clearPause(data.threadId, catId);
-              this.queueProcessor?.releaseSlot(data.threadId, catId);
-            }
+            this.queueProcessor?.clearPause(data.threadId, data.catId);
+            this.queueProcessor?.releaseSlot(data.threadId, data.catId);
           }
           // F108 + F086: Also abort multi-mention dispatches for this specific cat
           this.multiMentionOrchestrator?.abortBySlot?.(data.threadId, data.catId);
@@ -225,7 +245,10 @@ export class SocketManager {
           // F156: Pass userId to cancelAll so it only cancels this user's invocations.
           // cancelAll returns the catIds that were actually cancelled, so we can
           // scope the orchestrator abort to just those cats — not the entire thread.
-          const cancelledCatIds = this.invocationTracker.cancelAll(data.threadId, userId, 'user_cancel');
+          // Use 'cancel_all' (not 'user_cancel') so QueueProcessor.executeEntry can
+          // distinguish "stop everything" from single-cat cancel. Only 'cancel_all'
+          // triggers suppressAutoResume; single-cat 'user_cancel' still auto-resumes.
+          const cancelledCatIds = this.invocationTracker.cancelAll(data.threadId, userId, 'cancel_all');
           if (cancelledCatIds.length > 0) {
             for (const msg of buildCancelMessages({ cancelled: true, catIds: cancelledCatIds })) {
               this.broadcastAgentMessage(msg, data.threadId);
@@ -233,6 +256,12 @@ export class SocketManager {
             for (const catId of cancelledCatIds) {
               this.queueProcessor?.clearPause(data.threadId, catId);
               this.queueProcessor?.releaseSlot(data.threadId, catId);
+              // Suppress auto-resume for BOTH paths:
+              // - Queued invocations: executeEntry also sets suppress (belt-and-suspenders)
+              // - Direct invocations (messages.ts): only this external call covers them
+              //   because they don't go through executeEntry
+              // Protected by: cancel_all reason (not single-cat), status-gate, 60s TTL
+              this.queueProcessor?.suppressAutoResume(data.threadId, catId);
             }
           }
           // F156 P1-fix: Use per-cat abortBySlot instead of thread-wide abortByThread.

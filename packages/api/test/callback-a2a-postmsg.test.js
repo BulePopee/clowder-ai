@@ -9,13 +9,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { before, beforeEach, describe, test } from 'node:test';
+import { beforeEach, describe, test } from 'node:test';
 import './helpers/setup-cat-registry.js';
 import Fastify from 'fastify';
 
 function createMockSocketManager() {
   const messages = [];
   const roomEvents = [];
+  const userEvents = [];
   return {
     broadcastAgentMessage(msg) {
       messages.push(msg);
@@ -23,11 +24,19 @@ function createMockSocketManager() {
     broadcastToRoom(room, event, data) {
       roomEvents.push({ room, event, data });
     },
+    // F-coalesce: production SocketManager has emitToUser (enqueueA2ATargets emits queue_updated on
+    // both enqueue AND coalesce). The mock previously omitted it; coalesce path now exercises it.
+    emitToUser(userId, event, data) {
+      userEvents.push({ userId, event, data });
+    },
     getMessages() {
       return messages;
     },
     getRoomEvents() {
       return roomEvents;
+    },
+    getUserEvents() {
+      return userEvents;
     },
   };
 }
@@ -110,7 +119,7 @@ describe('post_message A2A mention invocation', () => {
   // P1-1 regression: no @ → no invocation
   test('post-message without @ does NOT trigger invocation', async () => {
     const app = await createApp();
-    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', { threadId: 't1' });
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 't1');
 
     const response = await app.inject({
       method: 'POST',
@@ -131,7 +140,7 @@ describe('post_message A2A mention invocation', () => {
   // P1-2 regression: inline @ → no invocation
   test('post-message with inline @ (行中) does NOT trigger invocation', async () => {
     const app = await createApp();
-    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', { threadId: 't1' });
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 't1');
 
     const response = await app.inject({
       method: 'POST',
@@ -196,6 +205,124 @@ describe('post_message A2A mention invocation', () => {
     // InvocationRecord should be created
     assert.equal(invocationRecordStore.getRecords().length, 1);
     assert.deepEqual(invocationRecordStore.getRecords()[0].targetCats, ['codex']);
+  });
+
+  test('post-message duplicate retry recovers a queued A2A callback before returning duplicate', async () => {
+    const { InvocationQueue } = await import('../dist/domains/cats/services/agents/invocation/InvocationQueue.js');
+    const queueProcessor = {
+      async onInvocationComplete() {},
+      async tryAutoExecute() {},
+      registerEntryCompleteHook() {},
+      unregisterEntryCompleteHook() {},
+    };
+    const invocationQueue = new InvocationQueue();
+    const app = await createApp({ invocationQueue, queueProcessor });
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 't1');
+    const content = 'same queued callback report needing A2A recovery';
+
+    const queued = messageStore.append({
+      userId: 'user-1',
+      catId: 'opus',
+      content,
+      mentions: ['codex'],
+      origin: 'callback',
+      timestamp: Date.now(),
+      threadId: 't1',
+      extra: {
+        stream: {
+          invocationId,
+          turnInvocationId: invocationId,
+        },
+      },
+      deliveryStatus: 'queued',
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { content, targetCats: ['codex'] },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'duplicate');
+    assert.equal(body.messageId, queued.id);
+
+    const entries = invocationQueue.list('t1', 'user-1');
+    assert.equal(entries.length, 1, 'duplicate retry should enqueue the recovered A2A target');
+    assert.equal(entries[0].messageId, queued.id, 'recovered queue entry should carry the existing message id');
+    assert.deepEqual(entries[0].targetCats, ['codex']);
+    assert.equal(entries[0].autoExecute, true);
+    assert.equal(messageStore.size, 1);
+    assert.equal(socketManager.getMessages().length, 0, 'queued recovery should wait for QueueProcessor delivery');
+  });
+
+  // F-coalesce: mechanism changed from skip-dedup (hasQueuedAgentForCat) to coalesce
+  // (findInFlightAgentEntry + coalesceContentIntoQueuedAgent). The USER-FACING CONTRACT this test
+  // guards is unchanged and still asserted verbatim: a same-cat duplicate must NOT be reported as a
+  // new route (routed=[], no "已路由" message), must NOT create a second entry (enqueue/backfill
+  // throw = hard guard), must NOT create a legacy InvocationRecord, and MUST still nudge
+  // tryAutoExecute so the already-queued entry gets picked up. Only the dedup mock methods are
+  // swapped to the new interface so the test exercises the real code path again.
+  test('post-message does not claim routed when InvocationQueue coalesces a duplicate queued target', async () => {
+    const tryAutoExecuteCalls = [];
+    const queueProcessor = {
+      async onInvocationComplete() {},
+      async tryAutoExecute(threadId) {
+        tryAutoExecuteCalls.push(threadId);
+      },
+      registerEntryCompleteHook() {},
+      unregisterEntryCompleteHook() {},
+    };
+    let coalesceCalled = false;
+    const invocationQueue = {
+      countAgentEntriesForThread() {
+        return 1;
+      },
+      // New dedup entry-point: the duplicate target already has a QUEUED agent entry.
+      findInFlightAgentEntry(threadId, catId) {
+        assert.equal(threadId, 't1');
+        assert.equal(catId, 'codex');
+        return { id: 'q-existing', userId: 'user-1', status: 'queued', source: 'agent', targetCats: ['codex'] };
+      },
+      // The new content is merged into the existing queued entry (not dropped, not re-dispatched).
+      coalesceContentIntoQueuedAgent(threadId, _userId, entryId) {
+        assert.equal(threadId, 't1');
+        assert.equal(entryId, 'q-existing');
+        coalesceCalled = true;
+        return true;
+      },
+      enqueue() {
+        throw new Error('coalesced duplicate must not be enqueued again');
+      },
+      backfillMessageId() {
+        throw new Error('coalesced duplicate must not backfill a new queue entry');
+      },
+      list() {
+        return [];
+      },
+    };
+    const app = await createApp({ invocationQueue, queueProcessor });
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 't1');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: {
+        content: '修复完成了\n@缅因猫\n请帮忙 review',
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.ok(coalesceCalled, 'duplicate queued target should be coalesced, not re-dispatched');
+    assert.deepEqual(body.routed, [], 'Response must expose that no new A2A route was enqueued');
+    assert.doesNotMatch(body.message, /消息已路由给 @codex/, 'Coalesced duplicate must not be reported as routed');
+    assert.match(body.message, /未新增唤醒|已有待处理队列/);
+    assert.deepEqual(tryAutoExecuteCalls, ['t1'], 'Existing queued entry should still be nudged for auto-execute');
+    assert.equal(invocationRecordStore.getRecords().length, 0, 'InvocationQueue path must not create legacy records');
   });
 
   // Content-before-mention regression: 上面写内容，最后一行 @ (缅因猫习惯)

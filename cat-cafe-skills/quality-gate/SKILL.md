@@ -12,8 +12,9 @@ triggers:
   - "声称完成"
 ---
 
-> **SOP 位置**: 本 skill 是 `docs/SOP.md` Step 2 的执行细节。
-> **上一步**: 代码开发 (Step 1) | **下一步**: `request-review` (Step 3a)
+> **SOP 位置**: 本 skill 是 `sop-definitions/development.yaml` stage `quality_gate` 的执行细节。
+> **SOP definition**: `sop-definitions/development.yaml` stage `quality_gate`。
+> **上一步**: `impl` stage | **下一步**: `request-review`（review stage）
 
 # Quality Gate
 
@@ -87,11 +88,20 @@ Step 2.6: FALLBACK LAYER CHECK（F177 Phase D）🔴
   - 自检三问：①修坐标系还是补错误坐标系？②坐标变换能否消除？③每层为什么不能去掉？
   - 层数合理时在报告中说明理由；不合理时重构后再过 gate
 
+Step 2.7: ARCHITECTURE OWNERSHIP REPORT（F191，warning-only）🔴
+  - 执行：`pnpm check:architecture-ownership`
+  - 从 spec / plan 抄入：
+    `Architecture cell` / `Map delta` / `Why`
+  - 若缺失，报告 `⚠️ missing` 并列为 review focus；不在 quality-gate 做 semantic hard block
+  - 若 `Map delta: none` 但 diff 明显新增 `Store|Queue|Router|Adapter|Dispatcher|Binding` 等架构名词，报告 mismatch 给 reviewer
+  - 若 `Map delta: update required|new cell required`，报告对应 ownership cell / new cell 文件是否随 PR 更新
+  - 注意：quality-gate 只报告机械可见事实；架构语义正确性由 Design Gate + reviewer 判断
+
 Step 3: VERIFY — 逐项检查
   - 代码在哪？有测试覆盖？边界处理了？
   - 🔴 交付物必须核实 commit/PR 状态（git log --grep + gh pr list）
     spec checkbox 是记录工具，不是真相源（LL-029）
-  - 🔴 新增 MCP 工具 → `MCP_TOOLS_SECTION` 更新了吗？（F086 教训：造了工具猫不知道）
+  - 🔴 新增 MCP 工具 → 认知入口更新了吗？优先级：MCP tool description → 相关 skill refs → capability wakeup / L0 quick index；只有 legacy/fallback surface 仍依赖时才补 `MCP_TOOLS_SECTION`（F086 教训：造了工具猫不知道；F203 后不再默认塞 SystemPromptBuilder）
   - 🔴 新增行为规则 → governance digest / shared-rules 注入更新了吗？
   - 🔴 产出了 SKILL.md 或改了 MCP tool description → 加载 `writing-skills`，用 T0 六要素审查质量（软硬同检）
 
@@ -102,6 +112,38 @@ Step 4: RUNTIME GUARD — 前端证据采集前先做运行态保护
   - 证明“这是我当前 worktree 的验证证据”时，必须同时说清：`worktree/cwd` + 目标 URL。两者对不上 = 证据无效
   - 确需重启时，先获铲屎官明确授权，再用 `CAT_CAFE_RUNTIME_RESTART_OK=1` 执行
   - **Alpha 优先**：验证已合入 main 的改动时，优先用 `pnpm alpha:start`（3011/3012/4111/6398）取证，而非 runtime。Alpha 环境每次启动自动同步 origin/main
+
+Step 4.5: DOGFOOD-YOUR-SLICE — 用一次自己刚做的功能（F209 教训 2026-05-23）🔴
+  对 user-visible / runtime feature，author 必须在请求 review 前：
+    ① 跑一条**真实端到端 query / 路径**，涵盖该 slice 的核心交付能力
+    ② 把命令 + 输出 / 截图证据写进 Quality Gate Report 的 "Dogfood" 块
+    ③ 抓到的任何 dogfood bug 必须当轮修，不允许"post-merge 再说"
+
+  Scope（必做 vs 可豁免）：
+    - **必做**：任何对最终用户 / 猫体感有变化的 feature 或 bugfix。包括但不限于：
+      search / recall / UI / routing / drillDown / typed reader / 任何新 MCP tool / 任何新 REST 端点 /
+      **任何修复用户或猫可感知路径的 bugfix（即使已有回归测试覆盖）**
+      → 反例 PR #1854 dogfood hotfix：file-slice drillDown 路径口径不一致，已有回归测试也不够——
+        必须 author 自己跑一遍 `search_evidence → drillDown → read_file_slice` 才能抓到
+    - **可豁免**：docs-only / 纯重构 / 纯测试 / 内部基础设施 / **纯内部 bugfix（非 user/cat 可感知路径，如内部 DB 一致性、log format、纯算法常量调整等）**
+      → 豁免必须**显式在 review packet 里写出理由**（"docs-only" / "纯重构 + 既有测试覆盖" / "纯内部 bugfix，不影响 user/cat 可感知路径"等），不能省略
+
+  Why（F209 反思 2026-05-23）:
+    "AC pass 但用户感受不到" + "dogfood bug post-merge 才暴露" 是同型走偏。
+    - Phase B alias registry: AC-B1~B5 全 ✅、跨族 review APPROVE、merge 闭环 — 但生产 `entity_registry` 是空的，真实用户搜 `CVO` 找不到 `铲屎官`。
+    - Phase C drillDown: 测试 / cloud review / merge 都过 — 但 author 自己 post-merge 用一次刚发现 file-slice 路径口径不一致。
+    根因是没人 pre-review 真用一次自己刚做的东西。pre-merge dogfood 把这一类 bug 提前到 author 自检阶段。
+
+  报告写法（在 Quality Gate Report 里加 "### Dogfood" 块）：
+    ```markdown
+    ### Dogfood-Your-Slice
+    Scope verdict: ✅ 必做 / 🆗 可豁免（理由：xxx）
+
+    （必做时）
+    端到端路径: search_evidence("CVO") → drillDown → cat_cafe_get_thread_context
+    实际命令 / 输出（粘贴）: ...
+    发现的 bug: 无 / 列表（含修复 commit SHA）
+    ```
 
 Step 5: PEN CHECK — 自动化设计稿对照（不可跳过！）
   ① glob designs/**/*.pen，匹配当前 feat 编号或关键词
@@ -187,6 +229,18 @@ glob designs/**/*.pen 匹配结果: [列出匹配文件或"无匹配"]
 ### Artifact Hygiene（Step 7.5）
 仓库根目录媒体/设计工件（工作树 + 已提交差异）: 无 ✅
 
+### Architecture Ownership（Step 2.7）
+Architecture cell: dispatch
+Map delta: none
+Why: 只扩展现有 InvocationQueue 行为，不改变 dispatch cell 边界
+Diff mismatch scan: 无新增并行 Store/Queue/Router/Adapter ✅
+
+### Dogfood-Your-Slice（Step 4.5）
+Scope verdict: ✅ 必做 / 🆗 可豁免（理由）
+（必做时）端到端路径: search_evidence("...") → drillDown → reader(...)
+实际命令 / 输出 / 截图: ...
+发现的 bug: 无 / 列表（含修复 commit SHA）
+
 ### 验证命令输出（必须是这次真实运行）
 pnpm test → 34/34 pass ✅
 pnpm lint → 0 errors ✅
@@ -213,6 +267,7 @@ pnpm -r --if-present run build → exit 0 ✅
 | Redis 改动用默认测试命令 | 必须跑 `test:redis`，禁止直连 6399 |
 | 产出了 skill/MCP 但没审查质量 | 加载 `writing-skills`，用 T0 六要素审查（软硬同检） |
 | 只看 spec checkbox 就声称完成/未完成 | 核实 `git log --grep` + `gh pr list` + 实际 commit（LL-029）|
+| AC 全 ✅ 就声明 phase close（机制 ship 但用户感受不到）| Step 4.5 Dogfood-Your-Slice：必做 feature 跑一条真实端到端 query 写进报告；豁免必须显式写理由（F209 反思 2026-05-23）|
 
 **Red flags — 立刻 STOP**：
 - 用 "should"、"probably"、"seems to"
@@ -231,7 +286,7 @@ pnpm -r --if-present run build → exit 0 ✅
 
 ## 下一步
 
-Quality Gate 通过后 → **直接加载 `request-review`** skill 请求 review（SOP Step 3a）。不要停下来问铲屎官"要不要继续"（§17）。
+Quality Gate 通过后 → **直接加载 `request-review`** skill 请求 review（SOP stage `review`）。不要停下来问铲屎官"要不要继续"（§17）。
 
 Gate 未通过时：
 - **P1 遗漏** → 补完再过 gate

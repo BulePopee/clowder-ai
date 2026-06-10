@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { primeCoCreatorConfigCache } from '@/hooks/useCoCreatorConfig';
+import { CO_CREATOR_COLOR } from '@/lib/color-defaults';
 import { apiFetch } from '@/utils/api-client';
 import type { CoCreatorConfig } from './config-viewer-types';
 import { uploadAvatarAsset } from './hub-cat-editor.client';
@@ -13,10 +15,7 @@ const DEFAULT_CO_CREATOR: CoCreatorConfig = {
   aliases: [],
   mentionPatterns: ['@co-creator'],
   avatar: '',
-  color: {
-    primary: '#D4A76A',
-    secondary: '#FFF8F0',
-  },
+  color: { ...CO_CREATOR_COLOR },
 };
 
 function normalizeMentionTag(value: string): string {
@@ -128,9 +127,9 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
     }
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--console-overlay-medium)] px-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--console-overlay-medium)] px-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -138,7 +137,7 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-start justify-between px-7 py-5">
-          <p className="text-[13px] font-extrabold text-[var(--console-modal-title)]">{current.name}</p>
+          <p className="text-compact font-extrabold text-[var(--console-modal-title)]">{current.name}</p>
           <button
             type="button"
             onClick={onClose}
@@ -161,13 +160,13 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
             />
 
             <div className="flex items-center gap-3">
-              <span className="w-[150px] shrink-0 text-[12px] font-bold text-cafe-secondary">Avatar</span>
+              <span className="w-[150px] shrink-0 text-xs font-bold text-cafe-secondary">Avatar</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 rounded-lg border border-[var(--console-border-soft)] bg-[var(--console-pill-bg)] px-3 py-1.5 text-sm text-cafe-secondary transition hover:border-[var(--cafe-accent)]"
+                className="flex items-center gap-2 rounded-lg border border-[var(--console-border-soft)] bg-transparent px-3 py-1.5 text-sm text-cafe-secondary transition hover:border-[var(--cafe-accent)]"
               >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--console-border-soft)] bg-cafe-surface text-[10px] text-cafe-muted">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--console-border-soft)] bg-cafe-surface text-micro text-cafe-muted">
                   {avatar ? (
                     // biome-ignore lint/performance/noImgElement: co-creator avatar may be runtime upload URL
                     // eslint-disable-next-line @next/next/no-img-element
@@ -203,7 +202,7 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
             </div>
 
             <div className="flex items-center gap-3">
-              <span className="w-[150px] shrink-0 text-[12px] font-bold text-cafe-secondary">Background Color</span>
+              <span className="w-[150px] shrink-0 text-xs font-bold text-cafe-secondary">Background Color</span>
               <div className="flex items-center gap-2">
                 <label title="Primary">
                   <input
@@ -229,7 +228,7 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
 
           <SectionCard title="别名与 @ 路由">
             <div className="flex items-start gap-3">
-              <span className="w-[150px] shrink-0 pt-1 text-[12px] font-bold text-cafe-secondary">别名</span>
+              <span className="w-[150px] shrink-0 pt-1 text-xs font-bold text-cafe-secondary">别名</span>
               <div className="min-w-0 flex-1">
                 <TagEditor
                   tags={aliases}
@@ -243,7 +242,7 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
             </div>
 
             <div className="flex items-start gap-3">
-              <span className="w-[150px] shrink-0 pt-1 text-[12px] font-bold text-cafe-secondary">@ 标签</span>
+              <span className="w-[150px] shrink-0 pt-1 text-xs font-bold text-cafe-secondary">@ 标签</span>
               <div className="min-w-0 flex-1">
                 <TagEditor
                   tags={mentionPatterns}
@@ -266,13 +265,14 @@ export function HubCoCreatorEditor({ open, coCreator, onClose, onSaved }: HubCoC
               type="button"
               onClick={handleSave}
               disabled={saving}
-              className="h-8 rounded-[10px] bg-[var(--cafe-accent)] px-4 text-[13px] font-extrabold text-[var(--cafe-surface)] transition hover:bg-[var(--cafe-accent-hover)] disabled:opacity-50"
+              className="h-8 rounded-[10px] bg-[var(--cafe-accent)] px-4 text-compact font-extrabold text-[var(--cafe-surface)] transition hover:bg-[var(--cafe-accent-hover)] disabled:opacity-50"
             >
               {saving ? '保存中…' : '保存'}
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

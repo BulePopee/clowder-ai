@@ -63,10 +63,10 @@ export interface ActorSpec {
 }
 
 /** Phase 2.5: Display contract — task declares its own display metadata (KD-8) */
-export type DisplayCategory = 'pr' | 'repo' | 'thread' | 'system' | 'external';
+export type DisplayCategory = 'pr' | 'repo' | 'thread' | 'system' | 'external' | 'issue';
 
 /** Phase 2.5: Subject kind for subjectPreview computation (KD-9) */
-export type SubjectKind = 'pr' | 'repo' | 'thread' | 'external' | 'none';
+export type SubjectKind = 'pr' | 'repo' | 'thread' | 'external' | 'none' | 'issue';
 
 /** Phase 2.5: Static display metadata declared by each task (AC-E1) */
 export interface TaskDisplayMeta {
@@ -119,7 +119,7 @@ export interface ScheduleInvokeTrigger {
     messageId: string,
     contentBlocks?: readonly unknown[],
     policy?: ScheduleTriggerPolicy,
-  ): void;
+  ): void | Promise<unknown>;
 }
 
 /** Phase 1b+2: context passed to execute — carries actor resolution + context spec */
@@ -137,6 +137,24 @@ export interface ExecuteContext {
 }
 
 /**
+ * F167 Phase M: pre-fire defer policy (scheduler-generic mechanism).
+ * When the target thread is busy at fire time, the scheduler defers the once-task
+ * fire (re-arm with a fresh fireAt) instead of executing — avoiding stale-wake
+ * "history replay" while the cat is mid-work. hold_ball activates this; the busy
+ * signal is the scheduler's own mechanical occupancy check (NOT structured-callback
+ * subject binding — KD-27 safe).
+ */
+export interface FirePolicy {
+  deferWhileThreadBusy: boolean;
+  /** thread whose busy state gates the fire (hold_ball: the wake's delivery thread) */
+  threadId: string;
+  /** ms to wait before re-checking busy state before the next fire attempt (default 30_000) */
+  deferIntervalMs?: number;
+  /** max consecutive defers before force-firing (avoid infinite defer; default 10) */
+  maxDefers?: number;
+}
+
+/**
  * Phase 1a TaskSpec — six dimensions minus Context (Phase 2).
  * Gate returns workItems[] for per-subject execute + ledger.
  * Lease is task-level in Phase 1a; subject-level lease deferred to Phase 1b.
@@ -145,6 +163,8 @@ export interface TaskSpec_P1<Signal = unknown> {
   id: string;
   profile: TaskProfile;
   trigger: TriggerSpec;
+  /** F167 Phase M: optional pre-fire defer policy (busy thread → re-arm instead of fire) */
+  firePolicy?: FirePolicy;
   admission: {
     gate: (ctx: GateCtx) => Promise<GateResult<Signal>>;
   };

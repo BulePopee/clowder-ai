@@ -15,6 +15,8 @@ import { detectConflicts } from '../config/governance/skill-conflict.js';
 import { resolveConflict, syncSkills, validateSkillName } from '../config/governance/skill-sync.js';
 import type { SkillsStaleness } from '../config/governance/skills-state.js';
 import { checkStaleness, readSkillsState } from '../config/governance/skills-state.js';
+import { isDirectLoopbackRequest } from '../utils/loopback-request.js';
+import { resolveOwnerGate } from '../utils/owner-gate.js';
 import { validateProjectPath } from '../utils/project-path.js';
 import { resolveUserId } from '../utils/request-identity.js';
 import {
@@ -41,6 +43,7 @@ interface SkillEntry {
   name: string;
   category: string;
   trigger: string;
+  description?: string;
   mounts: SkillMount;
   requiresMcp?: SkillMcpDependency[];
 }
@@ -70,6 +73,34 @@ function resolveCatCafeSkillsSourceDir(): string {
 }
 
 const CAT_CAFE_SKILLS_SRC = resolveCatCafeSkillsSourceDir();
+
+function resolveSessionUserId(request: import('fastify').FastifyRequest): string | null {
+  const userId = (request as import('fastify').FastifyRequest & { sessionUserId?: string }).sessionUserId;
+  return typeof userId === 'string' && userId.trim() ? userId.trim() : null;
+}
+
+function requireSkillsOwner(
+  request: import('fastify').FastifyRequest,
+  reply: import('fastify').FastifyReply,
+): string | null {
+  const userId = resolveSessionUserId(request);
+  if (!userId) {
+    reply.status(401);
+    return null;
+  }
+  // Network guard: non-direct-loopback requests without a configured owner are
+  // rejected to prevent LAN/proxied skill writes in single-user mode (#794).
+  if (!isDirectLoopbackRequest(request) && !process.env.DEFAULT_OWNER_USER_ID?.trim()) {
+    reply.status(403);
+    return null;
+  }
+  const gateResult = resolveOwnerGate(userId);
+  if (gateResult) {
+    reply.status(gateResult.status);
+    return null;
+  }
+  return userId;
+}
 
 export const skillsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/skills', async (request, reply) => {
@@ -121,6 +152,7 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
           name,
           category: entry?.category ?? '未分类',
           trigger,
+          ...(meta?.description ? { description: meta.description } : {}),
           mounts: { claude, codex, gemini, kimi },
           ...(meta?.requiresMcp?.length
             ? {
@@ -172,10 +204,11 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/api/skills/sync', async (request, reply) => {
-    const userId = resolveUserId(request);
+    const userId = requireSkillsOwner(request, reply);
     if (!userId) {
-      reply.status(401);
-      return { error: 'Identity required (session cookie or X-Cat-Cafe-User header)' };
+      return reply.statusCode === 401
+        ? { error: 'Authentication required' }
+        : { error: 'Skills write operations require owner authorization' };
     }
     const body = (request.body ?? {}) as { projectPath?: string };
     const skillsSrc = CAT_CAFE_SKILLS_SRC;
@@ -195,10 +228,11 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/api/skills/resolve-conflict', async (request, reply) => {
-    const userId = resolveUserId(request);
+    const userId = requireSkillsOwner(request, reply);
     if (!userId) {
-      reply.status(401);
-      return { error: 'Identity required (session cookie or X-Cat-Cafe-User header)' };
+      return reply.statusCode === 401
+        ? { error: 'Authentication required' }
+        : { error: 'Skills write operations require owner authorization' };
     }
     const body = (request.body ?? {}) as {
       skillName?: string;
@@ -228,6 +262,12 @@ export const skillsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'Invalid project path' };
       }
       projectRoot = validated;
+    }
+
+    const state = await readSkillsState(projectRoot);
+    if (!state?.managedSkillNames?.includes(body.skillName)) {
+      reply.status(400);
+      return { error: `Skill '${body.skillName}' is not managed by Clowder AI sync` };
     }
 
     await resolveConflict(projectRoot, homedir(), body.skillName, body.choice);

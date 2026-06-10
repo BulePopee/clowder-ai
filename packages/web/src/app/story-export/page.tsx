@@ -20,7 +20,7 @@ function StoryBubble({ msg }: { msg: StoryMessage }) {
   const [thinkingExpanded, setThinkingExpanded] = useState(true); // default expanded for export
 
   const bubbleClasses = isUser
-    ? `rounded-2xl rounded-br-sm ${msg.isWhisper ? 'bg-conn-amber-bg text-conn-amber-text border border-dashed border-conn-amber-ring' : 'bg-conn-amber-bg text-conn-amber-text'}`
+    ? `rounded-2xl rounded-br-sm ${msg.isWhisper ? 'bg-conn-amber-bg text-conn-amber-text border border-dashed border-conn-amber-ring' : 'bg-[var(--semantic-warning-surface)] text-conn-amber-text'}`
     : `${style.bubbleRadius} ${style.font ?? ''} border`;
 
   const bubbleStyle = isUser
@@ -64,7 +64,7 @@ function StoryBubble({ msg }: { msg: StoryMessage }) {
                 className="flex items-center gap-1.5 text-xs text-cafe-secondary hover:text-cafe-secondary transition-colors mb-1"
               >
                 <span
-                  className="text-[10px]"
+                  className="text-micro"
                   style={{
                     transform: thinkingExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
                     display: 'inline-block',
@@ -88,7 +88,7 @@ function StoryBubble({ msg }: { msg: StoryMessage }) {
 
         {/* Annotation */}
         {msg.annotation && (
-          <div className={`mt-1 text-[11px] text-cafe-muted ${isUser ? 'text-right' : ''}`}>{msg.annotation}</div>
+          <div className={`mt-1 text-xs text-cafe-muted ${isUser ? 'text-right' : ''}`}>{msg.annotation}</div>
         )}
         {/* Reaction row */}
         {msg.reactions && (
@@ -108,11 +108,11 @@ function StoryBubble({ msg }: { msg: StoryMessage }) {
 function BadgeTag({ badge }: { badge: NonNullable<StoryMessage['badge']> }) {
   const colorMap = {
     red: 'bg-conn-red-bg text-conn-red-text',
-    green: 'bg-conn-emerald-bg text-conn-emerald-text',
-    amber: 'bg-conn-amber-bg text-conn-amber-text',
+    green: 'bg-conn-green-bg text-conn-green-text',
+    amber: 'bg-[var(--semantic-warning-surface)] text-conn-amber-text',
     blue: 'bg-conn-blue-bg text-conn-blue-text',
   };
-  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${colorMap[badge.color]}`}>{badge.text}</span>;
+  return <span className={`text-micro px-1.5 py-0.5 rounded font-medium ${colorMap[badge.color]}`}>{badge.text}</span>;
 }
 
 function StoryCardView({ card, index }: { card: StoryCardType; index: number }) {
@@ -123,7 +123,7 @@ function StoryCardView({ card, index }: { card: StoryCardType; index: number }) 
         <div className="text-xs text-cafe-muted mb-1">#{index + 1}</div>
         <h2 className="text-xl font-bold text-cafe">{card.title}</h2>
         {card.subtitle && <p className="text-sm text-cafe-secondary mt-1">{card.subtitle}</p>}
-        <div className="mt-3 mx-auto w-16 h-0.5 bg-cafe-surface-elevated rounded-full" />
+        <div className="mt-3 mx-auto w-16 h-0.5 bg-cafe-surface rounded-full" />
       </div>
 
       {/* Messages */}

@@ -19,6 +19,7 @@ import { getUserId } from '@/utils/userId';
 import { reconnectGame } from './useGameReconnect';
 // F173 Phase E (KD-1): bg refs + background message processing moved into
 // useAgentMessages — useSocket no longer dispatches active vs background.
+import { type AgentMessageCoalescer, createAgentMessageCoalescer } from './useSocket-message-coalescer';
 import { loadJoinedRoomsFromSession, saveJoinedRoomsToSession } from './useSocket-persistence';
 import { handleVoiceChunk, handleVoiceStreamEnd, handleVoiceStreamStart } from './useVoiceStream';
 
@@ -174,6 +175,25 @@ function hasStaleActiveThreadPresentation(state: ReturnType<typeof useChatStore.
   );
 }
 
+function finalizeStreamingBubblesAbsentFromServerSlots(threadId: string, activeCats: Set<string>): boolean {
+  const store = useChatStore.getState();
+  const isActiveThread = store.currentThreadId === threadId;
+  const messagesToCheck = isActiveThread ? store.messages : store.getThreadState(threadId).messages;
+  let finalizedAny = false;
+
+  for (const msg of messagesToCheck) {
+    if (msg.type !== 'assistant' || msg.isStreaming !== true) continue;
+    if (msg.catId && activeCats.has(msg.catId)) continue;
+    store.setThreadMessageStreaming(threadId, msg.id, false);
+    finalizedAny = true;
+  }
+
+  if (finalizedAny) {
+    store.requestStreamCatchUp(threadId);
+  }
+  return finalizedAny;
+}
+
 /**
  * Query /queue for one thread and reconcile local state against server truth.
  * Shared by reconnect reconciliation and the stale-watchdog probe.
@@ -212,6 +232,7 @@ export async function reconcileThreadWithServer(
         const syntheticId = `hydrated-${threadId}-${slot.catId}`;
         store.addThreadActiveInvocation(threadId, syntheticId, slot.catId, 'execute', slot.startedAt);
       }
+      finalizeStreamingBubblesAbsentFromServerSlots(threadId, new Set(serverActiveCats));
       console.log(`[ws] ${source} reconciliation: re-hydrated active slots from server`, {
         threadId,
         cats: serverActiveCats,
@@ -385,6 +406,16 @@ export function useSocket(callbacks: SocketCallbacks, threadId?: string) {
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
 
+  // clowder-ai#789: coalesce synchronous agent_message bursts into one microtask flush.
+  // callbacksRef.current is always live (updated above on every render), so the closure
+  // never goes stale. One coalescer per socket mount — reset only when the component unmounts.
+  const agentMessageCoalescerRef = useRef<AgentMessageCoalescer | null>(null);
+  if (agentMessageCoalescerRef.current === null) {
+    agentMessageCoalescerRef.current = createAgentMessageCoalescer((msg) =>
+      callbacksRef.current.onMessage(msg as AgentMessage),
+    );
+  }
+
   const persistJoinedRooms = useCallback(() => {
     saveJoinedRoomsToSession(userIdRef.current, joinedRoomsRef.current);
   }, []);
@@ -542,7 +573,9 @@ export function useSocket(callbacks: SocketCallbacks, threadId?: string) {
       // F173 Phase E (KD-1 handler unification): single dispatch.
       // useAgentMessages.handleAgentMessage 现在自己路由 active vs background，并管 bg refs。
       // useSocket 只做 socket-event-level 概念（recordInvocationEvent + 转发 callback）。
-      callbacksRef.current.onMessage(msg);
+      // clowder-ai#789: buffer into microtask coalescer — prevents React "Maximum update
+      // depth exceeded" when 200+ events arrive synchronously in one macrotask.
+      agentMessageCoalescerRef.current?.push(msg);
     });
 
     socket.on(
@@ -556,6 +589,37 @@ export function useSocket(callbacks: SocketCallbacks, threadId?: string) {
         callbacksRef.current.onThreadUpdated?.(data);
       },
     );
+
+    // F128: New thread created via MCP callback — prepend to sidebar thread list
+    socket.on('thread_created', (thread: import('../stores/chat-types').Thread) => {
+      const store = useChatStore.getState();
+      const existing = store.threads;
+      if (!existing.some((t) => t.id === thread.id)) {
+        store.setThreads([thread, ...existing]);
+      }
+    });
+
+    // F128: proposal status changed (approved/rejected/etc) — broadcast to interested cards.
+    // ProposalCard listens via CustomEvent('cat-cafe:proposal-updated'); we don't push into a
+    // global store because proposal state is card-local and only mounted cards need to react.
+    socket.on(
+      'proposal_updated',
+      (proposal: {
+        proposalId: string;
+        status: string;
+        createdThreadId?: string;
+        reportingMode?: 'none' | 'final-only' | 'state-transitions' | 'blocking-ack';
+      }) => {
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('cat-cafe:proposal-updated', { detail: proposal }));
+        }
+      },
+    );
+    socket.on('proposal_created', (proposal: { proposalId: string; status: string }) => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('cat-cafe:proposal-created', { detail: proposal }));
+      }
+    });
 
     socket.on(
       'intent_mode',

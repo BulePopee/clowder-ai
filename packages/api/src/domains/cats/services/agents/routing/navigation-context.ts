@@ -1,4 +1,6 @@
+import { getCoCreatorConfig } from '../../../../../config/cat-config-loader.js';
 import { getSenderName } from '../../context/ContextAssembler.js';
+import { formatPromptTime } from '../../format-time.js';
 
 export interface BatonContext {
   fromMessageId: string;
@@ -106,9 +108,10 @@ export interface NavigationContext {
 
 export function formatNavigationHeader(ctx: NavigationContext): string {
   const lines: string[] = ['[导航]'];
+  const coCreatorTimeZone = getCoCreatorConfig().timeZone;
 
   if (ctx.baton) {
-    const timeStr = new Date(ctx.baton.timestamp).toISOString().slice(11, 16);
+    const timeStr = formatPromptTime(ctx.baton.timestamp, { timeZone: coCreatorTimeZone });
     lines.push(`传球: ${ctx.baton.fromSpeakerDisplay} → 你 (${timeStr})`);
     if (ctx.baton.mentionExcerpt) {
       lines.push(`原文: "${ctx.baton.mentionExcerpt}"`);

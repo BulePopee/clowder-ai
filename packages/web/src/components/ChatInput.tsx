@@ -21,19 +21,26 @@ import { ImagePreview } from './ImagePreview';
 import { AttachIcon } from './icons/AttachIcon';
 import { MobileInputToolbar } from './MobileInputToolbar';
 import { PathCompletionMenu } from './PathCompletionMenu';
+import { ReplyPreviewBar } from './ReplyPreviewBar';
 import { pushThreadRouteWithHistory } from './ThreadSidebar/thread-navigation';
-import { hasPendingThreadDraft, threadDrafts, threadImageDrafts } from './thread-drafts';
+import { hasPendingThreadDraft, syncDraftToStorage, threadDrafts, threadImageDrafts } from './thread-drafts';
 import { WhisperCatSelector, WhisperTargetChips } from './WhisperCatSelector';
 
 /** Module-level draft storage — survives component unmount/remount across thread switches */
-export { threadDrafts, threadImageDrafts } from './thread-drafts';
+export { syncDraftToStorage, threadDrafts, threadImageDrafts } from './thread-drafts';
 
 const MAX_IMAGE_DRAFT_THREADS = 5;
 
 interface ChatInputProps {
   /** Thread ID for draft persistence — drafts are saved per-thread */
   threadId?: string;
-  onSend: (content: string, images?: File[], whisper?: WhisperOptions, deliveryMode?: DeliveryMode) => void;
+  onSend: (
+    content: string,
+    images?: File[],
+    whisper?: WhisperOptions,
+    deliveryMode?: DeliveryMode,
+    replyToId?: string,
+  ) => void;
   onStop?: () => void;
   disabled?: boolean;
   hasActiveInvocation?: boolean;
@@ -57,6 +64,12 @@ export function ChatInput({
   const catOptions = useMemo(() => buildCatOptions(cats), [cats]);
   // F108 Scene 2: whisper-eligible cats (CatData[] for WhisperCatSelector)
   const whisperCats = useMemo(() => cats.filter((c) => c.roster?.available !== false), [cats]);
+
+  // #699: Reply-to (quote) state — thread-scoped to prevent split-pane leaks
+  const rawReplyToMessage = useChatStore((s) => s.replyToMessage);
+  const clearReplyTo = useChatStore((s) => s.clearReplyTo);
+  // Only surface the reply when it belongs to this ChatInput's thread
+  const replyToMessage = rawReplyToMessage?.threadId === threadId ? rawReplyToMessage : null;
 
   // F122B AC-B10: track which cats are actively executing (for whisper disable)
   const activeInvocations = useChatStore((s) => s.activeInvocations);
@@ -105,7 +118,9 @@ export function ChatInput({
   const imageLifecycleStatus = deriveImageLifecycleStatus(isPreparingImages, uploadStatus);
   const sendTemporarilyDisabled = isImageLifecycleBlockingSend(imageLifecycleStatus);
 
-  // F63-AC15: consume pendingChatInsert from workspace (thread-guarded)
+  // F63-AC15: consume pendingChatInsert (ComposerDraftInsert) from workspace (thread-guarded)
+  // #706: restores text, image attachments, and quote state from recall-edit
+  // Phase 2 (#833 merged): replyToId → setReplyTo() restores ReplyPreviewBar
   const pendingChatInsert = useChatStore((s) => s.pendingChatInsert);
   const setPendingChatInsert = useChatStore((s) => s.setPendingChatInsert);
   const setThreadHasDraft = useChatStore((s) => s.setThreadHasDraft);
@@ -116,6 +131,59 @@ export function ChatInput({
       const separator = prev && !prev.endsWith('\n') ? '\n' : '';
       return prev + separator + pendingChatInsert.text;
     });
+    // #706: Restore images from recalled queue message.
+    // Writes to threadImageDrafts directly so files survive unmount if the user
+    // switches threads while fetches are in-flight.
+    if (pendingChatInsert.imageUrls?.length) {
+      const urls = pendingChatInsert.imageUrls;
+      const targetThreadId = pendingChatInsert.threadId;
+      void (async () => {
+        setIsPreparingImages(true);
+        try {
+          const restored: File[] = [];
+          for (const url of urls) {
+            if (restored.length >= 5) break;
+            try {
+              const res = await apiFetch(url);
+              if (!res.ok) continue; // Skip images that return non-2xx (stale/cleaned-up uploads)
+              const blob = await res.blob();
+              const ext = url.split('.').pop() ?? 'png';
+              const name = `recalled-${Date.now()}-${restored.length}.${ext}`;
+              restored.push(new File([blob], name, { type: blob.type || `image/${ext}` }));
+            } catch {
+              // Best-effort: skip images that fail to fetch
+            }
+          }
+          if (restored.length > 0) {
+            // Persist to module-level draft so data survives component unmount
+            const existing = threadImageDrafts.get(targetThreadId) ?? [];
+            const merged = [...existing, ...restored].slice(0, 5);
+            threadImageDrafts.set(targetThreadId, merged);
+            setThreadHasDraft(targetThreadId, true);
+            // Also update local state if still mounted on the same thread
+            setImages((prev) => [...prev, ...restored].slice(0, 5));
+          }
+        } finally {
+          setIsPreparingImages(false);
+        }
+      })();
+    }
+    // #706 Phase 2: Restore quote composing state from recall-edit.
+    // Always calls setReplyTo when replyToId is present so the re-sent
+    // message preserves its quote relationship. If the parent message
+    // isn't loaded in the client store (e.g. after a page reload with
+    // partial history), falls back to a placeholder — the replyTo ID
+    // is still sent to the server on submit.
+    if (pendingChatInsert.replyToId) {
+      const { messages: storeMessages, setReplyTo } = useChatStore.getState();
+      const parentMsg = storeMessages.find((m) => m.id === pendingChatInsert.replyToId);
+      setReplyTo({
+        id: pendingChatInsert.replyToId,
+        content: parentMsg?.content ?? '(原消息未加载)',
+        senderCatId: parentMsg?.catId ?? null,
+        threadId,
+      });
+    }
     setPendingChatInsert(null);
     textareaRef.current?.focus();
   }, [pendingChatInsert, setPendingChatInsert, threadId]);
@@ -159,16 +227,29 @@ export function ChatInput({
           whisperMode && whisperTargets.size > 0
             ? { visibility: 'whisper' as const, whisperTo: [...whisperTargets] }
             : undefined;
-        onSend(trimmed, images.length > 0 ? images : undefined, whisper, deliveryMode);
+        onSend(trimmed, images.length > 0 ? images : undefined, whisper, deliveryMode, replyToMessage?.id);
         setInput('');
         ghostRef.current = null;
         setGhostSuggestion(null);
         setImages([]);
         setShowMentions(false);
         setShowGameMenu(false);
+        // Only clear reply if it belongs to this thread (preserve other thread's reply in split-pane)
+        if (replyToMessage) clearReplyTo();
       }
     },
-    [input, disabled, onSend, images, sendTemporarilyDisabled, whisperMode, whisperTargets, addHistoryEntry],
+    [
+      input,
+      disabled,
+      onSend,
+      images,
+      sendTemporarilyDisabled,
+      whisperMode,
+      whisperTargets,
+      addHistoryEntry,
+      replyToMessage,
+      clearReplyTo,
+    ],
   );
 
   const handleSend = useCallback(() => doSend(undefined), [doSend]);
@@ -255,13 +336,24 @@ export function ChatInput({
         setShowGameMenu(false);
         setMentionStart(trigger.start);
         setMentionFilter(trigger.filter);
-        setSelectedIdx(0);
+        // Bare @ defaults to first individual cat so Enter doesn't accidentally
+        // insert a group mention like @thread.  When filter is active the user is
+        // intentionally narrowing, so start at 0.
+        if (trigger.filter) {
+          setSelectedIdx(0);
+        } else {
+          const idx = catOptions.findIndex((opt) => !opt.isGroup);
+          // idx = -1 when no individual cats loaded yet → point past all options
+          // so the existing Enter guard (opt === undefined → closeMenus) fires
+          // instead of accidentally inserting @thread
+          setSelectedIdx(idx >= 0 ? idx : catOptions.length);
+        }
       } else {
         closeMenus();
         setMentionFilter('');
       }
     },
-    [closeMenus],
+    [closeMenus, catOptions],
   );
 
   const handleHistorySelect = useCallback(
@@ -498,8 +590,7 @@ export function ChatInput({
   useLayoutEffect(() => {
     if (!threadId) return;
     const hasDraft = input.trim().length > 0 || images.length > 0;
-    if (input) threadDrafts.set(threadId, input);
-    else threadDrafts.delete(threadId);
+    syncDraftToStorage(threadId, input || undefined);
     if (images.length > 0) {
       threadImageDrafts.delete(threadId); // move to end (Map insertion order)
       threadImageDrafts.set(threadId, images);
@@ -554,10 +645,20 @@ export function ChatInput({
     <div className="relative bg-[var(--console-shell-bg)] safe-area-bottom">
       {/* F39: Queue status bar — visible when cat is running */}
       {hasActiveInvocation && (
-        <div className="px-4 pt-2 flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-opus-primary)] animate-pulse" />
-          <span className="text-xs text-[var(--color-opus-primary)] font-medium">猫猫正在回复中...</span>
-          <span className="text-xs text-cafe-muted">继续输入，消息会排队</span>
+        <div data-testid="active-invocation-banner" className="px-4 pt-2 flex items-center gap-2">
+          <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-cocreator-primary)] animate-pulse" />
+          <span className="text-xs text-[var(--color-cocreator-primary)] font-medium">猫猫正在回复中...</span>
+          <span className="text-xs text-cafe-muted flex-1">继续输入，消息会排队</span>
+          {onStop && (
+            <button
+              type="button"
+              data-testid="banner-cancel-btn"
+              onClick={onStop}
+              className="text-xs text-cafe-muted hover:text-cafe-primary transition-colors px-2 py-0.5 rounded-md hover:bg-cafe-surface-elevated flex-shrink-0"
+            >
+              取消
+            </button>
+          )}
         </div>
       )}
 
@@ -611,7 +712,7 @@ export function ChatInput({
         </div>
       )}
       {imageLifecycleStatus === 'uploading' && (
-        <div className="px-4 pt-2 text-xs text-cocreator-primary" role="status">
+        <div className="px-4 pt-2 text-xs text-[var(--semantic-info)]" role="status">
           图片上传中，请稍候...
         </div>
       )}
@@ -626,6 +727,9 @@ export function ChatInput({
       )}
 
       <ImagePreview files={images} onRemove={handleRemoveImage} />
+
+      {/* #699: Reply preview bar — matches ReplyPill styling with sender theme color */}
+      {replyToMessage && <ReplyPreviewBar replyToMessage={replyToMessage} cats={cats} onClear={clearReplyTo} />}
 
       <input
         ref={fileInputRef}
@@ -650,14 +754,14 @@ export function ChatInput({
         />
       )}
 
-      <div className="flex gap-2 items-center p-4 pt-2">
+      <div className="flex gap-2 items-center p-4 pt-2" data-testid="chat-input-composer-row">
         {/* Mobile: + toggle button */}
         <button
           onClick={() => setMobileToolbar((v) => !v)}
           className={`p-3 rounded-xl transition-all md:hidden ${
             mobileToolbar
-              ? 'rotate-45 bg-[var(--console-active-bg)] text-cafe-accent'
-              : 'text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent'
+              ? 'text-cafe-accent bg-cafe-surface-sunken rotate-45'
+              : 'text-cafe-muted hover:text-cafe-accent hover:bg-cafe-surface'
           }`}
           aria-label="展开工具栏"
         >
@@ -674,7 +778,7 @@ export function ChatInput({
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || sendTemporarilyDisabled || images.length >= 5}
-          className="hidden rounded-xl p-3 text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent disabled:cursor-not-allowed disabled:opacity-30 md:block"
+          className="hidden md:block p-3 rounded-xl text-cafe-muted hover:text-cafe-accent hover:bg-cafe-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Attach images"
         >
           <AttachIcon className="w-5 h-5" />
@@ -685,8 +789,8 @@ export function ChatInput({
           disabled={disabled || sendTemporarilyDisabled}
           className={`hidden md:block p-3 rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
             whisperMode
-              ? 'text-conn-amber-text bg-conn-amber-bg ring-1 ring-conn-amber-text/30'
-              : 'text-cafe-muted hover:text-conn-amber-text hover:bg-cafe-surface'
+              ? 'text-cafe-accent bg-accent-50'
+              : 'text-cafe-muted hover:text-cafe-accent hover:bg-cafe-surface'
           }`}
           aria-label="Whisper mode"
           title="悄悄话模式"
@@ -704,7 +808,7 @@ export function ChatInput({
           ref={gameBtnRef}
           onClick={handleGameClick}
           disabled={disabled || sendTemporarilyDisabled}
-          className="hidden md:block p-3 rounded-xl text-cafe-muted hover:text-cocreator-primary hover:bg-cafe-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="hidden md:block p-3 rounded-xl text-cafe-muted hover:text-cafe-accent hover:bg-cafe-surface disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           aria-label="Game mode"
           title="游戏模式"
         >
@@ -729,10 +833,10 @@ export function ChatInput({
                   ? '继续输入，消息会排队...'
                   : '输入消息... (@ 召唤猫猫)'
             }
-            className={`w-full resize-none rounded-2xl border px-4 py-3 text-sm focus:outline-none focus:ring-2 placeholder:text-cafe-muted ${
+            className={`w-full resize-none rounded-xl border p-3 text-sm focus:outline-none focus:ring-2 placeholder:text-cafe-muted ${
               whisperMode
-                ? 'border-conn-amber-text/30 bg-conn-amber-bg/50 focus:ring-conn-amber-text'
-                : 'border-[var(--console-input-stroke)] bg-cafe-surface focus:ring-[var(--console-input-stroke)]'
+                ? 'border-cafe-accent/30 bg-accent-50/50 focus:ring-cafe-accent'
+                : 'border-[var(--console-border-soft)] bg-transparent focus:bg-[var(--console-card-bg)] focus:ring-[var(--console-input-stroke)]'
             }`}
             rows={1}
             disabled={disabled}

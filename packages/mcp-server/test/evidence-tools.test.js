@@ -13,6 +13,7 @@ describe('MCP Evidence Tools', () => {
   beforeEach(() => {
     originalEnv = { ...process.env };
     process.env.CAT_CAFE_API_URL = 'http://127.0.0.1:3004';
+    delete process.env.CAT_CAFE_THREAD_ID;
     originalFetch = globalThis.fetch;
   });
 
@@ -56,6 +57,76 @@ describe('MCP Evidence Tools', () => {
     assert.equal(parsed.searchParams.get('q'), 'hindsight');
     assert.equal(parsed.searchParams.get('scope'), 'docs');
     assert.equal(parsed.searchParams.get('mode'), 'hybrid');
+    assert.equal(parsed.searchParams.get('dimension'), 'project');
+  });
+
+  test('handleSearchEvidence forwards current thread and renders suggested cross-post action', async () => {
+    const { handleSearchEvidence } = await import('../dist/tools/evidence-tools.js');
+    process.env.CAT_CAFE_THREAD_ID = 'thread-current';
+
+    /** @type {string | URL | undefined} */
+    let capturedUrl;
+    globalThis.fetch = async (url) => {
+      capturedUrl = url;
+      return {
+        ok: true,
+        json: async () => ({
+          degraded: false,
+          results: [
+            {
+              title: 'Other thread hit',
+              anchor: 'thread:other',
+              snippet: 'finding',
+              confidence: 'high',
+              sourceType: 'discussion',
+              suggestedAction: {
+                type: 'cross_post',
+                threadId: 'thread-other',
+                reason: 'Search result came from another thread; dispatch relevant findings back to that thread.',
+                source: 'search_evidence',
+              },
+            },
+          ],
+        }),
+      };
+    };
+
+    const result = await handleSearchEvidence({ query: 'finding', scope: 'threads' });
+
+    assert.equal(result.isError, undefined);
+    assert.ok(capturedUrl, 'expected fetch to be called');
+    const parsed = new URL(String(capturedUrl));
+    assert.equal(parsed.searchParams.get('currentThreadId'), 'thread-current');
+    const text = result.content[0].text;
+    assert.ok(text.includes('suggested_action: cat_cafe_cross_post_message(threadId="thread-other"'));
+    assert.ok(text.includes('content="@target-cat\\n..."'));
+    assert.ok(text.includes('routing: replace @target-cat with the cat handle to wake in the target thread'));
+    assert.ok(text.includes('reason: Search result came from another thread'));
+  });
+
+  test('handleSearchEvidence preserves explicit dimension overrides', async () => {
+    const { handleSearchEvidence } = await import('../dist/tools/evidence-tools.js');
+
+    /** @type {string | URL | undefined} */
+    let capturedUrl;
+    globalThis.fetch = async (url) => {
+      capturedUrl = url;
+      return {
+        ok: true,
+        json: async () => ({ results: [], degraded: false }),
+      };
+    };
+
+    const result = await handleSearchEvidence({
+      query: 'cross-collection',
+      dimension: 'all',
+    });
+
+    assert.equal(result.isError, undefined);
+    assert.ok(capturedUrl, 'expected fetch to be called');
+
+    const parsed = new URL(String(capturedUrl));
+    assert.equal(parsed.searchParams.get('dimension'), 'all');
   });
 
   test('handleSearchEvidence renders raw_lexical_only as graceful degradation, not store error', async () => {
@@ -87,6 +158,117 @@ describe('MCP Evidence Tools', () => {
       'expected graceful raw degrade message in response text',
     );
     assert.ok(!result.content[0].text.includes('Evidence store error'), 'must not misreport graceful degradation');
+  });
+
+  test('HW-4 根因②b: renders sourcePath machine line for path-based consumption match', async () => {
+    const { handleSearchEvidence } = await import('../dist/tools/evidence-tools.js');
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        degraded: false,
+        results: [
+          {
+            title: 'F200 Memory Recall Eval',
+            anchor: 'F200',
+            snippet: 'eval substrate',
+            confidence: 'high',
+            sourceType: 'feature',
+            sourcePath: 'docs/features/F200-memory-recall-eval.md',
+          },
+        ],
+      }),
+    });
+
+    const result = await handleSearchEvidence({ query: 'F200' });
+    const text = result.content[0].text;
+    assert.ok(
+      text.includes('sourcePath: docs/features/F200-memory-recall-eval.md'),
+      'expected stable `sourcePath:` machine line in rendered output (deriveSearchEvidence parses it)',
+    );
+  });
+
+  test('renders entity match explanations returned by search_evidence API', async () => {
+    const { handleSearchEvidence } = await import('../dist/tools/evidence-tools.js');
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        degraded: false,
+        results: [
+          {
+            title: 'Vision discussion',
+            anchor: 'thread:vision',
+            snippet: 'CVO asked about entity anchors',
+            confidence: 'high',
+            sourceType: 'discussion',
+            matchReason: 'entity:person:landy',
+            entityMatches: [
+              {
+                entityId: 'person:landy',
+                type: 'person',
+                canonicalName: 'You',
+                matchedAlias: 'CVO',
+                surface: '铲屎官',
+                source: 'passage',
+                docAnchor: 'thread:vision',
+                passageId: 'p1',
+                provenance: [{ source: 'F209 Phase B MCP contract test' }],
+                why: 'query CVO matched entity person:landy via alias 铲屎官',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    const result = await handleSearchEvidence({ query: 'CVO', mode: 'hybrid' });
+    const text = result.content[0].text;
+
+    assert.ok(text.includes('match: entity:person:landy'), 'should keep coarse entity match reason');
+    assert.ok(text.includes('entity: person:landy'), 'should render entity id');
+    assert.ok(text.includes('matchedAlias=CVO'), 'should render the query alias');
+    assert.ok(text.includes('surface=铲屎官'), 'should render the matched surface');
+    assert.ok(
+      text.includes('why: query CVO matched entity person:landy via alias 铲屎官'),
+      'should render entity match why explanation',
+    );
+    assert.ok(text.includes('provenance: F209 Phase B MCP contract test'), 'should render entity match provenance');
+  });
+
+  test('renders typed drillDown hints returned by search_evidence API', async () => {
+    const { handleSearchEvidence } = await import('../dist/tools/evidence-tools.js');
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        degraded: false,
+        results: [
+          {
+            title: 'Vision discussion',
+            anchor: 'thread:vision',
+            snippet: 'CVO asked about drill-down readers',
+            confidence: 'high',
+            sourceType: 'discussion',
+            drillDown: {
+              tool: 'cat_cafe_get_thread_context',
+              params: { threadId: 'thread_vision', messageId: 'msg-42', before: '3', after: '3' },
+              hint: 'get_thread_context(threadId="thread_vision", messageId="msg-42", before=3, after=3)',
+            },
+          },
+        ],
+      }),
+    });
+
+    const result = await handleSearchEvidence({ query: 'drill-down', mode: 'hybrid' });
+    const text = result.content[0].text;
+
+    assert.ok(text.includes('drillDown: cat_cafe_get_thread_context'), 'should render drillDown tool');
+    assert.ok(text.includes('threadId=thread_vision'), 'should render threadId param');
+    assert.ok(text.includes('messageId=msg-42'), 'should render messageId param');
+    assert.ok(text.includes('before=3'), 'should render before window');
+    assert.ok(text.includes('after=3'), 'should render after window');
+    assert.ok(text.includes('hint: get_thread_context'), 'should render drillDown hint');
   });
 
   test('Hook F-1: appends Read reminder when high/mid doc anchors present', async () => {
@@ -232,5 +414,14 @@ describe('MCP Evidence Tools', () => {
       text.includes('Evidence search request failed for "quoted \\"topic\\"": connection refused'),
       'should include JSON-quoted query in request error output',
     );
+  });
+
+  test('search_evidence description warns coverage tasks are not single-query exhaustive', async () => {
+    const { evidenceTools } = await import('../dist/tools/evidence-tools.js');
+    const description = evidenceTools[0].description;
+
+    assert.ok(description.includes('coverage'), 'description should name coverage/source-map intent');
+    assert.ok(description.includes('memory-search-best-practices'), 'description should point to the search skill');
+    assert.ok(description.includes('docs + threads'), 'description should recommend multi-scope coverage searches');
   });
 });

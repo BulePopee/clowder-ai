@@ -1,14 +1,14 @@
 import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode } from 'react';
 
 export const settingsResourceCardClass =
-  'settings-resource-card rounded-2xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] transition-shadow hover:shadow-[0_12px_30px_rgba(43,33,26,0.12)]';
+  'settings-resource-card rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)] transition-shadow hover:shadow-md';
 
 export const settingsResourceRowClass = 'settings-resource-row flex items-center gap-3 px-4 py-3';
 
 export const settingsResourceActionGroupClass = 'settings-resource-actions flex shrink-0 items-center gap-2.5';
 
 export const settingsResourceAvatarClass =
-  'settings-resource-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[var(--console-active-bg)] text-xs font-bold text-cafe-interactive';
+  'settings-resource-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--console-active-bg)] text-xs font-bold text-cafe-interactive';
 
 function joinClasses(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(' ');
@@ -28,8 +28,10 @@ export function SettingsResourceIconButton({
       type="button"
       {...props}
       className={joinClasses(
-        'settings-resource-action flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-[var(--console-hover-bg)] transition-opacity hover:opacity-80 disabled:cursor-default disabled:opacity-50',
-        tone === 'danger' ? 'text-[var(--cafe-accent)]' : 'text-cafe-muted hover:text-cafe-secondary',
+        'settings-resource-action flex h-[30px] w-[30px] items-center justify-center rounded-lg transition-colors disabled:cursor-default disabled:opacity-50',
+        tone === 'danger'
+          ? 'text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent'
+          : 'text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent',
         className,
       )}
     >
@@ -65,8 +67,12 @@ export function SettingsResourceToggleSwitch({
       title={title ?? (enabled ? '禁用' : '启用')}
       className={joinClasses(
         'settings-resource-toggle relative inline-flex h-[22px] w-10 shrink-0 rounded-full transition-colors disabled:cursor-default',
-        busy ? 'opacity-50' : 'cursor-pointer',
-        enabled ? 'bg-[var(--cafe-accent,#C65F3D)]' : 'bg-[var(--console-border-soft)]',
+        disabled || busy ? 'cursor-default opacity-50' : 'cursor-pointer',
+        disabled
+          ? 'bg-[var(--console-border-soft)]'
+          : enabled
+            ? 'bg-[var(--cafe-accent,#c96442)]'
+            : 'bg-[var(--console-border-soft)]',
       )}
     >
       <span

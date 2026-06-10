@@ -6,6 +6,7 @@ import {
   builtinAccountIdForClient as sharedBuiltinAccountIdForClient,
 } from '@cat-cafe/shared';
 import type { CatData } from '@/hooks/useCatData';
+import { UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 import type { BuiltinAccountClient, ProfileItem } from './hub-accounts.types';
 import type { CatStrategyEntry, StrategyType } from './hub-strategy-types';
 
@@ -133,6 +134,14 @@ const GOOGLE_OWNED_DOMAINS = ['generativelanguage.googleapis.com', 'googleapis.c
 
 function isCliEffortValue(value: string | undefined): value is CliEffortValue {
   return value !== undefined && CLI_EFFORT_VALUES.includes(value as CliEffortValue);
+}
+
+function optionalVoiceText(value: string | undefined): string {
+  return value == null ? '' : value;
+}
+
+function optionalVoiceNumberText(value: number | undefined): string {
+  return value == null ? '' : String(value);
 }
 
 export function getCliEffortOptionsForClient(client: ClientValue): readonly CliEffortValue[] | null {
@@ -332,6 +341,7 @@ export function autoSlug(name: string, currentId?: string): string {
 export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | null): HubCatEditorFormState {
   const createDraft = !cat ? draft : null;
   const persistedCliEffort = cat?.cli?.effort;
+  const voiceConfig = cat?.voiceConfig;
   const nameForCreate = createDraft?.templateName ?? '';
   const catId = cat?.id ?? (nameForCreate ? autoSlug(nameForCreate) : '');
   const mentionPatterns = cat?.mentionPatterns ?? [];
@@ -342,8 +352,8 @@ export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | n
     variantLabel: cat?.variantLabel ?? '',
     nickname: cat?.nickname ?? createDraft?.templateNickname ?? '',
     avatar: cat?.avatar ?? createDraft?.templateAvatar ?? '',
-    colorPrimary: cat?.color.primary ?? createDraft?.templateColorPrimary ?? '#9B7EBD',
-    colorSecondary: cat?.color.secondary ?? createDraft?.templateColorSecondary ?? '#E8DFF5',
+    colorPrimary: cat?.color.primary ?? createDraft?.templateColorPrimary ?? UNKNOWN_CAT_COLOR.primary,
+    colorSecondary: cat?.color.secondary ?? createDraft?.templateColorSecondary ?? UNKNOWN_CAT_COLOR.secondary,
     mentionPatterns: joinTags(mentionPatterns),
     roleDescription: cat?.roleDescription ?? createDraft?.templateRoleDescription ?? '',
     personality: cat?.personality ?? createDraft?.templatePersonality ?? '',
@@ -362,13 +372,13 @@ export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | n
     maxContextTokens: cat?.contextBudget ? String(cat.contextBudget.maxContextTokens) : '',
     maxMessages: cat?.contextBudget ? String(cat.contextBudget.maxMessages) : '',
     maxContentLengthPerMsg: cat?.contextBudget ? String(cat.contextBudget.maxContentLengthPerMsg) : '',
-    voiceVoice: cat?.voiceConfig?.voice ?? '',
-    voiceLangCode: cat?.voiceConfig?.langCode ?? '',
-    voiceSpeed: cat?.voiceConfig?.speed != null ? String(cat.voiceConfig.speed) : '',
-    voiceRefAudio: cat?.voiceConfig?.refAudio ?? '',
-    voiceRefText: cat?.voiceConfig?.refText ?? '',
-    voiceInstruct: cat?.voiceConfig?.instruct ?? '',
-    voiceTemperature: cat?.voiceConfig?.temperature != null ? String(cat.voiceConfig.temperature) : '',
+    voiceVoice: optionalVoiceText(voiceConfig?.voice),
+    voiceLangCode: optionalVoiceText(voiceConfig?.langCode),
+    voiceSpeed: optionalVoiceNumberText(voiceConfig?.speed),
+    voiceRefAudio: optionalVoiceText(voiceConfig?.refAudio),
+    voiceRefText: optionalVoiceText(voiceConfig?.refText),
+    voiceInstruct: optionalVoiceText(voiceConfig?.instruct),
+    voiceTemperature: optionalVoiceNumberText(voiceConfig?.temperature),
   };
 }
 
@@ -443,6 +453,7 @@ export function buildCodexConfigPatches(
 // Extracted to hub-cat-editor.payload.ts:
 // buildCatPayload, buildContextBudget, hintModelFormatForClient, validateModelFormatForClient
 export {
+  buildCatPatchPayload,
   buildCatPayload,
   buildContextBudget,
   hintModelFormatForClient,

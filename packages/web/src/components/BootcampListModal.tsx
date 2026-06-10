@@ -116,17 +116,17 @@ export function BootcampListModal({ open, onClose, currentThreadId }: BootcampLi
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--console-overlay-backdrop)]"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--console-overlay-medium)] backdrop-blur-sm"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
       data-testid="bootcamp-list-modal"
     >
-      <div className="bg-cafe-surface rounded-xl border border-[var(--cafe-border)] shadow-xl w-[480px] max-h-[80vh] flex flex-col overflow-hidden">
+      <div className="bg-cafe-surface rounded-2xl shadow-xl w-[480px] max-h-[80vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--console-border-soft)]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-cafe-subtle">
           <div className="flex items-center gap-2.5">
-            <BootcampIcon className="w-6 h-6 text-conn-amber-text" />
+            <BootcampIcon className="w-6 h-6 text-cafe-accent" />
             <span className="text-lg font-semibold text-cafe">我的训练营</span>
           </div>
           <button
@@ -164,32 +164,32 @@ export function BootcampListModal({ open, onClose, currentThreadId }: BootcampLi
                   disabled={isCurrent}
                   className={`w-full text-left p-4 rounded-xl border transition-colors ${
                     isCurrent
-                      ? 'border-conn-amber-ring bg-conn-amber-bg opacity-60 cursor-default'
+                      ? 'border-cafe-accent/20 bg-accent-50 opacity-60 cursor-default'
                       : isCompleted
-                        ? 'border-[var(--console-border-soft)] bg-cafe-surface-elevated hover:bg-cafe-surface-elevated'
-                        : 'border-conn-amber-ring bg-conn-amber-bg/50 hover:bg-conn-amber-bg'
+                        ? 'border-cafe bg-cafe-surface-elevated hover:bg-cafe-surface-elevated'
+                        : 'border-cafe-accent/20 bg-accent-50/50 hover:bg-accent-50'
                   }`}
                   data-testid={`bootcamp-item-${t.id}`}
                 >
                   {/* Top row: title + badge */}
                   <div className="flex items-center justify-between mb-2">
-                    <span className={`text-[15px] font-semibold ${isCompleted ? 'text-cafe-secondary' : 'text-cafe'}`}>
+                    <span className={`text-base font-semibold ${isCompleted ? 'text-cafe-secondary' : 'text-cafe'}`}>
                       {t.title ?? '猫猫训练营'}
                     </span>
                     <span
                       className={`text-xs font-medium px-2.5 py-1 rounded-full ${
                         isCompleted
-                          ? 'bg-conn-emerald-bg text-conn-emerald-text'
+                          ? 'bg-semantic-success-surface text-semantic-success'
                           : isCurrent
-                            ? 'bg-conn-amber-bg text-conn-amber-text'
-                            : 'bg-conn-amber-bg text-conn-amber-text'
+                            ? 'bg-accent-50 text-cafe-accent'
+                            : 'bg-accent-50 text-cafe-accent'
                       }`}
                     >
                       {isCurrent ? '当前' : isCompleted ? '已完成' : '进行中'}
                     </span>
                   </div>
                   {/* Meta: task + phase */}
-                  <div className="flex items-center justify-between text-[13px] text-cafe-secondary mb-2">
+                  <div className="flex items-center justify-between text-sm text-cafe-secondary mb-2">
                     <div className="flex items-center gap-4">
                       {t.selectedTaskId && <span>{t.selectedTaskId}</span>}
                       <span>
@@ -205,7 +205,7 @@ export function BootcampListModal({ open, onClose, currentThreadId }: BootcampLi
                   {/* Progress bar */}
                   <div className="w-full h-1.5 rounded-full bg-cafe-surface-elevated">
                     <div
-                      className={`h-1.5 rounded-full transition-all ${isCompleted ? 'bg-conn-emerald-bg' : 'bg-conn-amber-bg'}`}
+                      className={`h-1.5 rounded-full transition-all ${isCompleted ? 'bg-[var(--semantic-success)]' : 'bg-[var(--semantic-warning)]'}`}
                       style={{ width: `${progress}%` }}
                     />
                   </div>
@@ -216,12 +216,12 @@ export function BootcampListModal({ open, onClose, currentThreadId }: BootcampLi
         </div>
 
         {/* Footer: create new */}
-        <div className="px-6 py-4 border-t border-[var(--console-border-soft)] flex justify-center">
+        <div className="px-6 py-4 border-t border-cafe-subtle flex justify-center">
           <button
             type="button"
             onClick={handleCreate}
             disabled={isCreating}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-conn-amber-text text-[var(--cafe-surface)] font-semibold hover:opacity-90 disabled:opacity-40 transition-colors"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-cafe-accent text-[var(--cafe-surface)] font-semibold hover:opacity-90 disabled:opacity-40 transition-colors"
             data-testid="bootcamp-list-create"
           >
             <svg className="w-4.5 h-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

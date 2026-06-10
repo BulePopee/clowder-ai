@@ -1,12 +1,23 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
+  audioTools,
   callbackMemoryTools,
   callbackTools,
   distillationTools,
+  eventMemoryTools,
   evidenceTools,
+  externalRuntimeSessionCallbackTools,
+  externalRuntimeSessionReadTools,
+  fileSliceTools,
+  financeTools,
   gameActionTools,
+  graphTools,
+  hubActionTools,
+  libraryLifecycleTools,
   limbTools,
-  reflectTools,
+  perspectiveTools,
+  publishVerdictTools,
+  recentTools,
   richBlockRulesTools,
   scheduleTools,
   sessionChainTools,
@@ -32,14 +43,20 @@ type ToolDef = {
  */
 export const READONLY_ALLOWED_TOOLS = new Set([
   // Evidence & knowledge (local SQLite, no credentials needed)
+  // F193 Phase D AC-D1: cat_cafe_reflect tool removed (deprecated in F152 era)
   'cat_cafe_search_evidence',
-  'cat_cafe_reflect',
+  'cat_cafe_run_perspective',
+  'cat_cafe_graph_resolve', // F188 Phase F AC-F1
+  'cat_cafe_list_recent', // F188 Phase F AC-F2
   'cat_cafe_get_rich_block_rules',
+  'cat_cafe_read_file_slice',
   // Session chain (read-only API calls, no callback creds needed)
   'cat_cafe_list_session_chain',
   'cat_cafe_read_session_events',
   'cat_cafe_read_session_digest',
   'cat_cafe_read_invocation_detail',
+  'cat_cafe_list_external_runtime_sessions',
+  'cat_cafe_read_external_runtime_session',
   // Signals (read-only)
   'signal_list_inbox',
   'signal_get_article',
@@ -47,6 +64,8 @@ export const READONLY_ALLOWED_TOOLS = new Set([
   'signal_list_studies',
   // Shell exec (F061 Bug-F workaround — read-only whitelist enforced at tool level)
   'cat_cafe_shell_exec',
+  // F207 Phase B0: finance fact queries are read-only and credential-safe at wrapper boundary.
+  'cat_cafe_finance_query',
 ]);
 
 /**
@@ -57,15 +76,33 @@ export const READONLY_ALLOWED_TOOLS = new Set([
 export const AGENT_KEY_TOOLS = new Set([
   'cat_cafe_post_message',
   'cat_cafe_cross_post_message',
+  'cat_cafe_create_rich_block',
   'cat_cafe_get_thread_context',
   'cat_cafe_list_threads',
+  'cat_cafe_register_external_runtime_session',
+  // F223: first-party Hub UX actions are callback-authenticated writes that
+  // persistent agent-key MCP clients need when invocation credentials are absent.
+  'cat_cafe_workspace_navigate',
+  'cat_cafe_preview_open',
+  // F227: teleport is a callback-authenticated navigation write
+  'cat_cafe_teleport',
+  // F227 Task 7: backfill is a callback-authenticated write (populates Event Memory)
+  'cat_cafe_backfill_events',
+  // F227 (cloud P2): list_events is a callback-backed READ — callbackGet fails closed
+  // without invocation/agent-key creds, so it belongs with the creds-gated tools, NOT
+  // the credential-free readonly whitelist (where it'd be visible-but-unusable).
+  'cat_cafe_list_events',
+  // #699: Message lookup by ID
+  'cat_cafe_get_message',
+  // F192 Phase H AC-H4 (砚砚 R9 P1): shared-MCP cats can publish verdicts.
+  'cat_cafe_publish_verdict',
 ]);
 
-const isReadonly = process.env['CAT_CAFE_READONLY'] === 'true';
+const isReadonly = process.env.CAT_CAFE_READONLY === 'true';
 const hasAgentKey = !!(
-  process.env['CAT_CAFE_AGENT_KEY_SECRET'] ||
-  process.env['CAT_CAFE_AGENT_KEY_FILE'] ||
-  process.env['CAT_CAFE_AGENT_KEY_FILES']
+  process.env.CAT_CAFE_AGENT_KEY_SECRET ||
+  process.env.CAT_CAFE_AGENT_KEY_FILE ||
+  process.env.CAT_CAFE_AGENT_KEY_FILES
 );
 
 function applyReadonlyFilter(tools: readonly ToolDef[]): readonly ToolDef[] {
@@ -75,6 +112,10 @@ function applyReadonlyFilter(tools: readonly ToolDef[]): readonly ToolDef[] {
 
 const collabTools: readonly ToolDef[] = applyReadonlyFilter([
   ...callbackTools,
+  ...externalRuntimeSessionCallbackTools,
+  ...hubActionTools,
+  ...eventMemoryTools, // F227: cat_cafe_teleport
+  ...publishVerdictTools, // F192 Phase H AC-H4
   ...richBlockRulesTools,
   ...gameActionTools,
   ...scheduleTools,
@@ -85,11 +126,18 @@ const memoryTools: readonly ToolDef[] = applyReadonlyFilter([
   ...callbackMemoryTools,
   ...distillationTools,
   ...evidenceTools,
-  ...reflectTools,
+  ...externalRuntimeSessionReadTools,
+  ...fileSliceTools,
+  ...graphTools, // F188 Phase F AC-F1
+  ...libraryLifecycleTools, // F188 Phase I AC-I4
+  ...perspectiveTools, // F209 Phase D
+  ...recentTools, // F188 Phase F AC-F2
+  // F193 Phase D AC-D1: reflectTools removed
   ...sessionChainTools,
 ]);
 
 const signalTools: readonly ToolDef[] = applyReadonlyFilter([...signalsTools, ...signalStudyTools]);
+const financeNodeTools: readonly ToolDef[] = applyReadonlyFilter([...financeTools]);
 
 function registerTools(server: McpServer, tools: readonly ToolDef[]): void {
   for (const tool of tools) {
@@ -120,9 +168,21 @@ export function registerLimbToolset(server: McpServer): void {
   registerTools(server, limbNodeTools);
 }
 
+const audioNodeTools: readonly ToolDef[] = applyReadonlyFilter([...audioTools]);
+
+export function registerAudioToolset(server: McpServer): void {
+  registerTools(server, audioNodeTools);
+}
+
+export function registerFinanceToolset(server: McpServer): void {
+  registerTools(server, financeNodeTools);
+}
+
 export function registerFullToolset(server: McpServer): void {
   registerCollabToolset(server);
   registerMemoryToolset(server);
   registerSignalToolset(server);
   registerLimbToolset(server);
+  registerAudioToolset(server);
+  registerFinanceToolset(server);
 }

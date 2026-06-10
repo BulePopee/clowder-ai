@@ -25,7 +25,7 @@ const LEVEL_CLASS: Record<ConnectionLevel, string> = {
 
 const LEVEL_DOT_COLOR: Record<ConnectionLevel, string> = {
   online: 'var(--color-codex-primary)',
-  degraded: 'var(--color-cafe-accent)',
+  degraded: 'var(--conn-amber-text)',
   offline: 'var(--cafe-text-muted)',
 };
 
@@ -64,12 +64,12 @@ export function ConnectionStatusBar({
 
   return (
     <section
-      className="mx-auto mb-3 w-full max-w-3xl rounded-2xl border border-[var(--console-border-soft)] bg-cafe-surface p-3 shadow-sm backdrop-blur"
+      className="mx-auto mb-3 w-full max-w-3xl rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)] backdrop-blur"
       data-testid="connection-status-bar"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs font-medium text-cafe-secondary">连接状态 · Steam & Brew</p>
-        <p className="text-[11px] text-cafe-muted">最近探测 {formatCheckTime(checkedAt)}</p>
+        <p className="text-xs text-cafe-muted">最近探测 {formatCheckTime(checkedAt)}</p>
       </div>
 
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">

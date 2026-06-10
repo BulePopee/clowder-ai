@@ -1,11 +1,13 @@
 'use client';
 
-import { Children, type ReactNode, useCallback, useRef, useState } from 'react';
+import { Children, isValidElement, type ReactNode, useCallback, useRef, useState } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+import { UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 import { getMentionColor, getMentionRe, getMentionToCat } from '@/lib/mention-highlight';
 import { useChatStore } from '@/stores/chatStore';
+import { MermaidDiagram } from './MermaidDiagram';
 import { createWorkspaceImageComponent, createWorkspaceLinkComponent } from './workspace-md-components';
 
 /* ── @mention highlighting ─────────────────────────────────── */
@@ -23,7 +25,7 @@ function highlightMentions(text: string): ReactNode[] {
   while ((m = re.exec(text)) !== null) {
     if (m.index > lastIdx) parts.push(text.slice(lastIdx, m.index));
     const catId = toCat[m[1].toLowerCase()] ?? 'opus';
-    const catColor = colorMap[catId] ?? '#9B7EBD';
+    const catColor = colorMap[catId] ?? UNKNOWN_CAT_COLOR.primary;
     const r = Number.parseInt(catColor.slice(1, 3), 16);
     const g = Number.parseInt(catColor.slice(3, 5), 16);
     const b = Number.parseInt(catColor.slice(5, 7), 16);
@@ -70,13 +72,13 @@ function CodeBlock({ children }: { children: ReactNode }) {
     <div className="relative group my-2">
       <button
         onClick={handleCopy}
-        className="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded text-[10px] bg-[var(--terminal-btn-bg)] text-cafe-muted md:opacity-0 md:group-hover:opacity-100 hover:bg-[var(--terminal-bg)] transition-opacity"
+        className="absolute top-2 right-2 z-10 px-1.5 py-0.5 rounded text-micro bg-cafe-surface-sunken text-cafe-muted md:opacity-0 md:group-hover:opacity-100 hover:bg-[var(--console-hover-bg)] transition-opacity"
       >
         {copied ? '已复制' : '复制'}
       </button>
       <pre
         ref={preRef}
-        className="bg-[var(--terminal-bg)] text-[var(--terminal-text)] rounded-lg p-3 overflow-x-auto text-xs leading-5 font-mono [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit [&>code]:text-xs"
+        className="bg-cafe-surface-sunken text-cafe rounded-lg p-3 overflow-x-auto text-xs leading-5 font-mono [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit [&>code]:text-xs"
       >
         {children}
       </pre>
@@ -130,7 +132,7 @@ function linkifyFilePaths(text: string): ReactNode[] {
           worktreeId={worktreeId}
         />
       ) : (
-        <span key={`fp${m.index}`} className="text-[var(--color-cafe-accent)] font-mono text-[0.85em]">
+        <span key={`fp${m.index}`} className="text-[var(--semantic-info)] font-mono text-[0.85em]">
           {display}
         </span>
       ),
@@ -178,7 +180,7 @@ function FilePathLink({
     <a
       href={href}
       onClick={handleClick}
-      className="text-[var(--color-cafe-accent)] hover:opacity-80 hover:underline font-mono text-[0.85em] cursor-pointer"
+      className="text-[var(--semantic-info)] hover:text-[var(--semantic-info)] hover:underline font-mono text-[0.85em] cursor-pointer"
       title={`点击在工作区中查看 · Cmd+Click 打开 VSCode\n${display}`}
     >
       {display}
@@ -199,6 +201,34 @@ function withMentionsAndLinks(children: ReactNode): ReactNode {
   });
 }
 
+function hasMermaidLanguage(className = ''): boolean {
+  return /\blanguage-mermaid\b/i.test(className);
+}
+
+function codeChildToString(child: ReactNode): string {
+  if (typeof child === 'string') return child;
+  if (typeof child === 'number') return String(child);
+  return '';
+}
+
+function codeChildrenToString(children: ReactNode): string {
+  return Children.toArray(children)
+    .map((child) => codeChildToString(child))
+    .join('')
+    .replace(/\n$/, '');
+}
+
+function isMermaidPre(children: ReactNode): boolean {
+  const firstChild = Children.toArray(children)[0];
+  if (!isValidElement<{ className?: string }>(firstChild)) return false;
+  if (firstChild.type === MermaidDiagram) return true;
+  return hasMermaidLanguage(firstChild.props.className);
+}
+
+function inlineCodeClassName(className = ''): string {
+  return `${className} bg-[var(--code-bg)] text-[var(--code-text)] rounded px-1 py-0.5 text-[0.85em] font-mono`;
+}
+
 /* ── Markdown component overrides ──────────────────────────── */
 const mdComponents: Components = {
   p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{withMentionsAndLinks(children)}</p>,
@@ -214,7 +244,7 @@ const mdComponents: Components = {
     <h5 className="text-xs font-semibold mb-1 mt-1.5 first:mt-0 uppercase tracking-wide">{withMentions(children)}</h5>
   ),
   h6: ({ children }) => (
-    <h6 className="text-xs font-medium mb-1 mt-1.5 first:mt-0 text-cafe-secondary">{withMentions(children)}</h6>
+    <h6 className="text-xs font-medium mb-1 mt-1.5 first:mt-0 text-cafe-muted">{withMentions(children)}</h6>
   ),
 
   ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
@@ -230,36 +260,30 @@ const mdComponents: Components = {
         type="checkbox"
         checked={checked}
         readOnly
-        className="mt-1 h-3.5 w-3.5 rounded border-[var(--console-border-soft)] text-[var(--color-cafe-accent)] pointer-events-none"
+        className="mt-1 h-3.5 w-3.5 rounded border-[var(--console-border-soft)] text-conn-blue-text pointer-events-none"
       />
     ) : (
       <input type={type} />
     ),
 
   blockquote: ({ children }) => (
-    <blockquote className="border-l-[3px] border-[var(--console-border-soft)] pl-3 my-2 italic opacity-80">
-      {children}
-    </blockquote>
+    <blockquote className="border-l-[3px] border-cafe pl-3 my-2 italic opacity-80">{children}</blockquote>
   ),
   a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-[var(--color-cafe-accent)] hover:underline break-all"
-    >
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-conn-blue-text hover:underline break-all">
       {withMentions(children)}
     </a>
   ),
-  hr: () => <hr className="my-3 border-[var(--console-border-soft)]" />,
+  hr: () => <hr className="my-3 border-cafe" />,
 
   /* Code blocks with copy button */
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  code: ({ className, children }) => (
-    <code className={`${className ?? ''} bg-[var(--console-pill-bg)]/50 rounded px-1 py-0.5 text-[0.85em] font-mono`}>
-      {children}
-    </code>
-  ),
+  pre: ({ children }) => (isMermaidPre(children) ? children : <CodeBlock>{children}</CodeBlock>),
+  code: ({ className = '', children }) =>
+    hasMermaidLanguage(className) ? (
+      <MermaidDiagram source={codeChildrenToString(children)} />
+    ) : (
+      <code className={inlineCodeClassName(className)}>{children}</code>
+    ),
 
   /* Tables (GFM) */
   table: ({ children }) => (
@@ -269,13 +293,9 @@ const mdComponents: Components = {
   ),
   thead: ({ children }) => <thead className="bg-cafe-surface-elevated">{children}</thead>,
   th: ({ children }) => (
-    <th className="border border-[var(--console-border-soft)] px-2 py-1 text-left font-semibold text-xs">
-      {withMentions(children)}
-    </th>
+    <th className="border border-cafe px-2 py-1 text-left font-semibold text-xs">{withMentions(children)}</th>
   ),
-  td: ({ children }) => (
-    <td className="border border-[var(--console-border-soft)] px-2 py-1">{withMentions(children)}</td>
-  ),
+  td: ({ children }) => <td className="border border-cafe px-2 py-1">{withMentions(children)}</td>,
 };
 
 /* ── Exported component ────────────────────────────────────── */
@@ -316,7 +336,7 @@ export function MarkdownContent({ content, className, disableCommandPrefix, base
 
   let components = mdComponents;
   if (basePath != null) {
-    components = { ...components, a: createWorkspaceLinkComponent(basePath, withMentions) };
+    components = { ...components, a: createWorkspaceLinkComponent(basePath, withMentions, worktreeId) };
     if (worktreeId) {
       components = { ...components, img: createWorkspaceImageComponent(basePath, worktreeId) };
     }
@@ -324,7 +344,7 @@ export function MarkdownContent({ content, className, disableCommandPrefix, base
 
   return (
     <div className={`markdown-content text-sm break-words ${className ?? ''}`}>
-      {cmdMatch && <span className="font-semibold text-cocreator-primary">{cmdMatch[1]}</span>}
+      {cmdMatch && <span className="font-semibold text-[var(--semantic-info)]">{cmdMatch[1]}</span>}
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={components}>
         {md}
       </ReactMarkdown>

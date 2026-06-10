@@ -61,7 +61,7 @@ export function BindNewSessionSection({ threadId, activeCatIds, onBound, disable
         type="button"
         onClick={() => setExpanded(true)}
         disabled={disabled}
-        className="text-[10px] text-cafe-muted hover:text-cafe-secondary transition-colors mt-1 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="text-micro text-cafe-muted hover:text-cafe-secondary transition-colors mt-1 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         + 绑定外部 Session
       </button>
@@ -69,16 +69,16 @@ export function BindNewSessionSection({ threadId, activeCatIds, onBound, disable
   }
 
   return (
-    <div className="mt-2 p-2 rounded border border-dashed border-[var(--console-border-soft)] bg-cafe-surface">
+    <div className="mt-2 p-2 rounded-lg bg-[var(--console-shell-bg)]">
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[10px] font-medium text-cafe-secondary">绑定外部 Session</span>
+        <span className="text-micro font-medium text-cafe-secondary">绑定外部 Session</span>
         <button
           type="button"
           onClick={() => {
             setExpanded(false);
             setStatus('idle');
           }}
-          className="text-[9px] text-cafe-muted hover:text-cafe-secondary"
+          className="text-micro text-cafe-muted hover:text-cafe-secondary"
         >
           ✕
         </button>
@@ -87,7 +87,7 @@ export function BindNewSessionSection({ threadId, activeCatIds, onBound, disable
         <select
           value={selectedCat}
           onChange={(e) => setSelectedCat(e.target.value)}
-          className="w-full text-[11px] px-2 py-1 rounded border border-[var(--console-border-soft)] bg-cafe-surface-elevated focus:outline-none focus:ring-1 focus:ring-cafe-accent"
+          className="w-full text-xs px-2 py-1 rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] focus:outline-none focus:ring-1 focus:ring-cafe-accent"
         >
           <option value="">选择猫猫...</option>
           {availableCats.map((cat) => (
@@ -107,13 +107,13 @@ export function BindNewSessionSection({ threadId, activeCatIds, onBound, disable
           }}
           placeholder="CLI Session ID"
           maxLength={500}
-          className="w-full text-[11px] font-mono px-2 py-1 rounded border border-[var(--console-border-soft)] bg-cafe-surface-elevated focus:outline-none focus:ring-1 focus:ring-cafe-accent"
+          className="w-full text-xs font-mono px-2 py-1 rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] focus:outline-none focus:ring-1 focus:ring-cafe-accent"
         />
         <button
           type="button"
           onClick={() => void handleBind()}
           disabled={status === 'saving' || !sessionId.trim() || !selectedCat || disabled}
-          className="w-full text-[10px] px-2 py-1 rounded bg-[var(--console-pill-bg)] hover:bg-[var(--console-hover-bg)] disabled:opacity-40 transition-colors"
+          className="w-full text-micro px-2 py-1 rounded bg-cafe-surface hover:bg-[var(--console-hover-bg)] disabled:opacity-40 transition-colors"
         >
           {status === 'saving'
             ? '绑定中...'

@@ -41,19 +41,15 @@ const STATUS_CONFIG: Record<
   draft: {
     label: '草稿',
     className: 'border-dashed opacity-80',
-    badge: 'bg-cafe-surface-elevated text-cafe-secondary border-[var(--console-border-soft)]',
+    badge: 'bg-cafe-surface-elevated text-cafe-secondary border-cafe',
   },
   pending: {
     label: '待审',
-    className: 'ring-1 ring-conn-amber-ring/30',
-    badge: 'bg-conn-amber-bg text-conn-amber-text border-conn-amber-ring animate-pulse',
+    className: 'ring-1 ring-semantic-warning/30',
+    badge: 'bg-semantic-warning-surface text-semantic-warning border-semantic-warning animate-pulse',
   },
   published: { label: '正式', className: '', badge: '' },
-  archived: {
-    label: '归档',
-    className: 'grayscale-[0.5] opacity-60',
-    badge: 'bg-[var(--console-pill-bg)] text-cafe-secondary',
-  },
+  archived: { label: '归档', className: 'grayscale-[0.5] opacity-60', badge: 'bg-conn-gray-bg text-cafe-secondary' },
 };
 
 const CONFIDENCE_STYLES: Record<
@@ -64,9 +60,9 @@ const CONFIDENCE_STYLES: Record<
     label: string;
   }
 > = {
-  high: { bg: 'bg-conn-emerald-bg', text: 'text-conn-emerald-text', label: '高置信度' },
-  mid: { bg: 'bg-conn-amber-bg', text: 'text-conn-amber-text', label: '中置信度' },
-  low: { bg: 'bg-cafe-surface-sunken', text: 'text-cafe-muted', label: '低置信度' },
+  high: { bg: 'bg-semantic-success-surface', text: 'text-semantic-success', label: '高置信度' },
+  mid: { bg: 'bg-semantic-warning-surface', text: 'text-semantic-warning', label: '中置信度' },
+  low: { bg: 'bg-conn-slate-bg', text: 'text-conn-slate-text', label: '低置信度' },
 };
 
 export function EvidenceCard({ result }: { result: EvidenceResult }) {
@@ -77,7 +73,7 @@ export function EvidenceCard({ result }: { result: EvidenceResult }) {
 
   return (
     <div
-      className={`flex gap-2.5 p-3 rounded-xl bg-cafe-surface-sunken/80 border border-cafe hover:border-cafe hover:shadow-sm transition-all duration-200 group relative ${status?.className ?? ''}`}
+      className={`flex gap-2.5 p-3 rounded-xl bg-cafe-surface-sunken/80 border border-[var(--console-border-soft)] hover:border-[var(--console-border-strong)] hover:shadow-sm transition-all duration-200 group relative ${status?.className ?? ''}`}
     >
       {/* Source type icon */}
       <div className="flex-shrink-0 mt-0.5">
@@ -94,17 +90,17 @@ export function EvidenceCard({ result }: { result: EvidenceResult }) {
               text={result.title}
               as="h4"
               clampClass="line-clamp-2"
-              className={`text-xs font-bold text-cafe-muted leading-snug ${result.status === 'archived' ? 'line-through decoration-cafe-muted/50' : ''}`}
+              className={`text-xs font-bold text-cafe leading-snug ${result.status === 'archived' ? 'line-through decoration-cafe-muted/50' : ''}`}
             />
           </div>
           <div className="flex flex-col items-end gap-1 flex-shrink-0">
             <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider ${conf.bg} ${conf.text}`}
+              className={`text-micro font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider ${conf.bg} ${conf.text}`}
             >
               {conf.label}
             </span>
             {status?.badge && (
-              <span className={`text-[8px] font-black px-1 py-0.25 rounded border ${status.badge}`}>
+              <span className={`text-micro font-black px-1 py-0.25 rounded border ${status.badge}`}>
                 {status.label}
               </span>
             )}
@@ -115,22 +111,22 @@ export function EvidenceCard({ result }: { result: EvidenceResult }) {
           text={result.snippet}
           as="p"
           clampClass="line-clamp-2"
-          className="text-[11px] text-cafe-muted leading-relaxed mt-1.5"
+          className="text-xs text-cafe-muted leading-relaxed mt-1.5"
         />
 
-        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-cafe">
-          <span className="text-[10px] text-cafe-muted font-bold">{source.label}</span>
+        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-[var(--console-border-soft)]">
+          <span className="text-micro text-cafe-muted font-bold">{source.label}</span>
           {result.authority && (
             <>
-              <span className="text-[10px] text-cafe-muted">·</span>
-              <span className="text-[10px] text-cafe-muted font-mono">{result.authority}</span>
+              <span className="text-micro text-cafe-muted">·</span>
+              <span className="text-micro text-cafe-muted font-mono">{result.authority}</span>
             </>
           )}
-          <span className="text-[10px] text-cafe-muted">·</span>
+          <span className="text-micro text-cafe-muted">·</span>
           <ExpandableText
             text={result.anchor}
             clampClass="truncate"
-            className="text-[10px] text-cafe-muted font-mono opacity-70 italic"
+            className="text-micro text-cafe-muted font-mono opacity-70 italic"
           />
         </div>
       </div>

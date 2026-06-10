@@ -87,6 +87,79 @@ describe('QueueProcessor', () => {
     await new Promise((r) => setTimeout(r, 50));
   });
 
+  it('issue #845: done event with metadata.usage → invocation.update writes usageByCat', async () => {
+    // Reproduce the QueueProcessor execution path where a routed done event carries
+    // metadata.usage. Prior to the fix, executeEntry only wrote `status: succeeded`
+    // without `usageByCat`, leaving 159+ historical succeeded invocations with empty
+    // usage in production. The Phase A fix mirrors the messages.ts collectedUsage
+    // pattern so the queue path now persists per-cat token usage.
+    const customDeps = stubDeps({
+      router: {
+        routeExecution: mock.fn(async function* () {
+          yield {
+            type: 'done',
+            catId: 'opus',
+            timestamp: Date.now(),
+            metadata: {
+              provider: 'claude',
+              model: 'claude-opus-4-7',
+              usage: { inputTokens: 1234, outputTokens: 567, cacheReadTokens: 100, costUsd: 0.05 },
+            },
+          };
+        }),
+        ackCollectedCursors: mock.fn(async () => {}),
+      },
+    });
+    const customProcessor = new QueueProcessor(customDeps);
+    const entry = enqueueEntry(customDeps.queue);
+    customDeps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-1');
+
+    await customProcessor.onInvocationComplete('t1', 'opus', 'succeeded');
+    // Wait for background executeEntry to finish (it's spawned in setImmediate).
+    await new Promise((r) => setTimeout(r, 100));
+
+    const updateCalls = customDeps.invocationRecordStore.update.mock.calls;
+    const succeededCall = updateCalls.find((c) => c.arguments[1]?.status === 'succeeded');
+    assert.ok(succeededCall, 'expected an update(...,{status:succeeded,...}) call');
+    const payload = succeededCall.arguments[1];
+    assert.ok(payload.usageByCat, 'usageByCat must be present on the succeeded update');
+    assert.deepEqual(payload.usageByCat.opus, {
+      inputTokens: 1234,
+      outputTokens: 567,
+      cacheReadTokens: 100,
+      costUsd: 0.05,
+    });
+  });
+
+  it('issue #845: done event without metadata.usage → succeeded update omits usageByCat', async () => {
+    // Guard the opposite direction: when a provider does not emit usage on done,
+    // we must not write an empty usageByCat (would mask the diagnostic that the
+    // provider is dropping usage upstream).
+    const customDeps = stubDeps({
+      router: {
+        routeExecution: mock.fn(async function* () {
+          yield { type: 'done', catId: 'opus', timestamp: Date.now() };
+        }),
+        ackCollectedCursors: mock.fn(async () => {}),
+      },
+    });
+    const customProcessor = new QueueProcessor(customDeps);
+    const entry = enqueueEntry(customDeps.queue);
+    customDeps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-1');
+
+    await customProcessor.onInvocationComplete('t1', 'opus', 'succeeded');
+    await new Promise((r) => setTimeout(r, 100));
+
+    const updateCalls = customDeps.invocationRecordStore.update.mock.calls;
+    const succeededCall = updateCalls.find((c) => c.arguments[1]?.status === 'succeeded');
+    assert.ok(succeededCall, 'expected an update(...,{status:succeeded,...}) call');
+    assert.equal(
+      succeededCall.arguments[1].usageByCat,
+      undefined,
+      'usageByCat must remain undefined when provider emitted no usage',
+    );
+  });
+
   it('succeeded + stale user queued entry → auto-dequeues and starts execution', async () => {
     const entry = enqueueEntry(deps.queue, { source: 'user' });
     deps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-1');
@@ -255,6 +328,37 @@ describe('QueueProcessor', () => {
     assert.ok(canceledUpdate, 'aborted queued invocation should be recorded as canceled');
   });
 
+  it('excludes the current processing agent entry from A2A cross-path dedup', async () => {
+    let dedupResult;
+    deps.router.routeExecution = mock.fn(
+      async function* (_userId, _content, threadId, _messageId, _targetCats, _intent, options) {
+        dedupResult = options.hasQueuedOrActiveAgentForCat(threadId, 'codex');
+        yield { type: 'done', catId: 'opus', isFinal: true, timestamp: Date.now() };
+      },
+    );
+
+    deps.queue.enqueue({
+      threadId: 't1',
+      userId: 'u1',
+      content: 'agent-sourced review request',
+      source: 'agent',
+      targetCats: ['opus-47', 'codex'],
+      intent: 'execute',
+      autoExecute: true,
+      callerCatId: 'opus',
+    });
+
+    const result = await processor.processNext('t1', 'u1');
+    assert.equal(result.started, true);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(
+      dedupResult,
+      false,
+      'current processing entry targetCats must not make same-route A2A back to codex look already active',
+    );
+  });
+
   it('failed → pauses queue, emits queue_paused', async () => {
     enqueueEntry(deps.queue);
 
@@ -295,6 +399,41 @@ describe('QueueProcessor', () => {
       targetCats: ['codex'],
       invocationId: 'inv-stub',
     });
+  });
+
+  it('queued execution broadcasts spawn_started before waiting for first CLI event', async () => {
+    let releaseFirstEvent;
+    deps.router.routeExecution = mock.fn(async function* () {
+      await new Promise((resolve) => {
+        releaseFirstEvent = resolve;
+      });
+      yield { type: 'done', catId: 'codex', isFinal: true, timestamp: Date.now() };
+    });
+
+    const entry = enqueueEntry(deps.queue, { targetCats: ['codex'], intent: 'execute' });
+    deps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-1');
+
+    const result = await processor.processNext('t1', 'u1');
+    assert.equal(result.started, true);
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const spawnCall = deps.socketManager.broadcastToRoom.mock.calls.find((c) => c.arguments[1] === 'spawn_started');
+    assert.ok(spawnCall, 'should broadcast spawn_started for queued execution before intent_mode');
+    assert.deepEqual(spawnCall.arguments[2], {
+      threadId: 't1',
+      targetCats: ['codex'],
+      invocationId: 'inv-stub',
+    });
+
+    const earlyIntentCall = deps.socketManager.broadcastToRoom.mock.calls.find((c) => c.arguments[1] === 'intent_mode');
+    assert.equal(earlyIntentCall, undefined, 'intent_mode must stay deferred until the first CLI event');
+
+    releaseFirstEvent();
+    await new Promise((r) => setTimeout(r, 50));
+
+    const intentCall = deps.socketManager.broadcastToRoom.mock.calls.find((c) => c.arguments[1] === 'intent_mode');
+    assert.ok(intentCall, 'intent_mode should broadcast after the first CLI event');
   });
 
   it('emits queue_updated(action=completed) after entry is removed from queue', async () => {
@@ -657,7 +796,7 @@ describe('QueueProcessor', () => {
       },
     );
 
-    const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+    const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
     assert.equal(outcome.outcome, 'enqueued');
     const queue = deps.queue.list('t1', 'u1');
@@ -687,7 +826,7 @@ describe('QueueProcessor', () => {
         },
       );
 
-      const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+      const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
       assert.equal(outcome.outcome, 'enqueued');
       const queue = deps.queue.list('t1', 'u1');
@@ -721,7 +860,7 @@ describe('QueueProcessor', () => {
       },
     );
 
-    const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+    const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
     assert.equal(outcome.outcome, 'skipped_existing_entry');
     assert.equal(processor.continuationWindows.has('t1:opus'), false);
@@ -755,19 +894,19 @@ describe('QueueProcessor', () => {
       },
     );
 
-    const first = processor.enqueueContinuation({
+    const first = await processor.enqueueContinuation({
       threadId: 't1',
       userId: 'u1',
       catId: 'opus',
       capsule: firstCapsule,
     });
-    const duplicateFirst = processor.enqueueContinuation({
+    const duplicateFirst = await processor.enqueueContinuation({
       threadId: 't1',
       userId: 'u1',
       catId: 'opus',
       capsule: firstCapsule,
     });
-    const second = processor.enqueueContinuation({
+    const second = await processor.enqueueContinuation({
       threadId: 't1',
       userId: 'u1',
       catId: 'opus',
@@ -801,7 +940,7 @@ describe('QueueProcessor', () => {
         },
       );
 
-      const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+      const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
       assert.equal(outcome.outcome, 'enqueued');
       const queue = deps.queue.list('t1', 'u1');
@@ -839,7 +978,7 @@ describe('QueueProcessor', () => {
         },
       );
 
-      const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+      const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
       assert.equal(outcome.outcome, 'enqueued');
       assert.equal(outcome.entry?.targetCats[0], 'opus');
@@ -885,7 +1024,12 @@ describe('QueueProcessor', () => {
         },
       );
 
-      const outcome = dispatchProcessor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+      const outcome = await dispatchProcessor.enqueueContinuation({
+        threadId: 't1',
+        userId: 'u1',
+        catId: 'opus',
+        capsule,
+      });
       assert.equal(outcome.outcome, 'enqueued');
       assert.equal(dispatchDeps.queue.list('t1', 'u1').length, 2, 'continuation should wait behind agent work');
 
@@ -921,12 +1065,12 @@ describe('QueueProcessor', () => {
     );
 
     for (let i = 0; i < 5; i++) {
-      const outcome = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+      const outcome = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
       assert.equal(outcome.outcome, 'enqueued');
       deps.queue.clear('t1', 'u1');
     }
 
-    const sixth = processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
+    const sixth = await processor.enqueueContinuation({ threadId: 't1', userId: 'u1', catId: 'opus', capsule });
 
     assert.equal(sixth.outcome, 'skipped_rate_limited');
     assert.equal(deps.queue.list('t1', 'u1').length, 0);
@@ -1035,6 +1179,38 @@ describe('QueueProcessor', () => {
     const opts = call.arguments[6];
     assert.ok(opts && typeof opts === 'object', 'expected opts object');
     assert.deepEqual(opts.contentBlocks, contentBlocks);
+  });
+
+  it('executeEntry passes explicit A2A trigger id to routeExecution for agent queue entries', async () => {
+    const entry = enqueueEntry(deps.queue, {
+      source: 'agent',
+      sourceCategory: 'a2a',
+      a2aTriggerMessageId: 'msg-trigger',
+    });
+    deps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-trigger');
+
+    await processor.processNext('t1', 'u1');
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.ok(deps.router.routeExecution.mock.calls.length > 0);
+    const call = deps.router.routeExecution.mock.calls[0];
+    const opts = call.arguments[6];
+    assert.ok(opts && typeof opts === 'object', 'expected opts object');
+    assert.equal(opts.a2aTriggerMessageId, 'msg-trigger');
+  });
+
+  it('executeEntry does not pass current user message id as A2A trigger for normal queue entries', async () => {
+    const entry = enqueueEntry(deps.queue, { source: 'user' });
+    deps.queue.backfillMessageId('t1', 'u1', entry.id, 'msg-user');
+
+    await processor.processNext('t1', 'u1');
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.ok(deps.router.routeExecution.mock.calls.length > 0);
+    const call = deps.router.routeExecution.mock.calls[0];
+    const opts = call.arguments[6];
+    assert.ok(opts && typeof opts === 'object', 'expected opts object');
+    assert.equal(opts.a2aTriggerMessageId, undefined);
   });
 
   it('degrades when messageStore.getById throws: still executes without contentBlocks', async () => {
@@ -1688,7 +1864,9 @@ describe('QueueProcessor', () => {
       assert.ok(succeededUpdate, 'should succeed even without outboundHook');
     });
 
-    it('delivery failure: cleanupPlaceholders NOT called when delivery partially fails', async () => {
+    it('delivery failure: cleanupPlaceholders is NOT called after hard delivery failure (R5-P1)', async () => {
+      // R5-P1 design: when delivery fails, placeholder is preserved as fallback indicator
+      // for the next retry/invocation. Cleanup must NOT run on failure.
       // F151: mid-loop delivery retries failed turns in the final phase,
       // so use catId-based failure to ensure opus consistently fails.
       const outboundHook = {
@@ -1728,12 +1906,12 @@ describe('QueueProcessor', () => {
 
       assert.equal(outboundHook.deliver.mock.calls.length, 3, 'mid-loop (2) + final-phase retry (1)');
 
-      // One rejection → Promise.allSettled sees mixed results → cleanupPlaceholders skipped
-      await new Promise((r) => setTimeout(r, 50));
+      // Settle any pending allSettled callbacks
+      await new Promise((r) => setTimeout(r, 200));
       assert.equal(
         streamingHook.cleanupPlaceholders.mock.calls.length,
         0,
-        'cleanupPlaceholders should NOT be called when delivery partially fails',
+        'cleanupPlaceholders must NOT be called when delivery fails (R5-P1: preserve placeholder as fallback)',
       );
     });
 
@@ -1926,7 +2104,10 @@ describe('QueueProcessor', () => {
 
       const calledContent = deps.router.routeExecution.mock.calls[0].arguments[1];
       assert.equal(calledContent, 'conn-a', 'connector entries should not be batched');
-      assert.equal(deps.queue.list('t1', 'u1').filter((e) => e.status === 'queued').length, 1);
+      // After auto-dequeue settles, conn-b should be processed separately (not batched with conn-a)
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal(deps.router.routeExecution.mock.calls.length, 2, 'each connector entry processed separately');
+      assert.equal(deps.router.routeExecution.mock.calls[1].arguments[1], 'conn-b');
     });
 
     it('stops batch at different intent', async () => {
@@ -2010,11 +2191,10 @@ describe('QueueProcessor', () => {
 
       const calledContent = deps.router.routeExecution.mock.calls[0].arguments[1];
       assert.equal(calledContent, 'user-msg', 'connector entry must not be batched into user content');
-      assert.equal(
-        deps.queue.list('t1', 'u1').filter((e) => e.status === 'queued').length,
-        1,
-        'connector entry should remain queued',
-      );
+      // After auto-dequeue settles, connector entry should be processed separately
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal(deps.router.routeExecution.mock.calls.length, 2, 'connector entry processed separately');
+      assert.equal(deps.router.routeExecution.mock.calls[1].arguments[1], 'connector-msg');
     });
 
     it('P2: urgent entry for busy slot does not block lower-priority entry for free slot', async () => {
@@ -2157,5 +2337,123 @@ describe('QueueProcessor', () => {
         'should auto-execute when only agent entries are queued',
       );
     });
+  });
+
+  // ── F216 c3: supersede tombstone guard + immediate restart regression ──
+
+  describe('F216 c3: pre-start window supersede tombstone', () => {
+    it('FIRST never reaches routeExecution and SECOND restarts immediately (no 10s pause)', async () => {
+      // This test catches the exact bug from review R3: if the tombstone guard returns
+      // plain 'canceled' instead of 'canceled_by_user', onInvocationComplete pauses the
+      // slot for 10s and SECOND doesn't start promptly. 22/22 existing tests were green
+      // on that broken commit — THIS test would have caught it.
+
+      const routedContents = [];
+      let createResolve;
+      const createPromise = new Promise((resolve) => {
+        createResolve = resolve;
+      });
+
+      const deps = stubDeps({
+        invocationRecordStore: {
+          // Delayed create() — simulates the pre-start window (markProcessing → startAll gap)
+          create: mock.fn(async () => {
+            await createPromise; // blocks until we manually resolve
+            return { outcome: 'created', invocationId: 'inv-supersede-test' };
+          }),
+          update: mock.fn(async () => {}),
+        },
+        router: {
+          routeExecution: mock.fn(async function* (_userId, content, _threadId, _messageId, targetCats) {
+            routedContents.push(content);
+            yield { type: 'done', catId: targetCats[0], timestamp: Date.now() };
+          }),
+          ackCollectedCursors: mock.fn(async () => {}),
+        },
+      });
+
+      const processor = new QueueProcessor(deps);
+
+      // 1. Enqueue FIRST and trigger execution — it will block at create()
+      const first = enqueueEntry(deps.queue, {
+        content: 'FIRST: do task X',
+        source: 'agent',
+        targetCats: ['antig-opus'],
+        autoExecute: true,
+      });
+      deps.queue.backfillMessageId('t1', 'u1', first.id, 'msg-first');
+      await processor.tryAutoExecute('t1');
+
+      // At this point: FIRST is marked processing, executeEntry is awaiting createPromise.
+      // Verify FIRST is processing (slot taken).
+      assert.equal(
+        deps.queue.list('t1', 'u1').some((e) => e.id === first.id && e.status === 'processing'),
+        true,
+        'FIRST should be processing (pre-start window open)',
+      );
+
+      // 2. Simulate supersede: remove FIRST (tombstone) + enqueue SECOND (follow-up)
+      deps.queue.removeProcessed('t1', 'u1', first.id);
+      deps.queue.enqueue({
+        threadId: 't1',
+        userId: 'u1',
+        content: 'SECOND: answer 3 questions first',
+        source: 'agent',
+        targetCats: ['antig-opus'],
+        intent: 'execute',
+        autoExecute: true,
+      });
+
+      // 3. Release the create() — executeEntry continues to startAll → tombstone guard fires
+      createResolve();
+
+      // Wait for the full chain: startAll → guard → return 'canceled_by_user' → .then →
+      // processingSlots.delete → onInvocationComplete → tryAutoExecute → SECOND starts
+      await new Promise((r) => setTimeout(r, 100));
+
+      // 4. FIRST must NOT have been routed
+      const firstRouted = routedContents.some((c) => c.includes('FIRST'));
+      assert.equal(firstRouted, false, 'FIRST must NOT reach routeExecution (tombstone guard)');
+
+      // 5. SECOND must have been routed (immediate restart, not 10s pause)
+      const secondRouted = routedContents.some((c) => c.includes('SECOND'));
+      assert.equal(secondRouted, true, 'SECOND must route promptly via immediate restart (not 10s pause)');
+
+      // 6. No paused slots remain (regression: 'canceled' would leave a paused slot)
+      assert.equal(processor.getPauseReason('t1', 'antig-opus'), undefined, 'no stale pause on the slot');
+
+      // 7. Queue should be empty (both entries consumed)
+      const remaining = deps.queue.list('t1', 'u1').filter((e) => e.status === 'queued');
+      assert.equal(remaining.length, 0, 'queue should be empty after supersede lifecycle');
+    });
+  });
+
+  describe('F222 P1: frustrationAutoIssueEligible source whitelist', () => {
+    for (const { source, expected, label } of [
+      { source: 'user', expected: true, label: 'user source → eligible=true' },
+      { source: 'agent', expected: false, label: 'agent source → eligible=false' },
+      { source: 'connector', expected: false, label: 'connector source → eligible=false' },
+    ]) {
+      it(label, async () => {
+        let capturedEligible;
+        deps.router.routeExecution = mock.fn(
+          async function* (_userId, _content, _threadId, _messageId, _targetCats, _intent, options) {
+            capturedEligible = options?.frustrationAutoIssueEligible;
+            yield { type: 'done', catId: 'opus', isFinal: true, timestamp: Date.now() };
+          },
+        );
+
+        enqueueEntry(deps.queue, { source });
+        const result = await processor.processNext('t1', 'u1');
+        assert.equal(result.started, true);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+
+        assert.equal(
+          capturedEligible,
+          expected,
+          `source:'${source}' must pass frustrationAutoIssueEligible=${expected}`,
+        );
+      });
+    }
   });
 });

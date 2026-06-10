@@ -1,9 +1,8 @@
 // F152 Phase A: CatCafeScanner — extracted from IndexBuilder (KD-5)
 // Scans cat-cafe docs/ structure: KIND_DIRS + archive + top-level .md + fallback
 
-import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import type { EvidenceKind, RepoScanner, ScannedEvidence } from './interfaces.js';
 
 export const KIND_DIRS: Record<string, EvidenceKind> = {
@@ -20,9 +19,21 @@ export const KIND_DIRS: Record<string, EvidenceKind> = {
   postmortems: 'lesson',
   guides: 'plan',
   stories: 'lesson',
+  'harness-feedback': 'lesson',
 };
 
+const GENERATED_DOC_DIRS = new Set(['exported-threads']);
+
 export class CatCafeScanner implements RepoScanner {
+  private exclude?: string[];
+  constructor(exclude?: string[]) {
+    this.exclude = exclude;
+  }
+
+  addExcludePatterns(patterns: string[]): void {
+    this.exclude = [...(this.exclude ?? []), ...patterns];
+  }
+
   discover(projectRoot: string): ScannedEvidence[] {
     const results: ScannedEvidence[] = [];
 
@@ -35,8 +46,9 @@ export class CatCafeScanner implements RepoScanner {
       });
     }
 
-    // Discover all .md files
+    // Discover all .md files, filtering out excluded child collection paths (AC-H1)
     for (const file of discoverFiles(projectRoot)) {
+      if (this.isExcluded(file.path, projectRoot)) continue;
       const evidence = this.parseFileToEvidence(file.path, projectRoot);
       if (evidence) results.push(evidence);
     }
@@ -44,8 +56,16 @@ export class CatCafeScanner implements RepoScanner {
     return results;
   }
 
+  private isExcluded(filePath: string, projectRoot: string): boolean {
+    const rel = relative(projectRoot, filePath);
+    if (rel.split(/[\\/]+/).some((segment) => GENERATED_DOC_DIRS.has(segment))) return true;
+    if (!this.exclude?.length) return false;
+    return this.exclude.some((pattern) => matchGlob(pattern, rel));
+  }
+
   /** Parse a single file — used by IndexBuilder.incrementalUpdate() */
   parseSingle(filePath: string, projectRoot: string): ScannedEvidence | null {
+    if (this.isExcluded(filePath, projectRoot)) return null;
     return this.parseFileToEvidence(filePath, projectRoot);
   }
 
@@ -55,6 +75,10 @@ export class CatCafeScanner implements RepoScanner {
       content = readFileSync(filePath, 'utf-8');
     } catch {
       return null;
+    }
+
+    if (filePath.endsWith('.svg')) {
+      return parseSvgAssetToEvidence(filePath, projectRoot, content);
     }
 
     const frontmatter = extractFrontmatter(content);
@@ -106,10 +130,11 @@ function discoverFiles(docsRoot: string): Array<{ path: string; kind: EvidenceKi
         try {
           const lst = lstatSync(fullPath);
           if (lst.isSymbolicLink()) continue;
-          if (lst.isFile() && entry.endsWith('.md')) {
+          if (lst.isFile() && isIndexableSourceFile(entry)) {
             results.push({ path: fullPath, kind });
             discoveredPaths.add(fullPath);
           } else if (lst.isDirectory()) {
+            if (GENERATED_DOC_DIRS.has(entry)) continue;
             scanDir(fullPath, kind, depth + 1);
           }
         } catch {
@@ -168,12 +193,12 @@ function discoverFiles(docsRoot: string): Array<{ path: string; kind: EvidenceKi
     if (depth > 10) return;
     try {
       for (const entry of readdirSync(dirPath)) {
-        if (FALLBACK_EXCLUDE.has(entry)) continue;
+        if (FALLBACK_EXCLUDE.has(entry) || GENERATED_DOC_DIRS.has(entry)) continue;
         const fullPath = join(dirPath, entry);
         try {
           const lst = lstatSync(fullPath);
           if (lst.isSymbolicLink()) continue;
-          if (lst.isFile() && entry.endsWith('.md') && !discoveredPaths.has(fullPath)) {
+          if (lst.isFile() && isIndexableSourceFile(entry) && !discoveredPaths.has(fullPath)) {
             results.push({ path: fullPath, kind: inferKindFromPath(fullPath) });
           } else if (lst.isDirectory()) {
             scanFallback(fullPath, depth + 1);
@@ -189,6 +214,104 @@ function discoverFiles(docsRoot: string): Array<{ path: string; kind: EvidenceKi
   scanFallback(docsRoot);
 
   return results;
+}
+
+function isIndexableSourceFile(filename: string): boolean {
+  return filename.endsWith('.md') || filename.endsWith('.svg');
+}
+
+function parseSvgAssetToEvidence(filePath: string, projectRoot: string, content: string): ScannedEvidence | null {
+  const text = extractSvgTextContent(content);
+  if (!text) return null;
+
+  const sourcePath = relative(projectRoot, filePath);
+  const title = extractSvgTitle(content) ?? basename(filePath, '.svg').replace(/[-_]+/g, ' ');
+  const summary = text.length > 3000 ? `${text.slice(0, 2997)}...` : text;
+
+  return {
+    item: {
+      anchor: `doc:${sourcePath.replace(/\.svg$/, '')}`,
+      kind: inferKindFromPath(filePath),
+      status: 'active',
+      title,
+      summary,
+      sourcePath,
+      updatedAt: new Date().toISOString(),
+    },
+    provenance: { tier: 'derived', source: sourcePath },
+    rawContent: content,
+  };
+}
+
+function extractSvgTitle(content: string): string | null {
+  const match = content.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  const title = match?.[1] ? normalizeSvgText(match[1]) : '';
+  return title || null;
+}
+
+function extractSvgTextContent(content: string): string {
+  const cleaned = content
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ');
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: string | undefined) => {
+    const text = normalizeSvgText(value ?? '');
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    parts.push(text);
+  };
+
+  for (const tag of ['title', 'desc', 'tspan']) {
+    const re = new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
+    for (const match of cleaned.matchAll(re)) push(match[1]);
+  }
+
+  for (const match of cleaned.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/gi)) {
+    const whole = match[0] ?? '';
+    if (/<tspan\b/i.test(whole)) continue;
+    push(match[1]);
+  }
+
+  for (const match of cleaned.matchAll(/\b(?:aria-label|data-label|inkscape:label)=["']([^"']+)["']/gi)) {
+    push(match[1]);
+  }
+
+  return parts.join(' ');
+}
+
+function normalizeSvgText(value: string): string {
+  return decodeXmlEntities(value.replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const XML_NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
+
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, body: string) => {
+    const lower = body.toLowerCase();
+    return XML_NAMED_ENTITIES[lower] ?? decodeNumericXmlEntity(lower, entity);
+  });
+}
+
+function decodeNumericXmlEntity(body: string, fallback: string): string {
+  const code = body.startsWith('#x')
+    ? Number.parseInt(body.slice(2), 16)
+    : body.startsWith('#')
+      ? Number.parseInt(body.slice(1), 10)
+      : Number.NaN;
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return fallback;
+  return String.fromCodePoint(code);
 }
 
 // ── Lessons-learned splitter ────────────────────────────────────────
@@ -278,6 +401,7 @@ export function extractAnchor(fm: Record<string, unknown>): string | null {
 
 function inferKind(fm: Record<string, unknown>, filePath: string): EvidenceKind {
   const docKind = fm.doc_kind;
+  if (docKind === 'harness-feedback') return 'lesson';
   if (docKind === 'decision' || filePath.includes('/decisions/')) return 'decision';
   if (
     docKind === 'plan' ||
@@ -369,4 +493,16 @@ function mergeKeywords(primary: string[], secondary: string[]): string[] {
     merged.push(value);
   }
   return merged;
+}
+
+function matchGlob(pattern: string, path: string): boolean {
+  const regex = pattern
+    .replace(/\*\*\//g, '§GLOBSTAR_SLASH§')
+    .replace(/\*\*/g, '§GLOBSTAR§')
+    .replace(/\*/g, '§STAR§')
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/§GLOBSTAR_SLASH§/g, '(.+/)?')
+    .replace(/§GLOBSTAR§/g, '.*')
+    .replace(/§STAR§/g, '[^/]*');
+  return new RegExp(`^${regex}$`).test(path);
 }

@@ -24,10 +24,19 @@ export interface ReviewFeedbackSignal {
   commitCursor: () => Promise<void>;
 }
 
+export interface ReviewFeedbackPrMetadata {
+  readonly headSha: string;
+  readonly prState: 'open' | 'merged' | 'closed';
+}
+
 export interface ReviewFeedbackTaskSpecOptions {
   readonly taskStore: ITaskStore;
-  readonly fetchComments: (repoFullName: string, prNumber: number) => Promise<PrFeedbackComment[]>;
-  readonly fetchReviews: (repoFullName: string, prNumber: number) => Promise<PrReviewDecision[]>;
+  /** Return null when PR metadata is temporarily unavailable; gate will continue without head/state filtering. */
+  readonly fetchPrMetadata?: (repoFullName: string, prNumber: number) => Promise<ReviewFeedbackPrMetadata | null>;
+  /** @param sinceId — when provided, only fetch items with id > sinceId (enables per-page early termination). */
+  readonly fetchComments: (repoFullName: string, prNumber: number, sinceId?: number) => Promise<PrFeedbackComment[]>;
+  /** @param sinceId — when provided, only fetch items with id > sinceId (enables per-page early termination). */
+  readonly fetchReviews: (repoFullName: string, prNumber: number, sinceId?: number) => Promise<PrReviewDecision[]>;
   readonly reviewFeedbackRouter: ReviewFeedbackRouter;
   readonly invokeTrigger?: ConnectorInvokeTrigger;
   readonly log: {
@@ -44,6 +53,12 @@ export interface ReviewFeedbackTaskSpecOptions {
    * Both predicates return `skip` — OR'd together in gate().
    */
   readonly isNoiseComment?: (comment: PrFeedbackComment) => boolean;
+  /** F202-2B: Override task ID for plugin-scoped schedule instances */
+  readonly id?: string;
+}
+
+function resolveCursor(memoryCursor: number | undefined, persistedCursor: number | undefined): number {
+  return Math.max(memoryCursor ?? 0, persistedCursor ?? 0);
 }
 
 export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions): TaskSpec_P1<ReviewFeedbackSignal> {
@@ -94,7 +109,7 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
   }
 
   return {
-    id: 'review-feedback',
+    id: opts.id ?? 'review-feedback',
     profile: 'poller',
     trigger: { type: 'interval', ms: opts.pollIntervalMs ?? 60_000 },
     admission: {
@@ -114,27 +129,45 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
             const { repoFullName, prNumber } = parsed;
             const prKey = `${repoFullName}#${prNumber}`;
 
-            const [comments, reviews] = await Promise.all([
-              opts.fetchComments(repoFullName, prNumber),
-              opts.fetchReviews(repoFullName, prNumber),
-            ]);
+            const prMetadata = opts.fetchPrMetadata ? await opts.fetchPrMetadata(repoFullName, prNumber) : null;
+            if (prMetadata?.prState === 'merged' || prMetadata?.prState === 'closed') {
+              await opts.taskStore.update(task.id, { status: 'done' });
+              opts.log.info(`[review-feedback] PR ${prKey} ${prMetadata.prState} — task marked done`);
+              continue;
+            }
 
-            // #406: Seed from persisted automationState.review on first access (survives restart)
-            const commentCursor = commentCursors.get(prKey) ?? task.automationState?.review?.lastCommentCursor ?? 0;
-            const reviewCursor = reviewCursors.get(prKey) ?? task.automationState?.review?.lastDecisionCursor ?? 0;
+            // #406: Seed from persisted automationState.review on first access (survives restart).
+            // Cursor sources are monotonic: re-registration may reseed persisted state
+            // while a long-lived poller still has an older in-memory value.
+            const commentCursor = resolveCursor(
+              commentCursors.get(prKey),
+              task.automationState?.review?.lastCommentCursor,
+            );
+            const reviewCursor = resolveCursor(
+              reviewCursors.get(prKey),
+              task.automationState?.review?.lastDecisionCursor,
+            );
+
+            // #798: Pass cursor to fetch for per-page client-side filtering (eliminates maxBuffer crash)
+            const [comments, reviews] = await Promise.all([
+              opts.fetchComments(repoFullName, prNumber, commentCursor),
+              opts.fetchReviews(repoFullName, prNumber, reviewCursor),
+            ]);
 
             const allNewComments = comments.filter((c) => c.id > commentCursor);
             const allNewReviews = reviews.filter((r) => r.id > reviewCursor);
+            const freshNewComments = allNewComments.filter((c) => !isStaleCommitFeedback(c, prMetadata?.headSha));
+            const freshNewReviews = allNewReviews.filter((r) => !isStaleCommitFeedback(r, prMetadata?.headSha));
 
             const commentFilter = opts.isEchoComment;
             const noiseFilter = opts.isNoiseComment;
             const reviewFilter = opts.isEchoReview;
-            const newComments = allNewComments.filter((c) => {
+            const newComments = freshNewComments.filter((c) => {
               if (commentFilter?.(c)) return false;
               if (noiseFilter?.(c)) return false;
               return true;
             });
-            const newDecisions = reviewFilter ? allNewReviews.filter((r) => !reviewFilter(r)) : allNewReviews;
+            const newDecisions = reviewFilter ? freshNewReviews.filter((r) => !reviewFilter(r)) : freshNewReviews;
 
             const maxCommentId =
               allNewComments.length > 0 ? Math.max(...allNewComments.map((c) => c.id)) : commentCursor;
@@ -177,7 +210,7 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
     run: {
       overlap: 'skip',
       timeoutMs: 30_000,
-      async execute(signal: ReviewFeedbackSignal, _subjectKey: string, _ctx: ExecuteContext) {
+      async execute(signal: ReviewFeedbackSignal, subjectKey: string, _ctx: ExecuteContext) {
         const { task } = signal;
         const routeResult = await opts.reviewFeedbackRouter.route(
           {
@@ -190,6 +223,7 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
             threadId: task.threadId,
             catId: task.ownerCatId ?? '',
             userId: task.userId ?? '',
+            trackingInstructions: task.automationState?.trackingInstructions,
           },
         );
 
@@ -202,22 +236,31 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
             const hasChangesRequested = signal.newDecisions.some((d) => d.state === 'CHANGES_REQUESTED');
             const hasApproved = !hasChangesRequested && signal.newDecisions.some((d) => d.state === 'APPROVED');
             const suggestedSkill = hasChangesRequested ? 'receive-review' : hasApproved ? 'merge-gate' : undefined;
+            const coalesceTargetCatId = routeResult.catId || task.ownerCatId || 'unassigned';
 
             const policy: ConnectorTriggerPolicy = {
               priority: hasChangesRequested ? 'urgent' : 'normal',
               reason: 'github_review_feedback',
               sourceCategory: 'review',
               suggestedSkill,
+              coalesceKey: `${subjectKey}:review-feedback:${coalesceTargetCatId}`,
             };
-            opts.invokeTrigger.trigger(
-              routeResult.threadId,
-              routeResult.catId as CatId,
-              task.userId ?? '',
-              routeResult.content,
-              routeResult.messageId,
-              undefined,
-              policy,
-            );
+            void opts.invokeTrigger
+              .trigger(
+                routeResult.threadId,
+                routeResult.catId as CatId,
+                task.userId ?? '',
+                routeResult.content,
+                routeResult.messageId,
+                undefined,
+                policy,
+              )
+              .catch((err) =>
+                opts.log.warn(
+                  { err },
+                  `[review-feedback] trigger failed for ${signal.repoFullName}#${signal.prNumber} (best-effort)`,
+                ),
+              );
           } catch {
             opts.log.warn(
               `[review-feedback] trigger failed for ${signal.repoFullName}#${signal.prNumber} (best-effort)`,
@@ -237,4 +280,8 @@ export function createReviewFeedbackTaskSpec(opts: ReviewFeedbackTaskSpecOptions
       subjectKind: 'pr',
     },
   };
+}
+
+function isStaleCommitFeedback(item: { readonly commitId?: string }, currentHeadSha?: string): boolean {
+  return Boolean(currentHeadSha && item.commitId && item.commitId !== currentHeadSha);
 }

@@ -7,23 +7,37 @@
  */
 import './helpers/setup-cat-registry.js';
 import assert from 'node:assert/strict';
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { lstat, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
+import { readAuditLog } from '../dist/config/capabilities/capability-audit.js';
 import {
   readCapabilitiesConfig,
   writeCapabilitiesConfig,
 } from '../dist/config/capabilities/capability-orchestrator.js';
 
 const AUTH_HEADERS = { 'x-cat-cafe-user': 'test-user' };
+const OWNER_SESSION_HEADERS = { 'x-test-session-user': 'you' };
+const NON_OWNER_SESSION_HEADERS = { 'x-test-session-user': 'codex' };
+const REDACTED_SECRET = '••••••';
 
 /** @param {string} prefix */
 async function makeTmpDir(prefix) {
   const dir = join(tmpdir(), `cap-route-test-${prefix}-${Date.now()}`);
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+function findRepoRoot() {
+  let dir = process.cwd();
+  while (dir !== dirname(dir)) {
+    if (existsSync(join(dir, 'pnpm-workspace.yaml'))) return dir;
+    dir = dirname(dir);
+  }
+  return process.cwd();
 }
 
 // ────────── PATCH logic (unit-level, no Fastify needed) ──────────
@@ -567,6 +581,117 @@ describe('GET /api/capabilities (Fastify)', () => {
     await app.close();
   });
 
+  it('includes sanitized MCP server details in the board payload', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const projectDir = await makeTmpDir('board-mcp-redact');
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'secret-mcp',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: {
+            command: 'node',
+            args: ['server.js', '--api-key=inline-secret'],
+            url: 'https://user:inline-secret@example.test/mcp?token=inline-secret',
+            env: { API_KEY: 'raw-secret' },
+            headers: { Authorization: 'Bearer raw-secret' },
+          },
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: AUTH_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.doesNotMatch(res.payload, /raw-secret|Bearer raw-secret|inline-secret/);
+      const item = res.json().items.find((entry) => entry.id === 'secret-mcp');
+      assert.ok(item, 'expected secret-mcp board item');
+      assert.equal(item.mcpServer.command, undefined);
+      assert.equal(item.mcpServer.args, undefined);
+      assert.equal(item.mcpServer.url, undefined);
+      assert.equal(item.mcpServer.env.API_KEY, REDACTED_SECRET);
+      assert.equal(item.mcpServer.headers.Authorization, REDACTED_SECRET);
+      assert.deepEqual(item.mcpServer.envKeys, ['API_KEY']);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes MCP launch fields only for the configured owner session', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const projectDir = await makeTmpDir('board-mcp-owner');
+    const prevOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'owner-mcp',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: {
+            transport: 'streamableHttp',
+            command: 'node',
+            args: ['server.js', '--api-key=inline-secret'],
+            url: 'https://user:inline-secret@example.test/mcp?token=inline-secret',
+            env: { API_KEY: 'raw-secret' },
+            headers: { Authorization: 'Bearer raw-secret' },
+          },
+        },
+      ],
+    });
+
+    const app = Fastify();
+    app.addHook('preHandler', async (request) => {
+      const raw = request.headers['x-test-session-user'];
+      if (typeof raw === 'string' && raw.trim()) {
+        request.sessionUserId = raw.trim();
+      }
+    });
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: OWNER_SESSION_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const item = res.json().items.find((entry) => entry.id === 'owner-mcp');
+      assert.ok(item, 'expected owner-mcp board item');
+      assert.equal(item.mcpServer.command, 'node');
+      assert.deepEqual(item.mcpServer.args, ['server.js', '--api-key=inline-secret']);
+      assert.equal(item.mcpServer.url, 'https://user:inline-secret@example.test/mcp?token=inline-secret');
+      assert.equal(item.mcpServer.env.API_KEY, REDACTED_SECRET);
+      assert.equal(item.mcpServer.headers.Authorization, REDACTED_SECRET);
+    } finally {
+      if (prevOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = prevOwner;
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('includes Kimi mount state for cat-cafe skills in the board payload', async () => {
     const Fastify = (await import('fastify')).default;
     const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
@@ -599,7 +724,7 @@ describe('GET /api/capabilities (Fastify)', () => {
 
     const projectDir = join('/tmp', `cap-route-test-dir-symlink-${Date.now()}`);
     const homeDir = join('/tmp', `cap-route-test-home-${Date.now()}`);
-    const sourceSkillsDir = join(process.cwd(), '..', '..', 'cat-cafe-skills');
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
     const prevHome = process.env.HOME;
 
     await Promise.all([
@@ -897,6 +1022,262 @@ describe('GET /api/capabilities (Fastify)', () => {
     }
   });
 
+  it('uses selected project plugin manifests for plugin-owned skill pruning', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const pluginId = `project-plugin-${Date.now()}`;
+    const projectDir = await makeTmpDir('project-plugin-skill-prune');
+    const pluginDir = join(projectDir, 'plugins', pluginId);
+    await mkdir(join(pluginDir, 'skills', 'project-skill'), { recursive: true });
+    await writeFile(join(pluginDir, 'skills', 'project-skill', 'SKILL.md'), '# project skill\n');
+    await mkdir(join(projectDir, '.claude', 'skills', 'old-project-skill'), { recursive: true });
+    await writeFile(join(projectDir, '.claude', 'skills', 'old-project-skill', 'SKILL.md'), '# stale skill\n');
+    await writeFile(
+      join(pluginDir, 'plugin.yaml'),
+      [
+        `id: ${pluginId}`,
+        'name: Project Plugin',
+        'version: "1.0.0"',
+        'resources:',
+        '  - type: skill',
+        '    path: skills/project-skill',
+      ].join('\n'),
+    );
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'project-skill',
+          type: 'skill',
+          enabled: true,
+          source: 'cat-cafe',
+          pluginId,
+        },
+        {
+          id: 'old-project-skill',
+          type: 'skill',
+          enabled: true,
+          source: 'cat-cafe',
+          pluginId,
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: AUTH_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const config = await readCapabilitiesConfig(projectDir);
+      const preserved = config?.capabilities.find((item) => item.id === 'project-skill');
+      assert.ok(preserved, 'project-local declared plugin-owned skill should survive pruning');
+      assert.equal(preserved.pluginId, pluginId);
+      const stale = config?.capabilities.find((item) => item.id === 'old-project-skill');
+      assert.equal(stale, undefined, 'project-local undeclared plugin-owned skill should still be pruned');
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes plugin-owned skills with no manifest and no filesystem backing', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const projectDir = await makeTmpDir('plugin-skill-missing-manifest');
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'orphan-plugin-skill',
+          type: 'skill',
+          enabled: true,
+          source: 'cat-cafe',
+          pluginId: 'missing-plugin',
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: AUTH_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(
+        config?.capabilities.some((item) => item.id === 'orphan-plugin-skill'),
+        false,
+        'plugin-owned skill without manifest or filesystem backing should be pruned',
+      );
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes plugin-owned skills no longer declared by the canonical plugin manifest', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const pluginId = `cap-prune-${Date.now()}`;
+    const repoRoot = findRepoRoot();
+    const pluginDir = join(repoRoot, 'plugins', pluginId);
+    await mkdir(join(pluginDir, 'skills', 'current'), { recursive: true });
+    await writeFile(
+      join(pluginDir, 'plugin.yaml'),
+      [
+        `id: ${pluginId}`,
+        'name: Capability Prune Test',
+        'version: "1.0.0"',
+        'resources:',
+        '  - type: skill',
+        '    path: skills/current',
+      ].join('\n'),
+    );
+
+    const projectDir = await makeTmpDir('plugin-skill-canonical-root');
+    await mkdir(join(projectDir, '.claude', 'skills', 'old'), { recursive: true });
+    await writeFile(join(projectDir, '.claude', 'skills', 'old', 'SKILL.md'), '# stale mounted plugin skill\n');
+    const currentSkill = {
+      id: 'current',
+      type: 'skill',
+      enabled: true,
+      source: 'cat-cafe',
+      pluginId,
+    };
+    const staleSkill = {
+      id: 'old',
+      type: 'skill',
+      enabled: true,
+      source: 'cat-cafe',
+      pluginId,
+    };
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [currentSkill, staleSkill],
+    });
+
+    const app = Fastify();
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: AUTH_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const config = await readCapabilitiesConfig(projectDir);
+      const preserved = config?.capabilities.find((item) => item.id === currentSkill.id);
+      assert.ok(preserved, 'declared plugin-owned skill should survive pruning');
+      assert.equal(preserved.pluginId, pluginId);
+      const stale = config?.capabilities.find((item) => item.id === staleSkill.id);
+      assert.equal(stale, undefined, 'removed plugin-owned skill should be pruned even when plugin dir exists');
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      await rm(pluginDir, { recursive: true, force: true });
+    }
+  });
+
+  it('continues plugin-owned skill pruning when one selected-project plugin manifest is invalid', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+
+    const pluginId = `valid-prune-${Date.now()}`;
+    const projectDir = await makeTmpDir('plugin-skill-invalid-manifest');
+    const validPluginDir = join(projectDir, 'plugins', pluginId);
+    const invalidPluginDir = join(projectDir, 'plugins', 'bad-plugin');
+    await mkdir(join(validPluginDir, 'skills', 'current'), { recursive: true });
+    await writeFile(
+      join(validPluginDir, 'plugin.yaml'),
+      [
+        `id: ${pluginId}`,
+        'name: Valid Prune Plugin',
+        'version: "1.0.0"',
+        'resources:',
+        '  - type: skill',
+        '    path: skills/current',
+      ].join('\n'),
+    );
+    await mkdir(invalidPluginDir, { recursive: true });
+    await writeFile(
+      join(invalidPluginDir, 'plugin.yaml'),
+      [
+        'id: bad-plugin',
+        'name: Bad Plugin',
+        'version: "1.0.0"',
+        'resources:',
+        '  - type: skill',
+        '    path: ../escape',
+      ].join('\n'),
+    );
+
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'current',
+          type: 'skill',
+          enabled: true,
+          source: 'cat-cafe',
+          pluginId,
+        },
+        {
+          id: 'old',
+          type: 'skill',
+          enabled: true,
+          source: 'cat-cafe',
+          pluginId,
+        },
+      ],
+    });
+
+    const app = Fastify();
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/capabilities?projectPath=${encodeURIComponent(projectDir)}`,
+        headers: AUTH_HEADERS,
+      });
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.ok(
+        config?.capabilities.find((item) => item.id === 'current'),
+        'valid plugin skill should survive',
+      );
+      assert.equal(
+        config?.capabilities.some((item) => item.id === 'old'),
+        false,
+        'invalid sibling plugin manifest should not disable pruning for valid plugin skills',
+      );
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('returns 400 for invalid projectPath', async () => {
     const Fastify = (await import('fastify')).default;
     const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
@@ -1163,6 +1544,479 @@ describe('GET /api/capabilities (Fastify)', () => {
     } finally {
       await rm(projectDir, { recursive: true, force: true });
       await app.close();
+    }
+  });
+});
+
+describe('PATCH /api/capabilities write auth (Fastify)', () => {
+  async function buildSessionApp() {
+    const Fastify = (await import('fastify')).default;
+    const { capabilitiesRoutes } = await import('../dist/routes/capabilities.js');
+    const app = Fastify();
+    app.addHook('preHandler', async (request) => {
+      const raw = request.headers['x-test-session-user'];
+      if (typeof raw === 'string' && raw.trim()) {
+        request.sessionUserId = raw.trim();
+      }
+    });
+    await app.register(capabilitiesRoutes);
+    await app.ready();
+    return app;
+  }
+
+  async function seedProject() {
+    const projectDir = await makeTmpDir('patch-route-auth');
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [
+        {
+          id: 'secret-mcp',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: {
+            command: 'node',
+            args: ['server.js'],
+            env: { API_KEY: 'raw-secret' },
+            headers: { Authorization: 'Bearer raw-secret' },
+          },
+        },
+      ],
+    });
+    return projectDir;
+  }
+
+  async function patchCapability(app, projectDir, headers) {
+    return app.inject({
+      method: 'PATCH',
+      url: '/api/capabilities',
+      headers,
+      payload: {
+        projectPath: projectDir,
+        capabilityId: 'secret-mcp',
+        capabilityType: 'mcp',
+        scope: 'global',
+        enabled: false,
+      },
+    });
+  }
+
+  function localOwnerHeaders() {
+    return {
+      ...OWNER_SESSION_HEADERS,
+      host: 'localhost:3004',
+      origin: 'http://localhost:3003',
+    };
+  }
+
+  async function seedManagedSkillProject(skillId = 'debugging', enabled = true) {
+    const projectDir = await makeTmpDir('patch-managed-skill');
+    await writeCapabilitiesConfig(projectDir, {
+      version: 1,
+      capabilities: [{ id: skillId, type: 'skill', enabled, source: 'cat-cafe' }],
+    });
+    return projectDir;
+  }
+
+  function patchSkillCapability(app, projectDir, skillId, enabled, scope = 'global') {
+    return app.inject({
+      method: 'PATCH',
+      url: '/api/capabilities',
+      headers: localOwnerHeaders(),
+      payload: {
+        projectPath: projectDir,
+        capabilityId: skillId,
+        capabilityType: 'skill',
+        scope,
+        ...(scope === 'cat' ? { catId: 'codex' } : {}),
+        enabled,
+      },
+    });
+  }
+
+  it('removes managed cat-cafe skill symlinks on global disable', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const skillId = 'debugging';
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
+    const projectDir = await seedManagedSkillProject(skillId, true);
+    const linkPath = join(projectDir, '.codex', 'skills', skillId);
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(dirname(linkPath), { recursive: true });
+      await symlink(join(sourceSkillsDir, skillId), linkPath);
+
+      const res = await patchSkillCapability(app, projectDir, skillId, false);
+
+      assert.equal(res.statusCode, 200, res.payload);
+      await assert.rejects(() => lstat(linkPath), /ENOENT/);
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('converts legacy directory-level mounts before disabling managed skills', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const disabledSkill = 'debugging';
+    const keptSkill = 'tdd';
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
+    const projectDir = await makeTmpDir('patch-managed-skill-legacy-root');
+    const codexSkillsDir = join(projectDir, '.codex', 'skills');
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(dirname(codexSkillsDir), { recursive: true });
+      await symlink(sourceSkillsDir, codexSkillsDir);
+      await writeCapabilitiesConfig(projectDir, {
+        version: 1,
+        capabilities: [
+          { id: disabledSkill, type: 'skill', enabled: true, source: 'cat-cafe' },
+          { id: keptSkill, type: 'skill', enabled: true, source: 'cat-cafe' },
+        ],
+      });
+
+      const res = await patchSkillCapability(app, projectDir, disabledSkill, false);
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const rootStat = await lstat(codexSkillsDir);
+      assert.equal(rootStat.isDirectory(), true, 'legacy provider root should become a real directory');
+      assert.equal(rootStat.isSymbolicLink(), false, 'legacy provider root symlink should be removed');
+      await assert.rejects(() => lstat(join(codexSkillsDir, disabledSkill)), /ENOENT/);
+      assert.equal(await realpath(join(codexSkillsDir, keptSkill)), await realpath(join(sourceSkillsDir, keptSkill)));
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities.find((cap) => cap.id === disabledSkill)?.enabled, false);
+      assert.equal(config?.capabilities.find((cap) => cap.id === keptSkill)?.enabled, true);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('creates managed cat-cafe skill symlinks on global enable', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const skillId = 'debugging';
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
+    const projectDir = await seedManagedSkillProject(skillId, false);
+    const app = await buildSessionApp();
+
+    try {
+      const res = await patchSkillCapability(app, projectDir, skillId, true);
+
+      assert.equal(res.statusCode, 200, res.payload);
+      for (const provider of ['.claude', '.codex', '.gemini', '.kimi']) {
+        const linkPath = join(projectDir, provider, 'skills', skillId);
+        const stat = await lstat(linkPath);
+        assert.equal(stat.isSymbolicLink(), true, `${provider} skill path should be a symlink`);
+        assert.equal(await realpath(linkPath), await realpath(join(sourceSkillsDir, skillId)));
+      }
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, true);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('converts legacy directory-level mounts before enabling managed skills', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const enabledSkill = 'debugging';
+    const stillDisabledSkill = 'tdd';
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
+    const projectDir = await makeTmpDir('patch-managed-skill-enable-legacy-root');
+    const codexSkillsDir = join(projectDir, '.codex', 'skills');
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(dirname(codexSkillsDir), { recursive: true });
+      await symlink(sourceSkillsDir, codexSkillsDir);
+      await writeCapabilitiesConfig(projectDir, {
+        version: 1,
+        capabilities: [
+          { id: enabledSkill, type: 'skill', enabled: false, source: 'cat-cafe' },
+          { id: stillDisabledSkill, type: 'skill', enabled: false, source: 'cat-cafe' },
+        ],
+      });
+
+      const res = await patchSkillCapability(app, projectDir, enabledSkill, true);
+
+      assert.equal(res.statusCode, 200, res.payload);
+      const rootStat = await lstat(codexSkillsDir);
+      assert.equal(rootStat.isDirectory(), true, 'legacy provider root should become a real directory');
+      assert.equal(rootStat.isSymbolicLink(), false, 'legacy provider root symlink should be removed');
+      assert.equal(
+        await realpath(join(codexSkillsDir, enabledSkill)),
+        await realpath(join(sourceSkillsDir, enabledSkill)),
+      );
+      await assert.rejects(() => lstat(join(codexSkillsDir, stillDisabledSkill)), /ENOENT/);
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities.find((cap) => cap.id === enabledSkill)?.enabled, true);
+      assert.equal(config?.capabilities.find((cap) => cap.id === stillDisabledSkill)?.enabled, false);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('preserves user-owned skill paths when enabling managed skills', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const skillId = 'debugging';
+    const projectDir = await seedManagedSkillProject(skillId, false);
+    const localSkillDir = join(projectDir, '.codex', 'skills', skillId);
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(localSkillDir, { recursive: true });
+      await writeFile(join(localSkillDir, 'SKILL.md'), '# user debugging\n');
+
+      const res = await patchSkillCapability(app, projectDir, skillId, true);
+
+      assert.equal(res.statusCode, 409, res.payload);
+      assert.match(res.payload, /not a managed Cat Cafe skill symlink/);
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+      assert.equal((await lstat(localSkillDir)).isDirectory(), true);
+      for (const provider of ['.claude', '.gemini', '.kimi']) {
+        await assert.rejects(
+          () => lstat(join(projectDir, provider, 'skills', skillId)),
+          /ENOENT/,
+          `${provider} must not get a partial managed symlink when another provider has a user-owned conflict`,
+        );
+      }
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('does not mutate symlinks when toggling external skills', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const skillId = 'debugging';
+    const projectDir = await makeTmpDir('patch-external-skill');
+    const externalSource = join(projectDir, 'external-skill-source', skillId);
+    const linkPath = join(projectDir, '.codex', 'skills', skillId);
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(externalSource, { recursive: true });
+      await writeFile(join(externalSource, 'SKILL.md'), '# external debugging\n');
+      await mkdir(dirname(linkPath), { recursive: true });
+      await symlink(externalSource, linkPath);
+      await writeCapabilitiesConfig(projectDir, {
+        version: 1,
+        capabilities: [{ id: skillId, type: 'skill', enabled: true, source: 'external' }],
+      });
+
+      const res = await patchSkillCapability(app, projectDir, skillId, false);
+
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(await realpath(linkPath), await realpath(externalSource));
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('does not mutate symlinks for per-cat skill overrides', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const skillId = 'debugging';
+    const sourceSkillsDir = join(findRepoRoot(), 'cat-cafe-skills');
+    const projectDir = await seedManagedSkillProject(skillId, true);
+    const linkPath = join(projectDir, '.codex', 'skills', skillId);
+    const app = await buildSessionApp();
+
+    try {
+      await mkdir(dirname(linkPath), { recursive: true });
+      await symlink(join(sourceSkillsDir, skillId), linkPath);
+
+      const res = await patchSkillCapability(app, projectDir, skillId, false, 'cat');
+
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(await realpath(linkPath), await realpath(join(sourceSkillsDir, skillId)));
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, true);
+      assert.deepEqual(config?.capabilities[0]?.overrides, [{ catId: 'codex', enabled: false }]);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('rejects trusted header identity without a real session', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const projectDir = await seedProject();
+    const app = await buildSessionApp();
+
+    try {
+      const res = await patchCapability(app, projectDir, { 'x-cat-cafe-user': 'you' });
+      assert.equal(res.statusCode, 401);
+      assert.match(JSON.parse(res.payload).error, /session/i);
+
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, true);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('allows local capability toggle when DEFAULT_OWNER_USER_ID is missing and rejects non-local or configured non-owners', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    const projectDir = await seedProject();
+    const app = await buildSessionApp();
+
+    try {
+      delete process.env.DEFAULT_OWNER_USER_ID;
+      const missingOwnerWithoutOrigin = await patchCapability(app, projectDir, {
+        ...OWNER_SESSION_HEADERS,
+        host: 'localhost:3004',
+      });
+      assert.equal(missingOwnerWithoutOrigin.statusCode, 403);
+      assert.match(JSON.parse(missingOwnerWithoutOrigin.payload).error, /direct localhost/i);
+
+      const missingOwner = await patchCapability(app, projectDir, {
+        ...OWNER_SESSION_HEADERS,
+        host: 'localhost:3004',
+        origin: 'http://localhost:3003',
+      });
+      assert.equal(missingOwner.statusCode, 200, missingOwner.payload);
+      let config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+
+      const nonLocalMissingOwner = await patchCapability(app, projectDir, {
+        ...OWNER_SESSION_HEADERS,
+        host: 'staging.example.test',
+      });
+      assert.equal(nonLocalMissingOwner.statusCode, 403);
+      assert.match(JSON.parse(nonLocalMissingOwner.payload).error, /direct localhost/i);
+
+      const spoofedLocalHost = await app.inject({
+        method: 'PATCH',
+        url: '/api/capabilities',
+        headers: {
+          ...OWNER_SESSION_HEADERS,
+          host: 'localhost:3004',
+          'x-forwarded-host': 'localhost:3004',
+        },
+        remoteAddress: '203.0.113.10',
+        payload: {
+          projectPath: projectDir,
+          capabilityId: 'secret-mcp',
+          capabilityType: 'mcp',
+          scope: 'global',
+          enabled: true,
+        },
+      });
+      assert.equal(spoofedLocalHost.statusCode, 403);
+      assert.match(JSON.parse(spoofedLocalHost.payload).error, /direct localhost/i);
+
+      const forwardedLocalHost = await app.inject({
+        method: 'PATCH',
+        url: '/api/capabilities',
+        headers: {
+          ...OWNER_SESSION_HEADERS,
+          host: 'localhost:3004',
+          'x-forwarded-for': '203.0.113.10',
+          'x-forwarded-host': 'localhost:3004',
+          'x-forwarded-proto': 'https',
+        },
+        payload: {
+          projectPath: projectDir,
+          capabilityId: 'secret-mcp',
+          capabilityType: 'mcp',
+          scope: 'global',
+          enabled: true,
+        },
+      });
+      assert.equal(forwardedLocalHost.statusCode, 403);
+      assert.match(JSON.parse(forwardedLocalHost.payload).error, /direct localhost/i);
+
+      process.env.DEFAULT_OWNER_USER_ID = 'you';
+      const nonOwner = await patchCapability(app, projectDir, {
+        ...NON_OWNER_SESSION_HEADERS,
+        host: 'localhost:3004',
+        origin: 'http://localhost:3003',
+      });
+      assert.equal(nonOwner.statusCode, 403);
+      assert.match(JSON.parse(nonOwner.payload).error, /owner/);
+
+      const ownerNonLocal = await patchCapability(app, projectDir, {
+        ...OWNER_SESSION_HEADERS,
+        host: 'staging.example.test',
+      });
+      assert.equal(ownerNonLocal.statusCode, 403);
+      assert.match(JSON.parse(ownerNonLocal.payload).error, /direct localhost/i);
+
+      config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
+    }
+  });
+
+  it('redacts secret-bearing capability data in toggle responses and audit logs', async () => {
+    const previousOwner = process.env.DEFAULT_OWNER_USER_ID;
+    process.env.DEFAULT_OWNER_USER_ID = 'you';
+    const projectDir = await seedProject();
+    const app = await buildSessionApp();
+
+    try {
+      const res = await patchCapability(app, projectDir, {
+        ...OWNER_SESSION_HEADERS,
+        host: 'localhost:3004',
+        origin: 'http://localhost:3003',
+      });
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.doesNotMatch(res.payload, /raw-secret/);
+      assert.equal(res.json().capability.mcpServer.env.API_KEY, REDACTED_SECRET);
+      assert.equal(res.json().capability.mcpServer.headers.Authorization, REDACTED_SECRET);
+
+      const config = await readCapabilitiesConfig(projectDir);
+      assert.equal(config?.capabilities[0]?.enabled, false);
+      assert.equal(config?.capabilities[0]?.mcpServer?.env?.API_KEY, 'raw-secret');
+      assert.equal(config?.capabilities[0]?.mcpServer?.headers?.Authorization, 'Bearer raw-secret');
+
+      const audit = await readAuditLog(projectDir);
+      assert.equal(audit.length, 1);
+      assert.doesNotMatch(JSON.stringify(audit), /raw-secret/);
+      assert.equal(audit[0]?.before?.mcpServer?.env?.API_KEY, REDACTED_SECRET);
+      assert.equal(audit[0]?.after?.mcpServer?.headers?.Authorization, REDACTED_SECRET);
+    } finally {
+      await app.close();
+      await rm(projectDir, { recursive: true, force: true });
+      if (previousOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = previousOwner;
     }
   });
 });

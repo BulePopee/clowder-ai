@@ -5,11 +5,20 @@
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import type { CallbackAuthFailureReason } from '@cat-cafe/shared';
-import { CALLBACK_AUTH_FAILURE_REASONS, isCallbackAuthFailureReason, normalizeRichBlock } from '@cat-cafe/shared';
+import type { CallbackAuthFailureReason, DispatchGateState, SuggestedCrossPostAction } from '@cat-cafe/shared';
+import {
+  CALLBACK_AUTH_FAILURE_REASONS,
+  DEVELOPMENT_SOP_STAGE_IDS,
+  extractFeatureIds,
+  isCallbackAuthFailureReason,
+  isValidRichBlock,
+  normalizeRichBlock,
+  SOP_DEFINITION_IDS,
+} from '@cat-cafe/shared';
 import { z } from 'zod';
 import { sendCallbackRequest } from './callback-outbox.js';
 import { extractReasonTag } from './callback-retry.js';
+import { formatSuggestedCrossPostActionLines } from './cross-post-suggestion-format.js';
 import { withDegradation } from './degradation.js';
 import type { ToolResult } from './file-tools.js';
 import { errorResult, successResult } from './file-tools.js';
@@ -50,6 +59,7 @@ interface CallbackConfig {
 
 interface AgentKeyOptions {
   agentKeyCatId?: string;
+  forceAgentKey?: boolean;
 }
 
 function readAgentKeyFile(path: string | undefined): string | undefined {
@@ -81,7 +91,7 @@ function parseAgentKeyFileMap(raw: string | undefined): Record<string, string> {
 
 function resolveAgentKeySecret(options?: AgentKeyOptions): string | undefined {
   const requestedCatId = options?.agentKeyCatId?.trim();
-  const variantMapRaw = process.env['CAT_CAFE_AGENT_KEY_FILES']?.trim();
+  const variantMapRaw = process.env.CAT_CAFE_AGENT_KEY_FILES?.trim();
   if (requestedCatId) {
     const variantFiles = parseAgentKeyFileMap(variantMapRaw);
     return readAgentKeyFile(variantFiles[requestedCatId]);
@@ -89,19 +99,23 @@ function resolveAgentKeySecret(options?: AgentKeyOptions): string | undefined {
 
   if (variantMapRaw) return undefined;
 
-  const agentKeySecret = process.env['CAT_CAFE_AGENT_KEY_SECRET'];
+  const agentKeySecret = process.env.CAT_CAFE_AGENT_KEY_SECRET;
   if (agentKeySecret) return agentKeySecret;
 
-  return readAgentKeyFile(process.env['CAT_CAFE_AGENT_KEY_FILE']);
+  return readAgentKeyFile(process.env.CAT_CAFE_AGENT_KEY_FILE);
 }
 
 export function getCallbackConfig(options?: AgentKeyOptions): CallbackConfig | null {
-  const apiUrl = process.env['CAT_CAFE_API_URL'];
+  const apiUrl = process.env.CAT_CAFE_API_URL;
   if (!apiUrl) return null;
 
-  const invocationId = process.env['CAT_CAFE_INVOCATION_ID'];
-  const callbackToken = process.env['CAT_CAFE_CALLBACK_TOKEN'];
+  const invocationId = process.env.CAT_CAFE_INVOCATION_ID;
+  const callbackToken = process.env.CAT_CAFE_CALLBACK_TOKEN;
   const agentKeySecret = resolveAgentKeySecret(options);
+  if (options?.forceAgentKey === true) {
+    if (!agentKeySecret) return null;
+    return { apiUrl, agentKeySecret };
+  }
 
   if (!invocationId && !callbackToken && !agentKeySecret) return null;
 
@@ -161,9 +175,12 @@ export function formatCatRoutingErrorPrefix(body: {
 export async function callbackPost(
   path: string,
   body: Record<string, unknown>,
-  options?: { enableOutbox?: boolean; agentKeyCatId?: string },
+  options?: { enableOutbox?: boolean; agentKeyCatId?: string; forceAgentKey?: boolean },
 ): Promise<ToolResult> {
-  const config = getCallbackConfig({ agentKeyCatId: options?.agentKeyCatId });
+  const config = getCallbackConfig({
+    agentKeyCatId: options?.agentKeyCatId,
+    forceAgentKey: options?.forceAgentKey,
+  });
   if (!config) return errorResult(NO_CONFIG_ERROR);
 
   const result = await sendCallbackRequest(
@@ -280,13 +297,32 @@ export const getThreadContextInputSchema = {
     .min(1)
     .max(200)
     .optional()
-    .default(20)
-    .describe('Number of recent messages to retrieve (default: 20)'),
+    .default(100)
+    .describe('Number of recent messages to retrieve (default: 100, max: 200)'),
   threadId: z
     .string()
     .min(1)
     .optional()
     .describe('Optional: read messages from a different thread. Omit to read the current thread.'),
+  messageId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Optional: open a bounded context window around a specific message in the selected thread.'),
+  before: z
+    .number()
+    .int()
+    .min(0)
+    .max(50)
+    .optional()
+    .describe('When messageId is set, number of messages before the target to include (default: 3).'),
+  after: z
+    .number()
+    .int()
+    .min(0)
+    .max(50)
+    .optional()
+    .describe('When messageId is set, number of messages after the target to include (default: 3).'),
   catId: z.string().min(1).optional().describe("Optional: filter by speaker catId, or pass 'user' for human messages."),
   keyword: z
     .string()
@@ -313,6 +349,11 @@ export const listThreadsInputSchema = {
     .max(200)
     .optional()
     .describe('Optional: filter threads whose title or threadId contains this keyword (case-insensitive).'),
+  agentKeyCatId: agentKeyCatIdSchema,
+};
+
+export const listLabelsInputSchema = {
+  limit: z.number().int().min(1).max(50).optional().default(50).describe('Max labels to return (default: 50).'),
   agentKeyCatId: agentKeyCatIdSchema,
 };
 
@@ -344,17 +385,103 @@ export const createTaskInputSchema = {
       'Cat ID to assign the task to (optional, defaults to unassigned). ' +
         'F182: if disabled, returns 400 {kind:"cat_disabled", alternatives[]}. Assign to an available cat from alternatives[].',
     ),
+  // F193 Phase E (dispatch gate)
+  relatedFeatureId: z
+    .string()
+    .regex(/^F\d+$/)
+    .optional()
+    .describe(
+      'Feature ID this task relates to (e.g. "F193"). Optional explicit override — ' +
+        'system also auto-extracts F-IDs from title+why. When detected F-IDs differ from ' +
+        'currentFeatureId, a dispatch gate warning is returned.',
+    ),
+  currentFeatureId: z
+    .string()
+    .regex(/^F\d+$/)
+    .optional()
+    .describe(
+      'The feature ID of your current thread/scope (e.g. "F209"). Used to determine which ' +
+        'detected F-IDs are "external". If omitted, all detected F-IDs trigger the dispatch gate.',
+    ),
+  dispatchGate: z
+    .object({
+      status: z
+        .enum(['dispatched', 'not_dispatched'])
+        .describe('Whether you dispatched this info to the owning thread'),
+      dispatchedThreadId: z
+        .string()
+        .optional()
+        .describe('Thread ID you dispatched to (required when status=dispatched)'),
+      dispatchedMessageId: z
+        .string()
+        .optional()
+        .describe('Message ID of the cross-post (required when status=dispatched)'),
+      reason: z.string().optional().describe('Why you chose not to dispatch (required when status=not_dispatched)'),
+    })
+    .refine(
+      (gate) => {
+        if (gate.status === 'dispatched') return !!gate.dispatchedThreadId && !!gate.dispatchedMessageId;
+        if (gate.status === 'not_dispatched') return !!gate.reason;
+        return true;
+      },
+      {
+        message:
+          'dispatched requires BOTH dispatchedThreadId AND dispatchedMessageId; ' + 'not_dispatched requires reason.',
+      },
+    )
+    .optional()
+    .describe(
+      'Dispatch gate decision. Required when task references features outside your current scope. ' +
+        'If omitted and external F-IDs detected, task is created with dispatchGate.status="missing" and a warning is returned. ' +
+        'When status=dispatched, both dispatchedThreadId and dispatchedMessageId are required. ' +
+        'When status=not_dispatched, reason is required.',
+    ),
 };
 
 export const updateTaskInputSchema = {
   taskId: z.string().min(1).describe('The ID of the task to update'),
   status: z.enum(['todo', 'doing', 'blocked', 'done']).optional().describe('New task status'),
   why: z.string().max(1000).optional().describe('Optional note explaining the status change'),
+  // F193-E1 P1-4 fix: allow patching dispatchGate on existing tasks
+  dispatchGate: z
+    .object({
+      status: z.enum(['dispatched', 'not_dispatched']).describe('Dispatch gate resolution'),
+      dispatchedThreadId: z
+        .string()
+        .optional()
+        .describe('Thread ID you dispatched to (required when status=dispatched)'),
+      dispatchedMessageId: z
+        .string()
+        .optional()
+        .describe('Message ID of the cross-post (required when status=dispatched)'),
+      reason: z.string().optional().describe('Why you chose not to dispatch (required when status=not_dispatched)'),
+    })
+    .refine(
+      (gate) => {
+        if (gate.status === 'dispatched') return !!gate.dispatchedThreadId && !!gate.dispatchedMessageId;
+        if (gate.status === 'not_dispatched') return !!gate.reason;
+        return true;
+      },
+      {
+        message:
+          'dispatched requires BOTH dispatchedThreadId AND dispatchedMessageId; ' + 'not_dispatched requires reason.',
+      },
+    )
+    .optional()
+    .describe('Resolve a previously-missing dispatch gate on this task.'),
 };
 
 export const crossPostMessageInputSchema = {
   threadId: z.string().min(1).describe('Target thread ID to post into'),
   content: z.string().min(1).describe('The message content to post'),
+  targetCats: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      'Cat handles to route the cross-thread notification to (triggers their session in the target thread). ' +
+        'Required if content has no line-start @mention — server fail-closes when both routing credentials are missing (F193 AC-A4). ' +
+        'F193 KD-1 boundary: this is the routing list, NOT relay metadata. Agent-key callers do not inherit F052 sourceThreadId semantics.',
+    ),
   replyTo: z.string().optional().describe('Optional message ID to reply to'),
   clientMessageId: z
     .string()
@@ -375,7 +502,37 @@ export const listTasksInputSchema = {
     .describe('Optional task kind filter (work = manual tasks, pr_tracking = PR automation)'),
 };
 
-export async function handlePostMessage(input: {
+/**
+ * F193 AC-A4: Plausible line-start @mention detector for MCP-layer
+ * fail-closed. Mirrors the authoritative server parser at
+ * a2a-mentions.ts:86-114 (strip code fences, trimStart, strip markdown
+ * prefix, then `startsWith('@')`). Local copy to avoid cross-package
+ * dep — server-side parser remains authoritative; this is just an
+ * early-reject to (a) save an HTTP roundtrip and (b) cover the
+ * agent-key API-layer gap (where isCrossThread never fires).
+ */
+const LEADING_MARKDOWN_MENTION_PREFIX_RE = /^(?:(?:>\s*)|(?:[-*+]\s+)|(?:\d+[.)]\s+))+/;
+
+function hasPlausibleLineStartMention(content: string): boolean {
+  // Strip fenced code blocks first — same as server parser.
+  const stripped = content.replace(/```[\s\S]*?```/g, '');
+  for (const rawLine of stripped.split(/\r?\n/)) {
+    const leadingWs = rawLine.match(/^\s*/)?.[0].length ?? 0;
+    const normalized = rawLine.slice(leadingWs).replace(LEADING_MARKDOWN_MENTION_PREFIX_RE, '');
+    if (normalized.startsWith('@') && normalized.length > 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * F193: Internal post-message dispatcher (no KD-1 guard).
+ * Used by both handlePostMessage (with KD-1 guard prepended) and
+ * handleCrossPostMessage (cross-thread relay path, bypasses guard
+ * because cross_post_message is the legitimate cross-thread tool).
+ */
+async function _executePostMessage(input: {
   content: string;
   threadId?: string | undefined;
   replyTo?: string | undefined;
@@ -452,6 +609,42 @@ export async function handlePostMessage(input: {
   return result;
 }
 
+/**
+ * F193 AC-A2 / KD-1 enforcement at MCP handler layer.
+ * Invocation-token caller MUST omit threadId — F043 #316 防误投 contract.
+ * Cross-thread delivery only via cat_cafe_cross_post_message.
+ * Agent-key caller (F178) is exempt: they REQUIRE threadId since persistent
+ * agents have no default thread context.
+ *
+ * Principal detection MUST follow buildAuthHeaders precedence (line 122):
+ * if BOTH CAT_CAFE_INVOCATION_ID and CAT_CAFE_CALLBACK_TOKEN env vars are
+ * present, the request will be sent with x-invocation-id headers — regardless
+ * of whether the caller passed input.agentKeyCatId. The input field is a
+ * sidecar selector for shared Antigravity MCP, NOT an auth principal.
+ *
+ * Closing砚砚 review P1: previous guard `!input.agentKeyCatId` could be
+ * trivially bypassed by an invocation-token caller passing any agentKeyCatId
+ * value. The fix gates on the actual auth headers that will be sent.
+ */
+export async function handlePostMessage(input: {
+  content: string;
+  threadId?: string | undefined;
+  replyTo?: string | undefined;
+  clientMessageId?: string | undefined;
+  targetCats?: string[] | undefined;
+  agentKeyCatId?: string | undefined;
+}): Promise<ToolResult> {
+  const hasInvocationCreds = !!process.env.CAT_CAFE_INVOCATION_ID && !!process.env.CAT_CAFE_CALLBACK_TOKEN;
+  if (input.threadId && hasInvocationCreds) {
+    return errorResult(
+      'post_message rejects threadId from invocation-token callers (F193 KD-1). ' +
+        'For cross-thread delivery, use cat_cafe_cross_post_message(threadId, targetCats, content). ' +
+        'For same-thread delivery, omit threadId entirely (defaults to invocation thread).',
+    );
+  }
+  return _executePostMessage(input);
+}
+
 export async function handleGetPendingMentions(input: { includeAcked?: boolean | undefined }): Promise<ToolResult> {
   return callbackGet('/api/callbacks/pending-mentions', {
     ...(input.includeAcked ? { includeAcked: '1' } : {}),
@@ -467,6 +660,9 @@ export async function handleAckMentions(input: { upToMessageId: string }): Promi
 export async function handleGetThreadContext(input: {
   limit?: number | undefined;
   threadId?: string | undefined;
+  messageId?: string | undefined;
+  before?: number | undefined;
+  after?: number | undefined;
   catId?: string | undefined;
   keyword?: string | undefined;
   agentKeyCatId?: string | undefined;
@@ -476,8 +672,27 @@ export async function handleGetThreadContext(input: {
     {
       ...(input.limit ? { limit: String(input.limit) } : {}),
       ...(input.threadId ? { threadId: input.threadId } : {}),
+      ...(input.messageId ? { messageId: input.messageId } : {}),
+      ...(input.before !== undefined ? { before: String(input.before) } : {}),
+      ...(input.after !== undefined ? { after: String(input.after) } : {}),
       ...(input.catId ? { catId: input.catId } : {}),
       ...(input.keyword ? { keyword: input.keyword } : {}),
+    },
+    { agentKeyCatId: input.agentKeyCatId },
+  );
+}
+
+/** #699: Look up a single message by ID with optional surrounding context. */
+export async function handleGetMessage(input: {
+  messageId: string;
+  contextCount?: number | undefined;
+  agentKeyCatId?: string | undefined;
+}): Promise<ToolResult> {
+  return callbackGet(
+    '/api/callbacks/get-message',
+    {
+      messageId: input.messageId,
+      ...(input.contextCount ? { contextCount: String(input.contextCount) } : {}),
     },
     { agentKeyCatId: input.agentKeyCatId },
   );
@@ -500,22 +715,90 @@ export async function handleListThreads(input: {
   );
 }
 
+export async function handleListLabels(input: {
+  limit?: number | undefined;
+  agentKeyCatId?: string | undefined;
+}): Promise<ToolResult> {
+  return callbackGet(
+    '/api/callbacks/list-labels',
+    {
+      ...(input.limit ? { limit: String(input.limit) } : {}),
+    },
+    { agentKeyCatId: input.agentKeyCatId },
+  );
+}
+
 export async function handleFeatIndex(input: {
   limit?: number | undefined;
   featId?: string | undefined;
   query?: string | undefined;
 }): Promise<ToolResult> {
-  return callbackGet('/api/callbacks/feat-index', {
+  const result = await callbackGet('/api/callbacks/feat-index', {
     ...(input.limit ? { limit: String(input.limit) } : {}),
     ...(input.featId ? { featId: input.featId } : {}),
     ...(input.query ? { query: input.query } : {}),
   });
+  if (result.isError) return result;
+  return successResult(formatFeatIndexResponse(result.content[0]?.text ?? '{}'));
+}
+
+interface FeatIndexItem {
+  featId?: string;
+  name?: string;
+  status?: string;
+  owner?: string;
+  ownerCatId?: string;
+  keyDecisions?: string[];
+  threadIds?: string[];
+  suggestedAction?: SuggestedCrossPostAction;
+}
+
+function formatFeatIndexResponse(raw: string): string {
+  let parsed: { items?: FeatIndexItem[] };
+  try {
+    parsed = JSON.parse(raw) as { items?: FeatIndexItem[] };
+  } catch {
+    return raw;
+  }
+
+  const items = Array.isArray(parsed.items) ? parsed.items : [];
+  if (items.length === 0) return 'feat_index results (0)';
+
+  const lines = [`feat_index results (${items.length})`];
+  items.forEach((item, index) => {
+    const title = `${item.featId ?? 'unknown'} — ${item.name ?? '(unnamed)'}`;
+    lines.push(`${index + 1}. ${title}${item.status ? ` [${item.status}]` : ''}`);
+    if (item.owner) {
+      lines.push(`   owner: ${item.owner}${item.ownerCatId ? ` (${item.ownerCatId})` : ''}`);
+    }
+    if (item.keyDecisions?.length) {
+      lines.push('   key decisions:');
+      item.keyDecisions.forEach((decision) => {
+        lines.push(`   - ${decision}`);
+      });
+    }
+    if (item.threadIds?.length) {
+      lines.push(`   threads: ${item.threadIds.join(', ')}`);
+    }
+    const action = item.suggestedAction;
+    if (action?.type === 'cross_post') {
+      lines.push(...formatSuggestedCrossPostActionLines(action, { indent: '   ', detailIndent: '   ' }));
+    }
+  });
+
+  return lines.join('\n');
 }
 
 export async function handleUpdateTask(input: {
   taskId: string;
   status?: string | undefined;
   why?: string | undefined;
+  dispatchGate?: {
+    status: 'dispatched' | 'not_dispatched';
+    dispatchedThreadId?: string;
+    dispatchedMessageId?: string;
+    reason?: string;
+  };
 }): Promise<ToolResult> {
   // F174 Phase E (AC-E2/E5): explicit kind:'none'. Task state lives in Redis;
   // local fallback would diverge from server truth. Surface `[degrade]` hint.
@@ -526,6 +809,8 @@ export async function handleUpdateTask(input: {
         taskId: input.taskId,
         ...(input.status ? { status: input.status } : {}),
         ...(input.why ? { why: input.why } : {}),
+        // F193-E1 P1-4: allow patching dispatchGate on existing tasks
+        ...(input.dispatchGate ? { dispatchGate: { ...input.dispatchGate, decidedAt: Date.now() } } : {}),
       }),
     policy: { kind: 'none' },
   });
@@ -535,27 +820,117 @@ export async function handleCreateTask(input: {
   title: string;
   why?: string | undefined;
   ownerCatId?: string | undefined;
+  relatedFeatureId?: string | undefined;
+  currentFeatureId?: string | undefined;
+  dispatchGate?: {
+    status: 'dispatched' | 'not_dispatched';
+    dispatchedThreadId?: string;
+    dispatchedMessageId?: string;
+    reason?: string;
+  };
 }): Promise<ToolResult> {
-  return callbackPost('/api/callbacks/create-task', {
+  // F193-E1: dispatch gate logic
+  const textForExtraction = `${input.title} ${input.why ?? ''}`;
+  const detectedFIds = extractFeatureIds(textForExtraction);
+  const allFIds = input.relatedFeatureId ? [...new Set([input.relatedFeatureId, ...detectedFIds])] : detectedFIds;
+  const externalFIds = input.currentFeatureId ? allFIds.filter((f) => f !== input.currentFeatureId) : allFIds; // no currentFeatureId → all detected F-IDs are potentially external
+
+  // Compute persisted dispatch gate state
+  let computedGate: DispatchGateState | undefined;
+  if (externalFIds.length > 0) {
+    if (input.dispatchGate) {
+      computedGate = {
+        status: input.dispatchGate.status,
+        ...(input.dispatchGate.dispatchedThreadId ? { dispatchedThreadId: input.dispatchGate.dispatchedThreadId } : {}),
+        ...(input.dispatchGate.dispatchedMessageId
+          ? { dispatchedMessageId: input.dispatchGate.dispatchedMessageId }
+          : {}),
+        ...(input.dispatchGate.reason ? { reason: input.dispatchGate.reason } : {}),
+        decidedAt: Date.now(),
+      };
+    } else {
+      // Gate missing — persist status:'missing' so list_tasks can highlight later
+      computedGate = {
+        status: 'missing',
+        suggestedAction: {
+          type: 'cross_post',
+          featureId: externalFIds[0],
+          reason: `Task references ${externalFIds.join(', ')} — consider cross_posting to the owning thread.`,
+          source: 'dispatch_gate',
+        },
+      };
+    }
+  }
+
+  const result = await callbackPost('/api/callbacks/create-task', {
     title: input.title,
     ...(input.why ? { why: input.why } : {}),
     ...(input.ownerCatId ? { ownerCatId: input.ownerCatId } : {}),
+    ...(input.relatedFeatureId ? { relatedFeatureId: input.relatedFeatureId } : {}),
+    ...(detectedFIds.length > 0 ? { detectedFeatureIds: detectedFIds } : {}),
+    ...(computedGate ? { dispatchGate: computedGate } : {}),
   });
+
+  // Append dispatch gate warning to successful result
+  if (computedGate?.status === 'missing' && !result.isError) {
+    const warningText =
+      `\n\n⚠️ DISPATCH GATE: This task references ${externalFIds.join(', ')} ` +
+      `but no dispatch decision was provided. Did you cross_post_message to the ` +
+      `${externalFIds[0]} thread? If so, call update_task with dispatchGate: ` +
+      `{ status: "dispatched", dispatchedThreadId: "<threadId>", dispatchedMessageId: "<msgId>" }. ` +
+      `If not, consider dispatching — the info may be stuck in your thread's local TODO.`;
+    const existingText = result.content[0]?.text ?? '';
+    return { content: [{ type: 'text', text: existingText + warningText }] };
+  }
+
+  return result;
 }
 
 export async function handleCrossPostMessage(input: {
   threadId: string;
   content: string;
+  targetCats?: string[] | undefined;
   replyTo?: string | undefined;
   clientMessageId?: string | undefined;
   agentKeyCatId?: string | undefined;
 }): Promise<ToolResult> {
-  return handlePostMessage({
+  // F193 AC-A4 closing砚砚 review P1: MCP layer fail-closed.
+  // The API route layer (callbacks.ts) only triggers AC-A4 reject when
+  // isCrossThread === true (effectiveThreadId !== actor.threadId), which is
+  // false for agent-key callers (target-thread write, no source thread).
+  // So MUST close routing-creds gate at MCP layer too — covers ALL callers
+  // (invocation-token + agent-key) before any HTTP dispatch.
+  const hasTargetCats = !!input.targetCats?.length;
+  // Line-start @ detection MUST mirror the authoritative server parser
+  // (a2a-mentions.ts:107-113): strip code fences, then for each line,
+  // trim leading whitespace + strip markdown prefix (`- ` / `> ` / `* ` /
+  // `1. ` etc.) and check if it starts with '@'. Closing 砚砚 review round 2
+  // P1: a naive /^@\w/m would (a) reject markdown-prefixed routing
+  // (`- @codex` / `> @codex`) — which the server parser and SystemPromptBuilder
+  // both treat as legitimate — and (b) reject non-ASCII handles like `@缅因猫`
+  // (\w only matches [a-zA-Z0-9_]). Server-side analyzeA2AMentions remains
+  // the authoritative parser — this is just an early reject for client
+  // ergonomics + closing the agent-key API-layer gap.
+  const hasLineStartMention = hasPlausibleLineStartMention(input.content);
+  if (!hasTargetCats && !hasLineStartMention) {
+    return errorResult(
+      'cross_post_message requires routing credentials (F193 AC-A4). ' +
+        'Pass targetCats: ["catHandle"] OR add a line-start @catHandle in content. ' +
+        'Without routing, the cross-thread message would land in the target thread but trigger no cat session.',
+    );
+  }
+  // cross_post_message is the legitimate cross-thread tool — bypass
+  // handlePostMessage's KD-1 guard (which is meant to redirect invocation-token
+  // callers AWAY from threadId on post_message). Reuse the same delivery
+  // primitive via _executePostMessage to share stale_ignored detection,
+  // outbox, and degradation hints.
+  return _executePostMessage({
     threadId: input.threadId,
     content: input.content,
     ...(input.replyTo ? { replyTo: input.replyTo } : {}),
     ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}),
     ...(input.agentKeyCatId ? { agentKeyCatId: input.agentKeyCatId } : {}),
+    ...(input.targetCats?.length ? { targetCats: input.targetCats } : {}),
   });
 }
 
@@ -579,6 +954,12 @@ export const createRichBlockInputSchema = {
     .string()
     .min(1)
     .describe('JSON string of the rich block object. Must include id, kind, v:1, and kind-specific fields.'),
+  threadId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Target thread ID. Required for agent-key auth because persistent MCP has no invocation thread.'),
+  agentKeyCatId: agentKeyCatIdSchema,
 };
 
 /**
@@ -590,7 +971,11 @@ export const createRichBlockInputSchema = {
  * legacy 403 / "not configured" path predates Phase A typed reasons and
  * stays inline (preserves pre-Phase-A behavior, marks DEGRADED:true).
  */
-export async function handleCreateRichBlock(input: { block: string }): Promise<ToolResult> {
+export async function handleCreateRichBlock(input: {
+  block: string;
+  threadId?: string | undefined;
+  agentKeyCatId?: string | undefined;
+}): Promise<ToolResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(input.block);
@@ -604,13 +989,24 @@ export async function handleCreateRichBlock(input: { block: string }): Promise<T
   if (!parsed || typeof parsed !== 'object' || !('id' in parsed) || !('kind' in parsed)) {
     return errorResult('Block must include id and kind fields');
   }
+  if (!isValidRichBlock(parsed)) {
+    return errorResult('Invalid rich block: block does not match required fields for its kind');
+  }
   const block = parsed;
+  const hasInvocationCreds = !!process.env.CAT_CAFE_INVOCATION_ID && !!process.env.CAT_CAFE_CALLBACK_TOKEN;
+  const hasAgentKeyCreds = !!(
+    process.env.CAT_CAFE_AGENT_KEY_SECRET ||
+    process.env.CAT_CAFE_AGENT_KEY_FILE ||
+    process.env.CAT_CAFE_AGENT_KEY_FILES
+  );
 
   const ccRichText = `\`\`\`cc_rich\n${JSON.stringify({ v: 1, blocks: [block] })}\n\`\`\``;
-  const runRouteB = async (): Promise<ToolResult> => {
+  const runRouteB = async (meta: { route: string; degraded: boolean }): Promise<ToolResult> => {
     const fallback = await handlePostMessage({
       content: ccRichText,
+      ...(input.threadId ? { threadId: input.threadId } : {}),
       clientMessageId: randomUUID(),
+      agentKeyCatId: input.agentKeyCatId,
     });
     if (!fallback.isError) {
       // Cloud Codex P2 (PR #1384): legacy 403/not-configured branch returns
@@ -619,12 +1015,25 @@ export async function handleCreateRichBlock(input: { block: string }): Promise<T
       // (legacy + framework custom degrade) get consistent telemetry. The
       // framework's markDegraded is idempotent so re-tagging on the custom
       // path is harmless.
-      return successResult(JSON.stringify({ status: 'ok', route: 'B_fallback', DEGRADED: true }));
+      return successResult(
+        JSON.stringify({
+          status: 'ok',
+          route: meta.route,
+          ...(meta.degraded ? { DEGRADED: true } : {}),
+        }),
+      );
     }
     return errorResult(
       `Rich block creation failed (callback token expired or missing). As a workaround, include this in your message text:\n\n${ccRichText}`,
     );
   };
+
+  if (!hasInvocationCreds && hasAgentKeyCreds) {
+    if (!input.threadId) {
+      return errorResult('threadId is required for create_rich_block when using agent-key auth.');
+    }
+    return runRouteB({ route: 'B_agent_key', degraded: false });
+  }
 
   // Phase E: framework handles primary call + auth-degradable fallback.
   // For the legacy 403/not-configured path (pre-Phase-A), inspect the
@@ -634,14 +1043,18 @@ export async function handleCreateRichBlock(input: { block: string }): Promise<T
   return withDegradation({
     toolName: 'create_rich_block',
     primary: async () => {
-      const result = await callbackPost('/api/callbacks/create-rich-block', { block }, { enableOutbox: true });
+      const result = await callbackPost(
+        '/api/callbacks/create-rich-block',
+        { block, ...(input.threadId ? { threadId: input.threadId } : {}) },
+        { enableOutbox: true, agentKeyCatId: input.agentKeyCatId },
+      );
       if (!result.isError) return result;
       const errorText = result.content[0]?.type === 'text' ? result.content[0].text : '';
       const isLegacyConfigFailure = /\(403\)/.test(errorText) || /not configured/i.test(errorText);
-      if (isLegacyConfigFailure) return runRouteB(); // legacy compat path returns success directly
+      if (isLegacyConfigFailure) return runRouteB({ route: 'B_fallback', degraded: true }); // legacy compat path returns success directly
       return result; // framework continues with auth-reason inspection
     },
-    policy: { kind: 'custom', degrade: async () => runRouteB() },
+    policy: { kind: 'custom', degrade: async () => runRouteB({ route: 'B_fallback', degraded: true }) },
   });
 }
 
@@ -708,16 +1121,35 @@ export async function handleCheckPermissionStatus(input: { requestId: string }):
 export const registerPrTrackingInputSchema = {
   repoFullName: z.string().min(1).describe('Repository full name in owner/repo format (e.g. "zts212653/cat-cafe")'),
   prNumber: z.number().int().positive().describe('PR number'),
+  // F202 Phase 2C (AC-C1): tracking instructions appended to trigger messages
+  instructions: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe(
+      'Tracking instructions — appended to trigger messages when review/CI events fire. Task preference, not system override.',
+    ),
   catId: z
     .string()
     .optional()
     .describe('Deprecated — server auto-resolves from invocation identity. Ignored if provided.'),
+  intent: z
+    .enum(['review', 'merge'])
+    .optional()
+    .describe(
+      "Wake intent for this PR. 'review' (default) = you're waiting on review feedback → CI-pass " +
+        "stays silent (you'll see it when you look). 'merge' = you're waiting on CI-green to merge " +
+        '(your approved PR / an outbound PR / owner-merging someone else’s PR) → CI-pass wakes you. ' +
+        'Re-call this tool to flip the intent (e.g. switch to "merge" once review is approved).',
+    ),
 };
 
 export async function handleRegisterPrTracking(input: {
   repoFullName: string;
   prNumber: number;
+  instructions?: string;
   catId?: string;
+  intent?: 'review' | 'merge';
 }): Promise<ToolResult> {
   // F174 Phase E (AC-E2/E5): explicit kind:'none'. PR tracking is one-shot
   // registration, no useful local fallback. Surface `[degrade]` hint.
@@ -727,7 +1159,56 @@ export async function handleRegisterPrTracking(input: {
       callbackPost('/api/callbacks/register-pr-tracking', {
         repoFullName: input.repoFullName,
         prNumber: input.prNumber,
+        ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
         ...(input.catId ? { catId: input.catId } : {}),
+        ...(input.intent ? { intent: input.intent } : {}),
+      }),
+    policy: { kind: 'none' },
+  });
+}
+
+// F202 Phase 2D (AC-D3): Register issue tracking
+export const registerIssueTrackingInputSchema = {
+  repoFullName: z.string().min(1).describe('Repository full name in owner/repo format (e.g. "zts212653/cat-cafe")'),
+  issueNumber: z.number().int().positive().describe('Issue number'),
+  instructions: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe('Tracking instructions — appended to trigger messages when issue comment events fire.'),
+};
+
+export async function handleRegisterIssueTracking(input: {
+  repoFullName: string;
+  issueNumber: number;
+  instructions?: string;
+}): Promise<ToolResult> {
+  return withDegradation({
+    toolName: 'register_issue_tracking',
+    primary: () =>
+      callbackPost('/api/callbacks/register-issue-tracking', {
+        repoFullName: input.repoFullName,
+        issueNumber: input.issueNumber,
+        ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
+      }),
+    policy: { kind: 'none' },
+  });
+}
+
+// F202 Phase 2C (AC-C3): Unregister tracking task by subjectKey
+export const unregisterTrackingInputSchema = {
+  subjectKey: z
+    .string()
+    .min(1)
+    .describe('Subject key to unregister. Format: "pr:{owner/repo}#{num}" or "issue:{owner/repo}#{num}"'),
+};
+
+export async function handleUnregisterTracking(input: { subjectKey: string }): Promise<ToolResult> {
+  return withDegradation({
+    toolName: 'unregister_tracking',
+    primary: () =>
+      callbackPost('/api/callbacks/unregister-tracking', {
+        subjectKey: input.subjectKey,
       }),
     policy: { kind: 'none' },
   });
@@ -736,10 +1217,11 @@ export async function handleRegisterPrTracking(input: {
 export const updateWorkflowInputSchema = {
   backlogItemId: z.string().min(1).describe('The backlog item ID to update workflow SOP for'),
   featureId: z.string().min(1).describe('Feature ID (e.g. "F073")'),
-  stage: z
-    .enum(['kickoff', 'impl', 'quality_gate', 'review', 'merge', 'completion'])
+  sopDefinitionId: z
+    .enum(SOP_DEFINITION_IDS)
     .optional()
-    .describe('Current SOP stage'),
+    .describe('SOP definition id. Defaults to "development" for existing workflows.'),
+  stage: z.enum(DEVELOPMENT_SOP_STAGE_IDS).optional().describe('Current SOP stage'),
   batonHolder: z
     .string()
     .min(1)
@@ -777,6 +1259,7 @@ export const updateWorkflowInputSchema = {
 export async function handleUpdateWorkflow(input: {
   backlogItemId: string;
   featureId: string;
+  sopDefinitionId?: string | undefined;
   stage?: string | undefined;
   batonHolder?: string | undefined;
   nextSkill?: string | null | undefined;
@@ -795,12 +1278,13 @@ export async function handleUpdateWorkflow(input: {
     backlogItemId: input.backlogItemId,
     featureId: input.featureId,
   };
-  if (input.stage !== undefined) body['stage'] = input.stage;
-  if (input.batonHolder !== undefined) body['batonHolder'] = input.batonHolder;
-  if (input.nextSkill !== undefined) body['nextSkill'] = input.nextSkill;
-  if (input.resumeCapsule !== undefined) body['resumeCapsule'] = input.resumeCapsule;
-  if (input.checks !== undefined) body['checks'] = input.checks;
-  if (input.expectedVersion !== undefined) body['expectedVersion'] = input.expectedVersion;
+  if (input.sopDefinitionId !== undefined) body.sopDefinitionId = input.sopDefinitionId;
+  if (input.stage !== undefined) body.stage = input.stage;
+  if (input.batonHolder !== undefined) body.batonHolder = input.batonHolder;
+  if (input.nextSkill !== undefined) body.nextSkill = input.nextSkill;
+  if (input.resumeCapsule !== undefined) body.resumeCapsule = input.resumeCapsule;
+  if (input.checks !== undefined) body.checks = input.checks;
+  if (input.expectedVersion !== undefined) body.expectedVersion = input.expectedVersion;
   return callbackPost('/api/callbacks/update-workflow-sop', body);
 }
 
@@ -968,13 +1452,13 @@ export async function handleUpdateBootcampState(input: {
   completedAt?: number | undefined;
 }): Promise<ToolResult> {
   const body: Record<string, unknown> = { threadId: input.threadId };
-  if (input.phase !== undefined) body['phase'] = input.phase;
-  if (input.leadCat !== undefined) body['leadCat'] = input.leadCat;
-  if (input.selectedTaskId !== undefined) body['selectedTaskId'] = input.selectedTaskId;
-  if (input.envCheck !== undefined) body['envCheck'] = input.envCheck;
-  if (input.advancedFeatures !== undefined) body['advancedFeatures'] = input.advancedFeatures;
-  if (input.guideStep !== undefined) body['guideStep'] = input.guideStep;
-  if (input.completedAt !== undefined) body['completedAt'] = input.completedAt;
+  if (input.phase !== undefined) body.phase = input.phase;
+  if (input.leadCat !== undefined) body.leadCat = input.leadCat;
+  if (input.selectedTaskId !== undefined) body.selectedTaskId = input.selectedTaskId;
+  if (input.envCheck !== undefined) body.envCheck = input.envCheck;
+  if (input.advancedFeatures !== undefined) body.advancedFeatures = input.advancedFeatures;
+  if (input.guideStep !== undefined) body.guideStep = input.guideStep;
+  if (input.completedAt !== undefined) body.completedAt = input.completedAt;
   return callbackPost('/api/callbacks/update-bootcamp-state', body);
 }
 
@@ -984,6 +1468,157 @@ export const bootcampEnvCheckInputSchema = {
 
 export async function handleBootcampEnvCheck(input: { threadId: string }): Promise<ToolResult> {
   return callbackPost('/api/callbacks/bootcamp-env-check', { threadId: input.threadId });
+}
+
+// ============ Propose Thread (F128) ============
+
+export const proposeThreadInputSchema = {
+  title: z.string().min(1).max(200).describe('Title for the proposed thread (user can edit before approving)'),
+  reason: z.string().min(1).max(1000).describe('Why a new thread is needed (shown to the user on the proposal card)'),
+  preferredCats: z
+    .array(z.string().min(1))
+    .max(10)
+    .optional()
+    .describe('Optional cat IDs to preselect for the new thread (e.g. ["codex","gemini"])'),
+  initialMessage: z
+    .string()
+    .max(4000)
+    .optional()
+    .describe(
+      'Optional first message body posted as the source cat (AC-AA4 source attribution) into the new thread on approve. Server injects routing credentials (threadId + @handle) into the header so downstream cats can cross-post back.',
+    ),
+  reportingMode: z
+    .enum(['none', 'final-only', 'state-transitions', 'blocking-ack'])
+    .optional()
+    .describe(
+      'Optional F128 reporting contract for the sub-thread (AC-AA1: default is final-only). final-only (default): report a summary once on completion via cross_post with routing credentials. none (autonomous): downstream self-governs, no required report-back (only escalate CVO/blocker/irreversible/cross-feature conflict per house rules). state-transitions: report at each phase boundary. blocking-ack: wait for source-thread ack at each blocker. Triage/dispatch → none; fork-and-return needing a summary → final-only.',
+    ),
+  parentThreadId: z.string().min(1).optional().describe('Optional parent thread ID. Defaults to the current thread.'),
+  projectPath: z
+    .string()
+    .min(1)
+    .max(500)
+    .optional()
+    .describe(
+      'Optional absolute project directory the child thread belongs to (e.g. "/home/user/clowder-ai"). This decides the working directory cats use when invoked in the new thread. Omit to inherit THIS thread\'s project; if THIS thread is default/未分类/eval/lobby and the child will do repo or implementation work, set projectPath explicitly. Invalid/non-existent paths are rejected (400), never silently defaulted. The user can also change it on the approval card.',
+    ),
+  clientRequestId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Optional idempotency key. Resending with the same value returns the same proposalId.'),
+};
+
+export async function handleProposeThread(input: {
+  title: string;
+  reason: string;
+  preferredCats?: string[] | undefined;
+  initialMessage?: string | undefined;
+  reportingMode?: 'none' | 'final-only' | 'state-transitions' | 'blocking-ack' | undefined;
+  parentThreadId?: string | undefined;
+  projectPath?: string | undefined;
+  clientRequestId?: string | undefined;
+}): Promise<ToolResult> {
+  // P2-1: always send an idempotency key — auto-generate when the caller didn't supply one,
+  // so transient network retries from callbackPost never produce duplicate proposals.
+  const body: Record<string, unknown> = {
+    title: input.title,
+    reason: input.reason,
+    clientRequestId: input.clientRequestId ?? randomUUID(),
+  };
+  if (input.preferredCats?.length) body.preferredCats = input.preferredCats;
+  if (input.initialMessage) body.initialMessage = input.initialMessage;
+  if (input.reportingMode) body.reportingMode = input.reportingMode;
+  if (input.parentThreadId) body.parentThreadId = input.parentThreadId;
+  if (input.projectPath) body.projectPath = input.projectPath;
+
+  const result = await callbackPost('/api/callbacks/propose-thread', body);
+  if (!result.isError) {
+    try {
+      const data = JSON.parse((result.content[0] as { text: string }).text);
+      if (data?.status === 'stale_ignored') {
+        return errorResult(
+          'Proposal was NOT created: this invocation has been superseded by a newer one (stale_ignored).',
+        );
+      }
+    } catch {
+      // parse failure is fine
+    }
+  }
+  return result;
+}
+
+// ============ F225: Cat-Initiated Session Handoff ============
+
+export const proposeSessionHandoffInputSchema = {
+  done: z
+    .string()
+    .min(1)
+    .max(2000)
+    .describe('五件套·已完成：这个 session 你做完了什么（让续接的你一眼看清进展，别重新摸索）'),
+  nextSteps: z.string().min(1).max(2000).describe('五件套·下一步：续接的你从哪里继续、第一步具体做什么'),
+  worktreeBranch: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('五件套·worktree/分支（可选）：当前工作的 worktree 路径或分支名'),
+  commits: z
+    .array(z.string().min(1).max(100))
+    .max(50)
+    .optional()
+    .describe('五件套·commits（可选）：相关 commit SHA 列表'),
+  gotchas: z
+    .string()
+    .max(2000)
+    .optional()
+    .describe('五件套·坑/注意（可选）：续接的你最容易踩的坑、不可逆点、待验证假设'),
+  clientRequestId: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Optional idempotency key. Resending with the same value returns the same proposalId.'),
+};
+
+export async function handleProposeSessionHandoff(input: {
+  done: string;
+  nextSteps: string;
+  worktreeBranch?: string | undefined;
+  commits?: string[] | undefined;
+  gotchas?: string | undefined;
+  clientRequestId?: string | undefined;
+}): Promise<ToolResult> {
+  // P2 (云端): always send an idempotency key — auto-generate when the caller didn't supply one —
+  // so callbackPost transport retries (408/429/5xx) resolve back to the original proposal instead of
+  // tripping the A4 ≤1-pending gate and misreporting "NOT created" (mirrors F128 handleProposeThread).
+  const body: Record<string, unknown> = {
+    done: input.done,
+    nextSteps: input.nextSteps,
+    clientRequestId: input.clientRequestId ?? randomUUID(),
+  };
+  if (input.worktreeBranch) body.worktreeBranch = input.worktreeBranch;
+  if (input.commits?.length) body.commits = input.commits;
+  if (input.gotchas) body.gotchas = input.gotchas;
+
+  const result = await callbackPost('/api/callbacks/propose-session-handoff', body);
+  if (!result.isError) {
+    try {
+      const data = JSON.parse((result.content[0] as { text: string }).text);
+      if (data?.status === 'stale_ignored') {
+        return errorResult(
+          'Handoff proposal NOT created: this invocation was superseded by a newer one (stale_ignored).',
+        );
+      }
+      if (data?.status === 'rejected') {
+        // A4 gate / no-active-session — surface the reason so the cat reacts instead of retry-spamming.
+        return errorResult(`Handoff proposal NOT created (${data.reason}): ${data.message ?? ''}`);
+      }
+    } catch {
+      // parse failure is fine
+    }
+  }
+  return result;
 }
 
 // ============ Thread Cats Discovery ============
@@ -1014,7 +1649,7 @@ export async function handleUpdateGuideState(input: {
   currentStep?: number | undefined;
 }): Promise<ToolResult> {
   const body: Record<string, unknown> = { threadId: input.threadId, guideId: input.guideId, status: input.status };
-  if (input.currentStep !== undefined) body['currentStep'] = input.currentStep;
+  if (input.currentStep !== undefined) body.currentStep = input.currentStep;
   return callbackPost('/api/callbacks/update-guide-state', body);
 }
 
@@ -1028,9 +1663,9 @@ export async function handleGetAvailableGuides(): Promise<ToolResult> {
   return callbackPost('/api/callbacks/get-available-guides', {});
 }
 
-export async function handleGuideResolve(input: { intent: string }): Promise<ToolResult> {
-  return callbackPost('/api/callbacks/guide-resolve', { intent: input.intent });
-}
+// F193 Phase D AC-D2: handleGuideResolve removed — legacy alias replaced
+// by cat_cafe_get_available_guides, which lets the cat inspect catalog
+// metadata directly instead of guessing from a single intent string.
 
 export async function handleGuideControl(input: { action: string }): Promise<ToolResult> {
   return callbackPost('/api/callbacks/guide-control', { action: input.action });
@@ -1090,6 +1725,26 @@ export const callbackTools = [
   },
   // D15: cat_cafe_search_messages removed — superseded by search_evidence + get_thread_context
   {
+    name: 'cat_cafe_get_message',
+    description:
+      'Look up a single message by its messageId. Use when you receive a message with replyTo — ' +
+      'call this to read the original quoted message and its surrounding context. ' +
+      'Returns the message content, sender, timestamp, and optionally N nearby messages for context. ' +
+      'PARAM GUIDE: messageId = required exact ID. contextCount = number of messages before/after to include (default 0, max 10).',
+    inputSchema: {
+      messageId: z.string().min(1).describe('The exact message ID to look up'),
+      contextCount: z
+        .number()
+        .int()
+        .min(0)
+        .max(10)
+        .optional()
+        .describe('Number of messages before and after to include for context (0-10, default 0)'),
+      agentKeyCatId: agentKeyCatIdSchema,
+    },
+    handler: handleGetMessage,
+  },
+  {
     name: 'cat_cafe_get_thread_cats',
     description:
       'Discover which cats are in the current thread: participants (with activity stats), routable cats, and availability. ' +
@@ -1108,6 +1763,14 @@ export const callbackTools = [
     handler: handleListThreads,
   },
   {
+    name: 'cat_cafe_list_labels',
+    description:
+      'List user-defined thread labels (id, name, color). Use when you need to know which labels exist ' +
+      'before suggesting label assignments for threads. Returns all labels sorted by sortOrder.',
+    inputSchema: listLabelsInputSchema,
+    handler: handleListLabels,
+  },
+  {
     name: 'cat_cafe_feat_index',
     description:
       'Lookup feature index entries by featId or query. Returns featId, name, status, and linked threadIds. ' +
@@ -1123,7 +1786,10 @@ export const callbackTools = [
       'Use when you need to notify a different thread about something relevant. ' +
       'NOT for: posting to your own current thread (use post_message instead). ' +
       'Output: message appears in the target thread as a new message visible to all participants. ' +
-      'GOTCHA: Requires threadId — use list_threads or feat_index to find the right thread first.',
+      'ROUTING: You MUST include routing credentials to wake the target cat — either set `targetCats` array with the recipient catId(s), OR put a line-start `@handle` in content. ' +
+      'Messages without routing (no targetCats, no line-start @) will be REJECTED (F193 AC-A4). ' +
+      'GOTCHA: Requires threadId — use list_threads or feat_index to find the right thread first. ' +
+      'TIP: The sub-thread "## 主 Thread" header includes exact routing credentials (threadId + targetCats/handle) — copy them directly.',
     inputSchema: crossPostMessageInputSchema,
     handler: handleCrossPostMessage,
   },
@@ -1139,9 +1805,10 @@ export const callbackTools = [
   {
     name: 'cat_cafe_update_task',
     description:
-      'Update the status of a task you own. Use to mark tasks as doing/blocked/done. ' +
+      'Update a task you own: mark as doing/blocked/done, or resolve a missing dispatch gate. ' +
       'GOTCHA: You can only update tasks assigned to you (your catId). ' +
-      'TIP: Include a "why" note when marking as blocked — it helps others understand the situation.',
+      'TIP: Include a "why" note when marking as blocked — it helps others understand the situation. ' +
+      'F193-E1: Pass dispatchGate to resolve a "missing" dispatch gate (e.g. after cross_posting to the owning thread).',
     inputSchema: updateTaskInputSchema,
     handler: handleUpdateTask,
   },
@@ -1154,7 +1821,11 @@ export const callbackTools = [
       'NOT for: temporary execution steps (use PlanBoard/TodoWrite), NOT for inline checklists in a message (use create_rich_block with kind:"checklist"). ' +
       'Output: task appears in the thread 🧶 毛线球 panel, persists across sessions, visible to all cats and 铲屎官. ' +
       'GOTCHA: 毛线球 ≠ checklist rich block. 毛线球 lives in the task panel and survives session boundaries; checklist is ephemeral inline content in one message. ' +
-      'TIP: Include a "why" to give context to whoever picks up the task.',
+      'TIP: Include a "why" to give context to whoever picks up the task. ' +
+      'F193-E1 DISPATCH GATE: If your task references a feature (F-number) outside your current scope, ' +
+      'provide dispatchGate with status "dispatched" (you already cross_posted to the owning thread) ' +
+      'or "not_dispatched" (with reason). If you omit dispatchGate and external F-IDs are detected, ' +
+      'the task is created but a warning is returned reminding you to dispatch.',
     inputSchema: createTaskInputSchema,
     handler: handleCreateTask,
   },
@@ -1163,6 +1834,7 @@ export const callbackTools = [
     description:
       'Create a rich block (card, diff, checklist, media_gallery, audio, or interactive) attached to the current message. ' +
       'Use card for status/decisions, diff for code changes, checklist for inline todos, media_gallery for images, audio for voice, interactive for user selection/confirmation. ' +
+      'Use this for long structured replies/reports with lists, tables, code blocks, diffs, status fields, or multi-step checklists; F192 rich-messaging wakeup treats plain long Markdown with these signals and no rich block as a miss. ' +
       'NOT for: persistent task tracking across sessions (use create_task for 🧶 毛线球). NOT for: document generation/export (use generate_document). ' +
       'Output: block rendered inline in the current message. ' +
       'GOTCHA: The block JSON must use "kind" (NOT "type") and include "v": 1 and a unique "id". ' +
@@ -1204,12 +1876,33 @@ export const callbackTools = [
   {
     name: 'cat_cafe_register_pr_tracking',
     description:
-      'Register a PR for email review notification routing. Call right after `gh pr create` ' +
-      'so that cloud Codex review emails are automatically routed to your current thread. ' +
+      'Register a PR for review/CI/conflict notification routing. Call right after `gh pr create` ' +
+      'so that cloud review feedback, CI status, and merge conflicts route to your current thread. ' +
       'The server resolves threadId and catId from your invocation identity — you only need repoFullName and prNumber. ' +
+      "Pass intent='review' (default) when you're waiting on review — CI-pass stays silent; pass intent='merge' " +
+      '(or re-call to switch) when you’re waiting on CI-green to merge — then CI-pass wakes you. ' +
       'GOTCHA: Must be called in the same session that created the PR, while callback credentials are still valid.',
     inputSchema: registerPrTrackingInputSchema,
     handler: handleRegisterPrTracking,
+  },
+  {
+    name: 'cat_cafe_register_issue_tracking',
+    description:
+      'Register a GitHub issue for comment tracking. New comments on the issue are routed to your current thread. ' +
+      'Call after opening or referencing an issue you want to monitor. ' +
+      'The server resolves threadId and catId from your invocation identity. ' +
+      'GOTCHA: Must be called while callback credentials are still valid.',
+    inputSchema: registerIssueTrackingInputSchema,
+    handler: handleRegisterIssueTracking,
+  },
+  {
+    name: 'cat_cafe_unregister_tracking',
+    description:
+      'Unregister a PR or issue tracking task by subjectKey. Stops all automated notifications ' +
+      '(review feedback, CI/CD, conflict detection, issue comments) for this subject. ' +
+      'Format: "pr:{owner/repo}#{num}" or "issue:{owner/repo}#{num}".',
+    inputSchema: unregisterTrackingInputSchema,
+    handler: handleUnregisterTracking,
   },
   {
     name: 'cat_cafe_update_workflow',
@@ -1238,7 +1931,10 @@ export const callbackTools = [
     name: 'cat_cafe_start_vote',
     description:
       'Start a voting session in the current thread for collective decision-making ' +
-      '(e.g. "REST vs GraphQL?"). Voters receive notification and reply with [VOTE:option]. ' +
+      '(e.g. "REST vs GraphQL?"). ' +
+      'Use when a multi-cat discussion needs a bounded decision, tradeoff vote, or option ranking instead of another round of @ replies. ' +
+      'Output: vote prompt message is posted, voters are notified, and the vote result is summarized when all voters respond or timeout expires. ' +
+      'Voters receive notification and reply with [VOTE:option]. ' +
       'Auto-closes when all voters have voted or timeout expires (default 120s). ' +
       'GOTCHA: voters must be valid registered catIds (use get_thread_cats to discover them). Options need at least 2 choices.',
     inputSchema: startVoteInputSchema,
@@ -1264,6 +1960,37 @@ export const callbackTools = [
     inputSchema: bootcampEnvCheckInputSchema,
     handler: handleBootcampEnvCheck,
   },
+  // F128: Cat-initiated thread proposal (user approves before thread is created)
+  {
+    name: 'cat_cafe_propose_thread',
+    description:
+      'Propose a new thread to the user. Returns proposalId, NOT a threadId — the thread is only created after the user approves the proposal card. Use sparingly: ' +
+      'only when a clearly separable, long-running discussion genuinely deserves its own thread, or when the owner asks for "新开一个 thread". ' +
+      'Do NOT use to escape the current conversation, to split routine tasks, or proactively without an obvious need. ' +
+      'parentThreadId defaults to the current thread. After proposing, continue your current work — do not assume the thread exists until the user approves. ' +
+      'WRITING @-mentions in `initialMessage`: use the SAME stable handle you use in the current thread (e.g. `@砚砚`, `@opus46`, `@gemini`) — NOT the raw catId form like `@cat-rcs85pvn`. ' +
+      'Server normalizes known catIds to stable handles defensively, but always prefer the handle form so the proposal card reads naturally to the user. ' +
+      'preferredCats accepts catIds (returned by cat_cafe_get_thread_cats). DISPATCH MODEL: when the user approves, the server wakes ONLY the FIRST cat in preferredCats (the chain starter). Subsequent cats are woken by the chain-driven @-mentions cats write in their own replies. ORDER preferredCats EXACTLY as you want the chain to start (e.g. for 接龙/轮转, put the first 棒 cat first). ' +
+      'FORK-AND-RETURN pattern (thread-orchestration skill Step 5c): use `reportingMode` to set the report-back contract. Ask yourself: "做完后源 thread 是否需要结果回来？" — YES (most cases) → omit reportingMode or set `final-only` (default); NO, downstream self-governs → set `none`; need phase updates → `state-transitions`; need blocking ack → `blocking-ack`. Server auto-injects a "## 主 Thread" header with routing credentials (threadId + targetCats/handle) so the last cat knows exactly where and whom to cross-post to. ' +
+      'PROJECT OWNERSHIP: if the current/source thread is default/未分类/eval/lobby but the child will do repo or implementation work, pass `projectPath` explicitly. Omit only when the child should inherit the current project, or when it is intentionally meta/eval/unclassified. ' +
+      'INTENT — default vs #ideate: by default dispatch wakes only the first preferredCat (serial chain-starter). If you genuinely want PARALLEL independent ideation (everyone replies at once, no chain), tag the message with `#ideate`. With #ideate, dispatch wakes ALL preferredCats simultaneously.',
+    inputSchema: proposeThreadInputSchema,
+    handler: handleProposeThread,
+  },
+  // F225: Cat-initiated session handoff (user approves before the current session is sealed + continued)
+  {
+    name: 'cat_cafe_propose_session_handoff',
+    description:
+      'Propose handing off your CURRENT session to a fresh continuation of yourself, at a clean breakpoint. ' +
+      'Use when you just hit a natural seam — last commit landed, tests green, next step is clear — and context is getting heavy: ' +
+      'instead of letting compression silently lossy-summarize you mid-task, you proactively seal HERE and carry a high-fidelity handoff note to the next session. ' +
+      'Returns a proposalId, NOT a sealed session — the seal only happens after the owner approves the confirmation card (reject/expire = current session keeps running, nothing is sealed). ' +
+      'Write the 五件套 note for the FUTURE you (same thread, same cat, seq+1): done (what you finished) + nextSteps (where to resume) required; worktreeBranch / commits / gotchas optional. ' +
+      'The note is injected always-keep into the continuation bootstrap (visible even under the extractive/compress default), so the next you starts with full intent rather than a lossy digest. ' +
+      'Use sparingly — only at genuinely clean breakpoints, never to escape a hard task mid-flight. Orthogonal to compression: compress is the lossy fallback, handoff is the graceful relay.',
+    inputSchema: proposeSessionHandoffInputSchema,
+    handler: handleProposeSessionHandoff,
+  },
   // ============ F155: Guide Engine ============
   {
     name: 'cat_cafe_update_guide_state',
@@ -1288,17 +2015,9 @@ export const callbackTools = [
     inputSchema: getAvailableGuidesInputSchema,
     handler: handleGetAvailableGuides,
   },
-  {
-    name: 'cat_cafe_guide_resolve',
-    description:
-      'Legacy alias for guide discovery by explicit intent. ' +
-      'Use only when an older prompt or caller still sends a concrete intent string and expects ranked guide matches. ' +
-      'For new code and new prompts, prefer cat_cafe_get_available_guides and let the cat choose based on catalog metadata.',
-    inputSchema: {
-      intent: z.string().min(1).describe('User intent text (e.g. "添加成员", "配置飞书")'),
-    },
-    handler: handleGuideResolve,
-  },
+  // F193 Phase D AC-D2: cat_cafe_guide_resolve legacy alias removed.
+  // Replaced by cat_cafe_get_available_guides — let the cat inspect catalog
+  // metadata directly rather than guess from a single intent string.
   {
     name: 'cat_cafe_start_guide',
     description:
@@ -1334,6 +2053,7 @@ export const callbackTools = [
       'GOTCHA: max 3 holds per (thread, cat) within a rolling ~1h window — 4th call returns 429, you MUST pass (@ another cat or @co-creator). ' +
       'GOTCHA: the counter is process-local best-effort (in-memory on the API node); API restart or multi-instance deploys may reset it, so do not treat the 429 as a hard security boundary — treat it as a self-discipline guardrail. ' +
       'GOTCHA: hold is an EXCEPTION state, not a default exit. Most turns should end with @ someone, not hold. ' +
+      'GOTCHA (F167 Phase M): only hold for harness-INVISIBLE waits — external conditions nothing will call you back about (cloud review verdict, remote CI, external webhook). Background work the harness already tracks (a background Bash command, a spawned task) AUTO-RE-INVOKES you on completion; holding for that just stacks a redundant wake on top. Ask "will something call me back already?" — if yes, do NOT hold. ' +
       'GOTCHA: SINGLE-SLOT per (thread, cat) — calling hold_ball again while a previous hold is pending REPLACES the prior wake (prior taskId cancelled). This is intentional (KD-23): hold = "持一个球" exception, not a queue. If you need to track multiple waiting conditions, merge them into one nextStep (e.g. "等 CI + @co-creator 确认" 合并成一句). Rolling-window counter still ticks per call.',
     inputSchema: {
       reason: z.string().min(1).max(500).describe('Why you need to hold the ball (e.g. "tests still running")'),

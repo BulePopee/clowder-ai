@@ -41,6 +41,15 @@ describe('classifyStep: native tool types via shape-based fallback', () => {
     assert.equal(classifyStep(step), 'tool_pending');
   });
 
+  test('F211-REG13: GREP_SEARCH with metadata.toolCall → tool_pending', () => {
+    const step = {
+      type: 'CORTEX_STEP_TYPE_GREP_SEARCH',
+      status: 'CORTEX_STEP_STATUS_WAITING',
+      metadata: { toolCall: { name: 'grep_search', argumentsJson: '{"Query":"foo"}' } },
+    };
+    assert.equal(classifyStep(step), 'tool_pending');
+  });
+
   test('FILE_EDIT with toolResult success → tool_pending', () => {
     const step = {
       type: 'CORTEX_STEP_TYPE_FILE_EDIT',
@@ -62,6 +71,15 @@ describe('classifyStep: native tool types via shape-based fallback', () => {
   test('unknown type without toolCall/toolResult → unknown_activity', () => {
     const step = { type: 'CORTEX_STEP_TYPE_JETSKI_ACTION', status: 'IN_PROGRESS' };
     assert.equal(classifyStep(step), 'unknown_activity');
+  });
+
+  test('CODE_ACTION → tool_pending instead of unknown_activity', () => {
+    const step = {
+      type: 'CORTEX_STEP_TYPE_CODE_ACTION',
+      status: 'CORTEX_STEP_STATUS_DONE',
+      metadata: { operation: 'write', path: 'docs/example.md' },
+    };
+    assert.equal(classifyStep(step), 'tool_pending');
   });
 });
 
@@ -85,6 +103,78 @@ describe('transformer: USER_INPUT and empty PLANNER_RESPONSE emit nothing', () =
     const msgs = transformTrajectorySteps(steps, catId, metadata);
     assert.equal(msgs.length, 0, 'unknown step without data should not leak JSON');
   });
+
+  test('CODE_ACTION emits structured side-effect activity metadata', () => {
+    const steps = [
+      {
+        type: 'CORTEX_STEP_TYPE_CODE_ACTION',
+        status: 'CORTEX_STEP_STATUS_DONE',
+        metadata: { operation: 'write', path: 'docs/example.md' },
+      },
+    ];
+    const msgs = transformTrajectorySteps(steps, catId, metadata);
+    const activity = msgs.find((m) => m.type === 'system_info');
+    assert.ok(activity, 'CODE_ACTION should no longer be silently skipped as unknown_activity');
+    assert.deepEqual(JSON.parse(activity.content), {
+      type: 'code_action',
+      status: 'CORTEX_STEP_STATUS_DONE',
+      operation: 'write',
+      path: 'docs/example.md',
+    });
+  });
+
+  test('failed CODE_ACTION without toolResult emits a visible error', () => {
+    const steps = [
+      {
+        type: 'CORTEX_STEP_TYPE_CODE_ACTION',
+        status: 'CORTEX_STEP_STATUS_FAILED',
+        metadata: { operation: 'write', path: 'docs/example.md' },
+      },
+    ];
+    const msgs = transformTrajectorySteps(steps, catId, metadata);
+    const error = msgs.find((m) => m.type === 'error');
+    assert.ok(error, 'failed CODE_ACTION should not be silently skipped');
+    assert.equal(error.errorCode, 'code_action_error');
+    assert.match(error.error, /Code action failed/);
+    assert.match(error.error, /write/);
+    assert.match(error.error, /docs\/example\.md/);
+  });
+
+  test('canceled CODE_ACTION without toolResult emits a visible error', () => {
+    for (const status of ['CORTEX_STEP_STATUS_CANCELED', 'CORTEX_STEP_STATUS_CANCELLED']) {
+      const step = {
+        type: 'CORTEX_STEP_TYPE_CODE_ACTION',
+        status,
+        metadata: { operation: 'write', path: 'docs/example.md' },
+      };
+
+      assert.equal(classifyStep(step), 'tool_error');
+
+      const msgs = transformTrajectorySteps([step], catId, metadata);
+      const error = msgs.find((m) => m.type === 'error');
+      assert.ok(error, 'canceled CODE_ACTION should not be emitted as normal activity');
+      assert.equal(error.errorCode, 'code_action_error');
+      assert.match(error.error, /Code action failed/);
+      assert.match(error.error, new RegExp(status));
+    }
+  });
+
+  test('CODE_ACTION with failed toolResult is classified and emitted as an error', () => {
+    const step = {
+      type: 'CORTEX_STEP_TYPE_CODE_ACTION',
+      status: 'CORTEX_STEP_STATUS_DONE',
+      metadata: { operation: 'write', path: 'docs/example.md' },
+      toolResult: { toolName: 'code_action', success: false, error: 'permission denied' },
+    };
+
+    assert.equal(classifyStep(step), 'tool_error');
+
+    const msgs = transformTrajectorySteps([step], catId, metadata);
+    const error = msgs.find((m) => m.type === 'error');
+    assert.ok(error, 'failed CODE_ACTION toolResult should not be emitted as a normal tool result');
+    assert.equal(error.errorCode, 'tool_error');
+    assert.match(error.error, /permission denied/);
+  });
 });
 
 describe('transformer: native tool fallback emits tool messages', () => {
@@ -100,6 +190,49 @@ describe('transformer: native tool fallback emits tool messages', () => {
     const toolMsg = msgs.find((m) => m.type === 'tool_use');
     assert.ok(toolMsg, 'should emit tool_use for GREP_SEARCH');
     assert.equal(toolMsg.toolName, 'grep_search');
+  });
+
+  test('F211-REG13: GREP_SEARCH with metadata.toolCall emits tool_activity and tool_use', () => {
+    const steps = [
+      {
+        type: 'CORTEX_STEP_TYPE_GREP_SEARCH',
+        status: 'CORTEX_STEP_STATUS_WAITING',
+        metadata: {
+          toolCall: {
+            name: 'grep_search',
+            argumentsJson: '{"Query":"tool_activity","IncludePattern":"*.ts"}',
+          },
+        },
+      },
+    ];
+    const msgs = transformTrajectorySteps(steps, catId, metadata);
+    const activityMsg = msgs.find((m) => m.type === 'system_info');
+    assert.ok(activityMsg, 'should emit activity for metadata.toolCall');
+    assert.deepEqual(JSON.parse(activityMsg.content), { type: 'tool_activity', toolName: 'grep_search' });
+    const toolMsg = msgs.find((m) => m.type === 'tool_use');
+    assert.ok(toolMsg, 'should emit tool_use for metadata.toolCall');
+    assert.equal(toolMsg.toolName, 'grep_search');
+    assert.deepEqual(toolMsg.toolInput, { Query: 'tool_activity', IncludePattern: '*.ts' });
+  });
+
+  test('F211-REG13: direct toolCall uses metadata arguments when input is absent', () => {
+    const steps = [
+      {
+        type: 'CORTEX_STEP_TYPE_GREP_SEARCH',
+        status: 'CORTEX_STEP_STATUS_WAITING',
+        toolCall: { toolName: 'grep_search' },
+        metadata: {
+          toolCall: {
+            argumentsJson: '{"Query":"mixed-shape","IncludePattern":"*.ts"}',
+          },
+        },
+      },
+    ];
+    const msgs = transformTrajectorySteps(steps, catId, metadata);
+    const toolMsg = msgs.find((m) => m.type === 'tool_use');
+    assert.ok(toolMsg, 'should emit tool_use for mixed direct toolCall');
+    assert.equal(toolMsg.toolName, 'grep_search');
+    assert.deepEqual(toolMsg.toolInput, { Query: 'mixed-shape', IncludePattern: '*.ts' });
   });
 });
 

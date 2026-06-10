@@ -6,7 +6,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { transformClaudeEvent } = await import('../dist/domains/cats/services/agents/providers/claude-ndjson-parser.js');
+const { isResultErrorEvent, transformClaudeEvent } = await import(
+  '../dist/domains/cats/services/agents/providers/claude-ndjson-parser.js'
+);
 
 const CAT = 'opus';
 
@@ -235,6 +237,26 @@ test('result error_during_execution → error with errorSubtype in content', () 
   assert.equal(parsed.errorSubtype, 'error_during_execution');
 });
 
+test('result success + is_error:true → error using result text (Claude A2 shape)', () => {
+  const state = makeStreamState();
+  const event = {
+    type: 'result',
+    subtype: 'success',
+    is_error: true,
+    result: "The model's tool call could not be parsed (retry also failed).",
+    errors: null,
+  };
+  assert.equal(isResultErrorEvent(event), true, 'is_error:true is authoritative even when subtype is success');
+  const result = transformClaudeEvent(event, CAT, state);
+  assert.ok(result !== null);
+  assert.ok(!Array.isArray(result));
+  assert.equal(result.type, 'error');
+  assert.match(result.error, /could not be parsed/);
+  const parsed = JSON.parse(result.content);
+  assert.equal(parsed.errorSubtype, 'success');
+  assert.equal(parsed.isError, true);
+});
+
 // ─── Issue #24 — error.error should never be "Unknown error" when subtype is known ──
 
 test('error_max_turns with empty errors → error.error should be "Max turns exceeded"', () => {
@@ -327,6 +349,60 @@ test('assistant event with only empty text block → null (no empty bubble)', ()
   };
   const result = transformClaudeEvent(event, CAT, state);
   assert.equal(result, null, 'assistant event with only empty text block should return null');
+});
+
+// ── #778 + #805 review P3-4: thinking-only assistant message fixture ──
+// Real Claude non-streaming response where content = [{ type: 'thinking', thinking: '...' }]
+// with no text or tool_use blocks. This is the exact pattern that caused silent_completion
+// before the #778 fix. Serves as regression test for Claude API spec drift.
+
+test('assistant thinking-only message → system_info(thinking) (non-streaming fixture)', () => {
+  const state = makeStreamState();
+  // Real Claude API shape: content block has `type: 'thinking'` and `thinking: '...'` field
+  const event = {
+    type: 'assistant',
+    message: {
+      id: 'msg-thinking-only',
+      content: [
+        {
+          type: 'thinking',
+          thinking: 'I need to analyze this problem step by step...',
+        },
+      ],
+    },
+  };
+  const result = transformClaudeEvent(event, CAT, state);
+  assert.ok(result !== null, 'thinking-only message must not return null');
+  assert.ok(!Array.isArray(result), 'should return single message');
+  assert.equal(result.type, 'system_info');
+  assert.equal(result.catId, CAT);
+  const parsed = JSON.parse(result.content);
+  assert.equal(parsed.type, 'thinking');
+  assert.equal(parsed.catId, CAT);
+  assert.equal(parsed.text, 'I need to analyze this problem step by step...');
+});
+
+test('assistant thinking-only with `text` field fallback → system_info(thinking)', () => {
+  const state = makeStreamState();
+  // Some API versions may use `text` instead of `thinking` field
+  const event = {
+    type: 'assistant',
+    message: {
+      id: 'msg-thinking-text-fallback',
+      content: [
+        {
+          type: 'thinking',
+          text: 'Fallback thinking content',
+        },
+      ],
+    },
+  };
+  const result = transformClaudeEvent(event, CAT, state);
+  assert.ok(result !== null, 'thinking-only (text fallback) must not return null');
+  assert.ok(!Array.isArray(result));
+  assert.equal(result.type, 'system_info');
+  const parsed = JSON.parse(result.content);
+  assert.equal(parsed.text, 'Fallback thinking content');
 });
 
 test('assistant event with empty text block alongside tool_use → only tool_use returned', () => {

@@ -5,7 +5,9 @@
 
 import type { CatId, MessageContent, ReplyPreview } from '@cat-cafe/shared';
 import type { Span } from '@opentelemetry/api';
+import type { CliDiagnostics } from '../../../utils/cli-diagnostics.js';
 import type { CliSpawnOptions } from '../../../utils/cli-types.js';
+import type { AntigravitySessionLifecycle } from './agents/providers/antigravity/antigravity-runtime-lifecycle.js';
 
 /** F8: Unified token usage type across all three cats.
  *  inputTokens = TOTAL input tokens (new + cached). Normalised at extraction
@@ -26,6 +28,9 @@ export interface TokenUsage {
    *  Unlike inputTokens which is aggregated across all turns, this value
    *  represents the single most recent API call's input size. */
   lastTurnInputTokens?: number;
+  /** #679: true when inputTokens/totalTokens are cumulative across all turns
+   *  (e.g. Gemini CLI stats) — not usable for single-turn context fill ratio. */
+  isCumulativeUsage?: boolean;
   /** Codex session token_count: exact current context usage shown by CLI status. */
   contextUsedTokens?: number;
   /** Codex session token_count: reset timestamp (epoch ms) for display-only hint. */
@@ -36,7 +41,7 @@ export interface TokenUsage {
 export function mergeTokenUsage(existing: TokenUsage | undefined, incoming: TokenUsage): TokenUsage {
   if (!existing) return { ...incoming };
   const result = { ...existing };
-  const numericKeys: (keyof TokenUsage)[] = [
+  const numericKeys = [
     'inputTokens',
     'outputTokens',
     'totalTokens',
@@ -46,25 +51,23 @@ export function mergeTokenUsage(existing: TokenUsage | undefined, incoming: Toke
     'durationMs',
     'durationApiMs',
     'numTurns',
-  ];
+  ] as const;
   for (const key of numericKeys) {
     const val = incoming[key];
     if (val != null) {
-      result[key] = ((result[key] as number) ?? 0) + (val as number);
+      result[key] = ((result[key] ?? 0) as number) + val;
     }
   }
   // Non-aggregating contextual fields should keep the most recent snapshot.
-  const latestKeys: (keyof TokenUsage)[] = [
-    'contextWindowSize',
-    'lastTurnInputTokens',
-    'contextUsedTokens',
-    'contextResetsAtMs',
-  ];
+  const latestKeys = ['contextWindowSize', 'lastTurnInputTokens', 'contextUsedTokens', 'contextResetsAtMs'] as const;
   for (const key of latestKeys) {
     const val = incoming[key];
     if (val != null) {
       result[key] = val;
     }
+  }
+  if (incoming.isCumulativeUsage != null) {
+    result.isCumulativeUsage = incoming.isCumulativeUsage;
   }
   return result;
 }
@@ -76,11 +79,28 @@ export interface MessageMetadata {
   provider: string;
   model: string;
   sessionId?: string;
+  /**
+   * F198 Bug #3: bg carrier surfaces the daemon's freshly-forked conversation
+   * UUID after a `--bg --resume` turn (read from state.resumeSessionId). The
+   * consumer persists it as the SessionRecord's latestResumeSessionId — the
+   * next round's `--resume` target. bg-only; absent for other providers.
+   */
+  resumeSessionId?: string;
   usage?: TokenUsage;
   /** F061: false when provider cannot verify which model actually ran (e.g. CDP bridge) */
   modelVerified?: boolean;
   /** F061: diagnostic context attached when empty_response is triggered */
   diagnostics?: Record<string, unknown>;
+  /** F061 Phase 3: structured upstream error classification for recovery decisions */
+  upstreamError?: {
+    kind: 'capacity' | 'network' | 'stream_interrupted' | 'invalid_tool_call' | 'unknown';
+    transient: boolean;
+    rawReason: string;
+  };
+  /** F212 Phase A: structured CLI error diagnostics (reasonCode + sanitized excerpt + debugRef).
+   *  Populated by providers when isCliError/isCliTimeout fires, consumed by Phase B folded panel.
+   *  Carries `__cliError.cliDiagnostics` / `__cliTimeout.cliDiagnostics` from cli-spawn. */
+  cliDiagnostics?: CliDiagnostics;
 }
 
 /**
@@ -106,7 +126,9 @@ export type AgentMessageType =
   | 'a2a_handoff'
   | 'system_info' // budget warnings, cancel feedback, extraction progress, thinking
   | 'provider_signal' // F149: upstream capacity/retry signals — skipped by invocation timeout & content flags
-  | 'liveness_signal'; // F149: stream idle watchdog — skipped by invocation timeout & content flags
+  | 'liveness_signal' // F149: stream idle watchdog — skipped by invocation timeout & content flags
+  | 'status' // F198 Phase C: transient daemon progress detail — updates cat avatar tooltip, not a bubble
+  | 'agent_loop'; // F153 Phase I: telemetry-only marker at LLM call boundary (provider stream parser emits; never user-visible)
 
 /**
  * A message yielded from an agent during invocation
@@ -118,6 +140,8 @@ export interface AgentMessage {
   catId: CatId;
   /** Text content (for 'text' and 'tool_result' types) */
   content?: string;
+  /** Machine-readable A2A target cat for 'a2a_handoff' events. */
+  targetCatId?: CatId;
   /**
    * How the frontend should apply text content.
    * Default append preserves streaming semantics; replace is used when the
@@ -129,10 +153,28 @@ export interface AgentMessage {
   /** ACP transport: sessionId is per-invocation, not a persistent CLI session.
    *  When true, a different sessionId does NOT mean "session replaced" — skip seal. */
   ephemeralSession?: boolean;
-  /** Tool name (for 'tool_use' type) */
+  /** F211 A2: provider runtime lifecycle facts used by invocation to seal/create SessionRecords. */
+  sessionLifecycle?: AntigravitySessionLifecycle;
+  /** Tool name (for 'tool_use' and 'tool_result' types; required by F153 Phase J AC-J1) */
   toolName?: string;
   /** Tool input parameters (for 'tool_use' type) */
   toolInput?: Record<string, unknown>;
+  /** F153 Phase J AC-J1: native provider tool call id; used to pair tool_use ↔ tool_result for real-duration spans.
+   *  Provider transformers MUST inject this from raw payload when available (Claude tool_use.id, DARE tool_call_id,
+   *  CatAgent tool_use_id, Codex item.id, etc). Providers without native id may omit; ToolSpanTracker treats
+   *  missing id as fallback (no span open, no fake duration) per KD-41. */
+  toolUseId?: string;
+  /** F153 Phase J AC-J1: structured tool execution outcome (for 'tool_result' type).
+   *  Provider transformers MUST map from raw payload (is_error / success / exitCode / status) instead of
+   *  letting downstream guess from content string. Use 'unknown' when raw signal is genuinely absent. */
+  toolResultStatus?: 'ok' | 'error' | 'unknown';
+  /** F153 Phase J Slice J-B AC-J7: tool span trace context for hydrate-side real-duration
+   *  span synthesis. Stamped by invoke-single-cat when ToolSpanTracker opens / has-open
+   *  a span for this event (so route-helpers can carry it into StoredToolEvent.tracing).
+   *  Distinct from `tracing` above (which carries the invocation/route span pointer);
+   *  this one points at the tool span itself, and parentSpanId points at the invocation
+   *  span so hydrate can re-parent the synthesized `cat_cafe.tool_use ...` span. */
+  toolTracing?: { traceId: string; spanId: string; parentSpanId?: string };
   /** Error message (for 'error' type) */
   error?: string;
   /** Whether this is the final 'done' in a multi-cat invocation (for 'done' type) */
@@ -151,8 +193,14 @@ export interface AgentMessage {
   replyPreview?: ReplyPreview;
   /** F061: Whether this message mentions the co-creator (@user/@铲屎官/configured patterns) */
   mentionsUser?: boolean;
-  /** F108: Invocation ID — allows frontend to distinguish messages from concurrent invocations */
+  /** F108: Invocation ID — allows frontend to distinguish messages from concurrent invocations.
+   *  F194 Phase Z3 dual id: this is the chain/parent invocation id (legacy SoT for liveness/queue/cancel).
+   *  Per-cat-turn id is `turnInvocationId` below — frontend uses turn for bubble identity stable key. */
   invocationId?: string;
+  /** F194 Phase Z3 (砚砚 R P1-1): per-cat-turn invocation id, frontend uses for bubble identity
+   *  stable key (prevents same-parent multi-turn-same-cat bubble merge). Stamped into
+   *  `extra.stream.turnInvocationId` by useAgentMessages. */
+  turnInvocationId?: string;
   /** F153-F: OTel span context for trace persistence (written to message extra.tracing) */
   tracing?: { traceId: string; spanId: string; parentSpanId?: string };
   /** F070: Structured error code for recoverable failures (e.g. GOVERNANCE_BOOTSTRAP_REQUIRED) */
@@ -210,6 +258,8 @@ export interface AgentServiceOptions {
   systemPrompt?: string;
   /** F089: Override spawnCli with tmux-based spawner (set per-invocation) */
   spawnCliOverride?: SpawnCliOverride;
+  /** F210-H1b: Override AGY --log-file path (test seam for the trajectory progress observer). */
+  agyLogPathOverride?: string;
   /** F118: Invocation ID for diagnostic enrichment of __cliTimeout */
   invocationId?: string;
   /** F118: CLI session ID for diagnostic enrichment of __cliTimeout */
@@ -220,6 +270,7 @@ export interface AgentServiceOptions {
     softWarningMs?: number;
     stallWarningMs?: number;
     boundedExtensionFactor?: number;
+    minCpuGrowthMs?: number;
     /** #774: Auto-kill on idle-silent suspected_stall instead of waiting for full timeout */
     stallAutoKill?: boolean;
   };
@@ -240,4 +291,52 @@ export interface AgentService {
    * @returns An async iterable of agent messages
    */
   invoke(prompt: string, options?: AgentServiceOptions): AsyncIterable<AgentMessage>;
+
+  /**
+   * F203 Phase C — whether this provider injects the L0 static identity into
+   * its native system role (e.g. Claude `--system-prompt-file`, Codex
+   * `-c developer_instructions`). When true, the routing layer passes a
+   * pack-only `systemPrompt` (non-pack identity travels the native channel,
+   * compression-immune); when false/undefined the routing layer keeps the
+   * full static identity in `params.systemPrompt` so cats with no native
+   * channel still receive identity/家规 via user-message prepend.
+   *
+   * Optional — defaults to false for back-compat with non-native services.
+   */
+  injectsL0Natively?(): boolean;
+
+  /**
+   * F198 Bug #3 — whether this carrier resumes a conversation that has NO
+   * stable per-conversation sessionId (the bg daemon forks a fresh UUID every
+   * `--bg --resume` round). When true, invoke-single-cat derives a stable
+   * chainKey = `bg:${threadId}:${catId}` and routes sessionId resolution,
+   * the resume mutex key, session_init record reuse, and done bookkeeping
+   * through it — bypassing the cliSessionId-based seal+create path that would
+   * otherwise inflate one conversation into N sealed records.
+   *
+   * Optional — defaults to false. Only ClaudeBgCarrierService returns true;
+   * every other provider (incl. `-p` ClaudeAgentService) keeps the stable
+   * cliSessionId path unchanged.
+   */
+  usesChainKeyResume?(): boolean;
+}
+
+/**
+ * F203 Phase I — L0 compiler function signature.
+ * Same as `compileL0ViaSubprocess` but injectable for testing.
+ */
+export type L0CompilerFn = (options: { catId: string; outPath?: string }) => Promise<string>;
+
+/**
+ * F203 Phase I — AgentService that carries an injectable L0 compiler seam.
+ * OpenCodeAgentService implements this; Claude/Codex services keep their own
+ * private l0CompilerFn (different lifecycle — they compile L0 internally).
+ */
+export interface L0InjectableAgentService extends AgentService {
+  readonly l0CompilerFn?: L0CompilerFn;
+}
+
+/** Type guard: does this service expose an injectable L0 compiler? */
+export function hasL0CompilerSeam(service: AgentService): service is L0InjectableAgentService {
+  return 'l0CompilerFn' in service && typeof (service as L0InjectableAgentService).l0CompilerFn === 'function';
 }

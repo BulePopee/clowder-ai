@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { catRegistry } from '@cat-cafe/shared';
 import Fastify from 'fastify';
 import {
+  _resetCachedConfig,
   clearRuntimeDefaultCatId,
   getDefaultCatId,
   getOwnerUserId,
@@ -15,10 +19,34 @@ import {
 
 const REPO_TEMPLATE_PATH = fileURLToPath(new URL('../../../cat-template.json', import.meta.url));
 const _allConfigs = toAllCatConfigs(loadCatConfig(REPO_TEMPLATE_PATH));
+const testTemplateDir = mkdtempSync(join(tmpdir(), 'default-cat-config-template-'));
+const testTemplatePath = join(testTemplateDir, 'cat-template.json');
+cpSync(REPO_TEMPLATE_PATH, testTemplatePath);
+
+function resetDefaultCatTestState(ownerUserId) {
+  process.env.CAT_TEMPLATE_PATH = testTemplatePath;
+  if (ownerUserId === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+  else process.env.DEFAULT_OWNER_USER_ID = ownerUserId;
+  delete process.env.DEFAULT_CAT_ID;
+  clearRuntimeDefaultCatId();
+  _resetCachedConfig();
+  catRegistry.reset();
+  for (const [id, config] of Object.entries(_allConfigs)) {
+    catRegistry.register(id, config);
+  }
+}
+
+after(() => {
+  clearRuntimeDefaultCatId();
+  delete process.env.DEFAULT_CAT_ID;
+  delete process.env.DEFAULT_OWNER_USER_ID;
+  rmSync(testTemplateDir, { recursive: true, force: true });
+});
 
 describe('getDefaultCatId runtime override (F154 AC-A4)', () => {
   let originalDefault;
   before(() => {
+    resetDefaultCatTestState();
     originalDefault = getDefaultCatId();
   });
   after(() => {
@@ -90,11 +118,7 @@ describe('PUT /api/config/default-cat works without DEFAULT_OWNER_USER_ID', () =
   let app;
 
   before(async () => {
-    catRegistry.reset();
-    catRegistry.register('opus', _allConfigs.opus);
-    catRegistry.register('codex', _allConfigs.codex);
-    delete process.env.DEFAULT_OWNER_USER_ID;
-    clearRuntimeDefaultCatId();
+    resetDefaultCatTestState();
     const { configRoutes } = await import('../dist/routes/config.js');
     app = Fastify();
     await app.register(configRoutes);
@@ -120,7 +144,74 @@ describe('PUT /api/config/default-cat works without DEFAULT_OWNER_USER_ID', () =
   });
 });
 
+describe('PUT /api/config/default-cat network guard (#794)', () => {
+  let app;
+
+  before(async () => {
+    resetDefaultCatTestState();
+    const { configRoutes } = await import('../dist/routes/config.js');
+    app = Fastify();
+    await app.register(configRoutes);
+    await app.ready();
+  });
+
+  after(async () => {
+    clearRuntimeDefaultCatId();
+    catRegistry.reset();
+    delete process.env.DEFAULT_OWNER_USER_ID;
+    await app?.close();
+  });
+
+  it('rejects non-loopback when owner is NOT configured', async () => {
+    delete process.env.DEFAULT_OWNER_USER_ID;
+    const before = getDefaultCatId();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config/default-cat',
+      headers: { 'x-cat-cafe-user': 'default-user' },
+      payload: { catId: 'codex' },
+      remoteAddress: '192.168.1.100',
+    });
+    assert.equal(res.statusCode, 403, 'non-loopback default-cat write without owner must be 403');
+    assert.equal(getDefaultCatId(), before, 'default cat must not change on rejection');
+  });
+
+  it('rejects proxy-forwarded loopback when owner is NOT configured', async () => {
+    delete process.env.DEFAULT_OWNER_USER_ID;
+    const before = getDefaultCatId();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config/default-cat',
+      headers: {
+        'x-cat-cafe-user': 'default-user',
+        'x-forwarded-for': '203.0.113.50',
+      },
+      payload: { catId: 'codex' },
+    });
+    assert.equal(res.statusCode, 403, 'proxy-forwarded loopback default-cat write must be 403');
+    assert.equal(getDefaultCatId(), before, 'default cat must not change on rejection');
+  });
+
+  it('allows non-loopback when owner IS configured and matches', async () => {
+    process.env.DEFAULT_OWNER_USER_ID = 'the-owner';
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config/default-cat',
+      headers: { 'x-cat-cafe-user': 'the-owner' },
+      payload: { catId: 'codex' },
+      remoteAddress: '192.168.1.100',
+    });
+    assert.equal(res.statusCode, 200, 'non-loopback with matching owner should pass network guard');
+    clearRuntimeDefaultCatId();
+    delete process.env.DEFAULT_OWNER_USER_ID;
+  });
+});
+
 describe('getDefaultCatId reads DEFAULT_CAT_ID env (clowder-ai#543)', () => {
+  before(() => {
+    resetDefaultCatTestState();
+  });
+
   after(() => {
     clearRuntimeDefaultCatId();
     delete process.env.DEFAULT_CAT_ID;
@@ -173,17 +264,12 @@ describe('PUT /api/config/default-cat persists to .env (clowder-ai#543)', () => 
   let tmpEnvPath;
 
   before(async () => {
-    const { mkdtempSync, writeFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const tmpDir = mkdtempSync(join(await import('node:os').then((m) => m.tmpdir()), 'cat-env-'));
+    const { writeFileSync } = await import('node:fs');
+    const tmpDir = mkdtempSync(join(tmpdir(), 'cat-env-'));
     tmpEnvPath = join(tmpDir, '.env');
     writeFileSync(tmpEnvPath, '', 'utf8');
 
-    catRegistry.reset();
-    catRegistry.register('opus', _allConfigs.opus);
-    catRegistry.register('codex', _allConfigs.codex);
-    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
-    clearRuntimeDefaultCatId();
+    resetDefaultCatTestState(OWNER_ID);
     const { configRoutes } = await import('../dist/routes/config.js');
     app = Fastify();
     await app.register(configRoutes, { envFilePath: tmpEnvPath });
@@ -236,11 +322,7 @@ describe('PUT /api/config/default-cat atomicity (cloud review P1)', () => {
   const OWNER_ID = 'atomicity-test-owner';
 
   before(async () => {
-    catRegistry.reset();
-    catRegistry.register('opus', _allConfigs.opus);
-    catRegistry.register('codex', _allConfigs.codex);
-    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
-    clearRuntimeDefaultCatId();
+    resetDefaultCatTestState(OWNER_ID);
     const { configRoutes } = await import('../dist/routes/config.js');
     app = Fastify();
     // Point envFilePath to a non-existent directory → writeFileSync will throw
@@ -287,14 +369,7 @@ describe('GET/PUT /api/config/default-cat (F154 AC-A4)', () => {
   const OWNER_ID = 'test-owner-123';
 
   before(async () => {
-    // Register cats so catRegistry.has() validation works
-    catRegistry.reset();
-    catRegistry.register('opus', _allConfigs.opus);
-    catRegistry.register('codex', _allConfigs.codex);
-    catRegistry.register('antigravity', _allConfigs.antigravity);
-    // Set DEFAULT_OWNER_USER_ID for owner gate
-    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
-    clearRuntimeDefaultCatId();
+    resetDefaultCatTestState(OWNER_ID);
     const { configRoutes } = await import('../dist/routes/config.js');
     app = Fastify();
     await app.register(configRoutes);

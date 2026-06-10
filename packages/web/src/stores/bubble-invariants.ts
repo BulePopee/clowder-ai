@@ -9,6 +9,7 @@ import type {
 } from '@cat-cafe/shared';
 import { getBubbleInvocationId } from '@/debug/bubbleIdentity';
 import type { ChatMessage } from './chat-types';
+import { crossesUserTurnBoundary } from './turn-boundary';
 
 type BubbleInvariantContext = {
   threadId: string;
@@ -45,7 +46,17 @@ function isUiCompatStreamingAssistantContainer(msg: ChatMessage, invocationId: s
   // live window where late stdout chunks can still arrive. True ADR thinking
   // bubbles use distinct ids such as `msg-{invocationId}-{catId}-thinking` and
   // stay `thinking`.
+  //
+  // F194 Phase Z5 R2 (砚砚 R1 P1#2): reducer's `ensureMessageId` (bubble-reducer.ts:117)
+  // also produces kind-suffixed canonical id `msg-{invocationId}-{catId}-assistant_text`
+  // when caller doesn't provide messageId hint. After tool_event attaches toolEvent,
+  // bubble's derived kind would shift to `tool_or_cli` (line 78), breaking subsequent
+  // stream_chunk's `assistant_text` kind match → canonical-split + lost content (砚砚
+  // 复现：stream_started → tool_event → stream_chunk 链路).
+  // 修法：把 `assistant_text` kind-suffixed canonical id 也纳入 UI-compat 白名单，
+  // 让它在 toolEvents append 后 kind 仍归 assistant_text，stream_chunk 能命中同 bubble。
   if (msg.id === `msg-${invocationId}-${msg.catId}`) return true;
+  if (msg.id === `msg-${invocationId}-${msg.catId}-assistant_text`) return true;
   return msg.id.startsWith('bg-think-');
 }
 
@@ -144,6 +155,10 @@ export function findBubbleStoreInvariantViolations(
       seen.set(key, { identity, message });
       continue;
     }
+    if (existing.message.id !== message.id && crossesUserTurnBoundary(messages, existing.message, message)) {
+      seen.set(key, { identity, message });
+      continue;
+    }
 
     violations.push(
       makeViolation(
@@ -180,6 +195,7 @@ export function validateIncomingBubbleEvent(
     }
 
     if (existingKey !== incomingKey) continue;
+    if (existing.id !== incoming.id && crossesUserTurnBoundary(existingMessages, existing, incoming)) continue;
 
     const existingPhase = deriveBubbleOriginPhase(existing);
     if (existingPhase && phaseRank[incomingPhase] < phaseRank[existingPhase]) {

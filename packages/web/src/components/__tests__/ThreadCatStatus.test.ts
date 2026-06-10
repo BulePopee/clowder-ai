@@ -60,7 +60,7 @@ describe('ThreadCatStatus', () => {
       React.createElement(ThreadCatStatus, { threadState: makeState({}), unreadCount: 5 }),
     );
     expect(html).toContain('5');
-    expect(html).toContain('bg-conn-amber-bg');
+    expect(html).toContain('bg-[var(--semantic-warning)]');
   });
 
   it('caps unread at 99+', () => {
@@ -111,8 +111,8 @@ describe('ThreadCatStatus', () => {
         hasUserMention: true,
       }),
     );
-    expect(html).toContain('bg-conn-red-bg');
-    expect(html).not.toContain('bg-conn-amber-bg');
+    expect(html).toContain('bg-conn-red-text');
+    expect(html).not.toContain('bg-[var(--semantic-warning)]');
   });
 
   it('shows amber unread badge when no user mention', () => {
@@ -123,7 +123,7 @@ describe('ThreadCatStatus', () => {
         hasUserMention: false,
       }),
     );
-    expect(html).toContain('bg-conn-amber-bg');
+    expect(html).toContain('bg-[var(--semantic-warning)]');
   });
 
   it('renders paw even with zero unread when hasUserMention', () => {

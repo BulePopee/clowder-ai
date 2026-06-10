@@ -43,7 +43,7 @@ describe('SignalSourcesView', () => {
     delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   });
 
-  it('renders source name and status for each source', async () => {
+  it('renders visit link for each source url', async () => {
     mocks.fetchSignalSources.mockResolvedValueOnce([
       {
         id: 'anthropic-news',
@@ -64,8 +64,11 @@ describe('SignalSourcesView', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('Anthropic Newsroom');
-    expect(container.textContent).toContain('正常');
+    const visitLink = Array.from(container.querySelectorAll('a[href="https://www.anthropic.com/news"]')).find((item) =>
+      item.textContent?.includes('访问'),
+    );
+    expect(visitLink).not.toBeNull();
+    expect(visitLink?.textContent ?? '').toContain('访问');
   });
 
   const SAMPLE_SOURCE = {
@@ -91,7 +94,7 @@ describe('SignalSourcesView', () => {
 
   function findFetchButton(): HTMLButtonElement | undefined {
     return Array.from(container.querySelectorAll('button')).find(
-      (btn) => btn.textContent === 'Fetch' || btn.textContent === '抓取中...',
+      (btn) => btn.textContent === '抓取' || btn.textContent === '抓取中...',
     ) as HTMLButtonElement | undefined;
   }
 
@@ -106,7 +109,7 @@ describe('SignalSourcesView', () => {
 
     const fetchBtn = findFetchButton();
     expect(fetchBtn).toBeDefined();
-    expect(fetchBtn?.textContent).toBe('Fetch');
+    expect(fetchBtn?.textContent).toBe('抓取');
 
     await act(async () => {
       fetchBtn?.click();

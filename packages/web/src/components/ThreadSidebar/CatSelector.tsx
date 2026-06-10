@@ -1,7 +1,7 @@
 'use client';
 
 import { formatCatName, useCatData } from '@/hooks/useCatData';
-import { hexToRgba } from '@/lib/color-utils';
+import { catColorMix, catColorVar } from '@/lib/cat-slug';
 
 interface CatSelectorProps {
   selectedCats: string[];
@@ -41,7 +41,7 @@ export function CatSelector({ selectedCats, onSelectionChange }: CatSelectorProp
         const breedName = cats[0].breedDisplayName ?? cats[0].displayName;
         return (
           <div key={breedId}>
-            <div className="text-[10px] text-cafe-muted mb-1">
+            <div className="text-micro text-cafe-muted mb-1">
               {breedName}家族 · {clientIdLabel(cats[0].clientId)}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -55,21 +55,21 @@ export function CatSelector({ selectedCats, onSelectionChange }: CatSelectorProp
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-colors border ${
                       isSelected
                         ? 'font-medium border-current'
-                        : 'border-[var(--console-border-soft)] text-cafe-secondary hover:border-cafe'
+                        : 'border-cafe text-cafe-secondary hover:border-[var(--console-border-strong)]'
                     }`}
                     style={
                       isSelected
                         ? {
-                            color: cat.color.primary,
-                            backgroundColor: hexToRgba(cat.color.primary, 0.1),
-                            borderColor: cat.color.primary,
+                            color: catColorVar(cat.id, 'primary'),
+                            backgroundColor: catColorMix(cat.id, 0.1, 'primary'),
+                            borderColor: catColorVar(cat.id, 'primary'),
                           }
                         : undefined
                     }
                   >
                     <span
                       className="inline-block w-2 h-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: cat.color.primary }}
+                      style={{ backgroundColor: catColorVar(cat.id, 'primary') }}
                     />
                     {formatCatName(cat)}
                     {!cat.variantLabel && cat.nickname ? `(${cat.nickname})` : ''}

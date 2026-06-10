@@ -7,16 +7,31 @@
  * kind=pr_tracking: automated PR monitoring tasks (merged from PrTrackingStore)
  */
 
+import type { DispatchGateState } from './cross-thread-affordance.js';
 import type { CatId } from './ids.js';
+
+// Re-export affordance types so existing consumers don't break
+export type {
+  DispatchGateState,
+  SuggestedCrossPostAction,
+  SuggestedCrossPostActionSource,
+} from './cross-thread-affordance.js';
+export { extractFeatureIds } from './cross-thread-affordance.js';
 
 export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done';
 
 /**
- * Task kind discriminator (#320).
+ * Task kind discriminator (#320, F202-2D).
  * - work: manual tasks created by cats/humans
  * - pr_tracking: automated PR tasks (review-feedback, cicd-check, conflict-check)
+ * - issue_tracking: automated GitHub issue comment tracking (F202 Phase 2D)
  */
-export type TaskKind = 'work' | 'pr_tracking';
+export type TaskKind = 'work' | 'pr_tracking' | 'issue_tracking';
+
+/** Tracking kinds that receive eviction/TTL protection when active (status !== 'done'). */
+export function isTrackingKind(kind: TaskKind): kind is 'pr_tracking' | 'issue_tracking' {
+  return kind === 'pr_tracking' || kind === 'issue_tracking';
+}
 
 /** CI/CD automation state for pr_tracking tasks */
 export interface CiAutomationState {
@@ -26,6 +41,8 @@ export interface CiAutomationState {
   readonly lastNotifiedAt?: number;
   readonly enabled?: boolean;
   readonly skipNotified?: boolean;
+  /** Terminal PR state — persisted by CiCdRouter on lifecycle close (F200 AC-D2.3). */
+  readonly prState?: 'merged' | 'closed';
 }
 
 /** Conflict detection automation state for pr_tracking tasks */
@@ -42,12 +59,35 @@ export interface ReviewAutomationState {
   readonly lastNotifiedAt?: number;
 }
 
-/** Composite automation state embedded in pr_tracking tasks (#320 KD-14) */
+/**
+ * F140: what the cat is currently waiting on for this tracked PR — the wake intent, NOT the repo
+ * type (a private PR can be 'merge'; an open-source PR can be 'review'). Decides whether a CI-pass
+ * is noise (review-wait) or an action signal (merge-wait). Cats re-register to flip it.
+ *   - review (default): waiting on review feedback → CI-pass stays silent (thread message only).
+ *   - merge: waiting on CI-green to merge (own approved PR / outbound PR / owner-merge of another's
+ *     PR) → CI-pass wakes (→ merge-gate).
+ * CI fail / review feedback / conflict always wake under both intents.
+ */
+export type PrTrackingIntent = 'review' | 'merge';
+
+/** Issue comment automation state for issue_tracking tasks (F202 Phase 2D) */
+export interface IssueAutomationState {
+  readonly lastCommentCursor?: number;
+  readonly lastNotifiedAt?: number;
+  readonly issueState?: 'open' | 'closed';
+}
+
+/** Composite automation state embedded in pr_tracking/issue_tracking tasks (#320 KD-14, F202-2D) */
 export interface AutomationState {
   readonly ci?: CiAutomationState;
   readonly conflict?: ConflictAutomationState;
   readonly review?: ReviewAutomationState;
+  readonly issue?: IssueAutomationState;
   readonly closedAt?: number;
+  /** F140: wake intent for this tracked PR (defaults to 'review' when absent). */
+  readonly intent?: PrTrackingIntent;
+  /** F202 Phase 2C: user-provided instructions appended to trigger messages. Task preference, not system override. */
+  readonly trackingInstructions?: string;
 }
 
 export interface TaskItem {
@@ -76,6 +116,15 @@ export interface TaskItem {
   readonly sourceMessageId?: string;
   /** Source summary ID for traceability (4-A feature) */
   readonly sourceSummaryId?: string;
+
+  // --- F193 Phase E (dispatch gate) ---
+
+  /** Feature ID explicitly associated with this task (e.g. "F193"). Optional override. */
+  readonly relatedFeatureId?: string;
+  /** All F-IDs auto-extracted from title + why (informational, for gate trigger logic) */
+  readonly detectedFeatureIds?: string[];
+  /** Dispatch gate state. Present when task references features outside current thread scope. */
+  readonly dispatchGate?: DispatchGateState;
 }
 
 export type CreateTaskInput = Pick<TaskItem, 'threadId' | 'title' | 'why' | 'createdBy'> & {
@@ -86,6 +135,13 @@ export type CreateTaskInput = Pick<TaskItem, 'threadId' | 'title' | 'why' | 'cre
   userId?: string;
   sourceMessageId?: string;
   sourceSummaryId?: string;
+  // F193 Phase E (dispatch gate)
+  relatedFeatureId?: string;
+  /** Cat's current feature context — used to determine if detected F-IDs are "external" */
+  currentFeatureId?: string;
+  /** Auto-extracted F-IDs (computed by MCP handler, passed through to store) */
+  detectedFeatureIds?: string[];
+  dispatchGate?: DispatchGateState;
 };
 
 /** Mutable partial for updates — strips readonly from TaskItem fields */
@@ -95,4 +151,8 @@ export type UpdateTaskInput = {
   status?: TaskStatus;
   why?: string;
   automationState?: AutomationState;
+  /** F193-E1 P1-4: allow patching dispatchGate on existing tasks */
+  dispatchGate?: DispatchGateState;
 };
+
+// F193 Phase E utilities re-exported from cross-thread-affordance.ts (see top of file)

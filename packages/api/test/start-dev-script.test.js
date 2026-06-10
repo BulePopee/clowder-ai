@@ -15,6 +15,15 @@ function baseShellEnv(overrides = {}) {
   };
 }
 
+function commandExists(command) {
+  return (
+    spawnSync('bash', ['-lc', `command -v "${command}" >/dev/null 2>&1`], {
+      encoding: 'utf8',
+      env: baseShellEnv(),
+    }).status === 0
+  );
+}
+
 function runSourceOnlySnippet(scriptPath, snippet, envOverrides = {}) {
   const result = spawnSync(
     'bash',
@@ -34,12 +43,29 @@ function createBashOnlyPath(root) {
   return binDir;
 }
 
+function createProbePath(root, tools) {
+  const binDir = createBashOnlyPath(root);
+  for (const [name, body] of Object.entries(tools)) {
+    writeFileSync(join(binDir, name), body, { mode: 0o755 });
+  }
+  return binDir;
+}
+
 function listenOnLoopback() {
   const server = createServer();
   return new Promise((resolvePromise, reject) => {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => resolvePromise(server));
   });
+}
+
+async function stopRedis(redisCli, mode = 'nosave', attempts = 50) {
+  for (let i = 0; i < attempts; i++) {
+    if (redisCli('ping').status !== 0) return;
+    redisCli('shutdown', mode);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+  assert.notEqual(redisCli('ping').status, 0, 'test Redis must stop during cleanup');
 }
 
 test('source-only exposes helper functions for testing seams', () => {
@@ -52,11 +78,13 @@ declare -F background_eval_with_null_stdin >/dev/null
 declare -F wait_for_port_or_exit >/dev/null
 declare -F api_launch_command >/dev/null
 declare -F frontend_launch_command >/dev/null
+declare -F ensure_api_native_addons >/dev/null
 declare -F web_production_build_ready >/dev/null
 declare -F default_redis_storage_key >/dev/null
 declare -F default_redis_data_dir >/dev/null
 declare -F default_redis_backup_dir >/dev/null
 declare -F maybe_quarantine_stale_aof_dir >/dev/null
+declare -F cat_cafe_redis_start_daemon >/dev/null
 printf 'ok'
 `,
   );
@@ -81,10 +109,248 @@ printf 'ok'
 `,
     );
 
-    assert.equal(output, 'ok');
+    assert.match(output, /ok$/);
   } finally {
     await new Promise((resolvePromise) => server.close(resolvePromise));
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('probe_port_with_nc wraps nc with timeout when timeout is available', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-nc-timeout-'));
+  const timeoutLog = join(tempRoot, 'timeout.log');
+  const ncLog = join(tempRoot, 'nc.log');
+
+  try {
+    const binDir = createProbePath(tempRoot, {
+      timeout: `#!/bin/bash
+printf '%s\\n' "$*" >> "${timeoutLog}"
+shift
+exec "$@"
+`,
+      nc: `#!/bin/bash
+printf '%s\\n' "$*" >> "${ncLog}"
+exit 0
+`,
+    });
+
+    const output = runSourceOnlySnippet(
+      scriptPath,
+      `
+PATH="${binDir}"
+probe_port_with_nc 6543
+printf 'ok'
+`,
+    );
+
+    assert.match(output, /ok$/);
+    assert.equal(readFileSync(timeoutLog, 'utf8').trim(), '1 nc -z 127.0.0.1 6543');
+    assert.equal(readFileSync(ncLog, 'utf8').trim(), '-z 127.0.0.1 6543');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('probe_port_with_nc falls back to bare nc when timeout is unavailable', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-nc-no-timeout-'));
+  const ncLog = join(tempRoot, 'nc.log');
+
+  try {
+    const binDir = createProbePath(tempRoot, {
+      nc: `#!/bin/bash
+printf '%s\\n' "$*" >> "${ncLog}"
+exit 0
+`,
+    });
+
+    const output = runSourceOnlySnippet(
+      scriptPath,
+      `
+PATH="${binDir}"
+probe_port_with_nc 6544
+printf 'ok'
+`,
+    );
+
+    assert.equal(output, 'ok');
+    assert.equal(readFileSync(ncLog, 'utf8').trim(), '-z 127.0.0.1 6544');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('redis_ping wraps redis-cli ping with timeout when timeout is available', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-redis-timeout-'));
+  const timeoutLog = join(tempRoot, 'timeout.log');
+  const redisLog = join(tempRoot, 'redis.log');
+
+  try {
+    const binDir = createProbePath(tempRoot, {
+      timeout: `#!/bin/bash
+printf '%s\\n' "$*" >> "${timeoutLog}"
+shift
+exec "$@"
+`,
+      'redis-cli': `#!/bin/bash
+printf '%s\\n' "$*" >> "${redisLog}"
+exit 0
+`,
+    });
+
+    const output = runSourceOnlySnippet(
+      scriptPath,
+      `
+PATH="${binDir}"
+REDIS_PORT=6545
+redis_ping
+printf 'ok'
+`,
+    );
+
+    assert.equal(output, 'ok');
+    assert.equal(readFileSync(timeoutLog, 'utf8').trim(), '2 redis-cli -p 6545 ping');
+    assert.equal(readFileSync(redisLog, 'utf8').trim(), '-p 6545 ping');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('redis_ping falls back to bare redis-cli when timeout is unavailable', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-redis-no-timeout-'));
+  const redisLog = join(tempRoot, 'redis.log');
+
+  try {
+    const binDir = createProbePath(tempRoot, {
+      'redis-cli': `#!/bin/bash
+printf '%s\\n' "$*" >> "${redisLog}"
+exit 0
+`,
+    });
+
+    const output = runSourceOnlySnippet(
+      scriptPath,
+      `
+PATH="${binDir}"
+REDIS_PORT=6546
+redis_ping
+printf 'ok'
+`,
+    );
+
+    assert.equal(output, 'ok');
+    assert.equal(readFileSync(redisLog, 'utf8').trim(), '-p 6546 ping');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test(
+  'Redis cold start uses RDB-first bootstrap when dump.rdb exists without appendonlydir',
+  { skip: !(commandExists('redis-server') && commandExists('redis-cli')) },
+  async () => {
+    const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-rdb-first-start-'));
+    const redisDir = join(tempRoot, 'redis-data');
+    mkdirSync(redisDir, { recursive: true });
+
+    const server = await listenOnLoopback();
+    const port = server.address().port;
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+
+    const redisCli = (...args) =>
+      spawnSync('redis-cli', ['-p', String(port), ...args], {
+        encoding: 'utf8',
+        env: baseShellEnv(),
+      });
+
+    try {
+      const seed = spawnSync(
+        'redis-server',
+        [
+          '--port',
+          String(port),
+          '--bind',
+          '127.0.0.1',
+          '--dir',
+          redisDir,
+          '--dbfilename',
+          'dump.rdb',
+          '--appendonly',
+          'no',
+          '--daemonize',
+          'yes',
+        ],
+        { encoding: 'utf8', env: baseShellEnv() },
+      );
+      assert.equal(seed.status, 0, `seed redis failed\nstdout:\n${seed.stdout}\nstderr:\n${seed.stderr}`);
+      for (let i = 0; i < 50 && redisCli('ping').status !== 0; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.equal(redisCli('set', 'cat-cafe:rdb-first-probe', 'survived').status, 0);
+      assert.equal(redisCli('save').status, 0);
+      await stopRedis(redisCli, 'save');
+      rmSync(join(redisDir, 'appendonlydir'), { recursive: true, force: true });
+
+      const result = spawnSync(
+        'bash',
+        [
+          '-lc',
+          `
+set -eo pipefail
+source "${scriptPath}" --source-only >/dev/null 2>&1
+trap - EXIT INT TERM
+cat_cafe_redis_start_daemon \
+  --port "${port}" \
+  --bind 127.0.0.1 \
+  --dir "${redisDir}" \
+  --dbfilename dump.rdb \
+  --save "3600 1 300 100 60 10000" \
+  --appendonly yes \
+  --appendfilename appendonly.aof \
+  --appenddirname appendonlydir \
+  --appendfsync everysec \
+  --daemonize yes \
+  --pidfile "${join(redisDir, `redis-${port}.pid`)}" \
+  --logfile "${join(redisDir, `redis-${port}.log`)}"
+redis-cli -p "${port}" dbsize
+redis-cli -p "${port}" get cat-cafe:rdb-first-probe
+redis-cli -p "${port}" config get appendonly | sed -n '2p'
+redis-cli -p "${port}" shutdown nosave >/dev/null 2>&1 || true
+`,
+        ],
+        { encoding: 'utf8', env: baseShellEnv() },
+      );
+
+      assert.equal(result.status, 0, `rdb-first start failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      const output = result.stdout.trim().split('\n').slice(-3);
+      assert.deepEqual(output, ['1', 'survived', 'yes']);
+    } finally {
+      await stopRedis(redisCli, 'nosave');
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test('signal traps clean up and exit with standard signal codes', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  for (const [signal, expectedStatus] of [
+    ['INT', 130],
+    ['TERM', 143],
+  ]) {
+    const result = spawnSync(
+      'bash',
+      ['-lc', `source "${scriptPath}" --source-only >/dev/null 2>&1\nkill -${signal} $$\nexit 99`],
+      { encoding: 'utf8', env: baseShellEnv() },
+    );
+
+    assert.equal(result.status, expectedStatus, `${signal} stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.match(result.stdout, /正在关闭服务/);
+    assert.match(result.stdout, /再见！/);
+    assert.equal((result.stdout.match(/再见！/g) ?? []).length, 1);
   }
 });
 
@@ -152,15 +418,89 @@ printf '%s' "$CAT_CAFE_MCP_SERVER_PATH"
   assert.equal(output, explicitPath);
 });
 
+test('ensure_api_native_addons rebuilds better-sqlite3 after Node ABI drift', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-native-rebuild-'));
+  const binDir = join(tempRoot, 'bin');
+  const apiDir = join(tempRoot, 'packages', 'api');
+  const nodeProbeCount = join(tempRoot, 'node-probe-count');
+  const pnpmLog = join(tempRoot, 'pnpm.log');
+
+  try {
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(apiDir, { recursive: true });
+    writeFileSync(join(apiDir, 'package.json'), '{"name":"@cat-cafe/api"}\n');
+    writeFileSync(
+      join(binDir, 'node'),
+      `#!/bin/bash
+if [ "\${1:-}" = "-e" ]; then
+  case "\${2:-}" in
+    *"new Database(':memory:')"*) ;;
+    *) exit 2 ;;
+  esac
+  count=0
+  [ -f "${nodeProbeCount}" ] && count="$(cat "${nodeProbeCount}")"
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "${nodeProbeCount}"
+  [ "$count" -ge 2 ]
+  exit $?
+fi
+exit 0
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(binDir, 'pnpm'),
+      `#!/bin/bash
+printf '%s\\n' "$*" >> "${pnpmLog}"
+exit 0
+`,
+      { mode: 0o755 },
+    );
+
+    const output = runSourceOnlySnippet(
+      scriptPath,
+      `
+PROJECT_DIR="${tempRoot}"
+PATH="${binDir}:$PATH"
+ensure_api_native_addons
+printf 'ok'
+`,
+    );
+
+    assert.match(output, /ok$/);
+    assert.match(readFileSync(pnpmLog, 'utf8'), /rebuild better-sqlite3/);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 function createTempProject() {
   const tmp = mkdtempSync(join(tmpdir(), 'env-local-'));
   const scriptsDir = join(tmp, 'scripts');
   mkdirSync(scriptsDir);
+  mkdirSync(join(scriptsDir, 'lib'), { recursive: true });
   const realScriptsDir = resolve(process.cwd(), '../../scripts');
   cpSync(join(realScriptsDir, 'start-dev.sh'), join(scriptsDir, 'start-dev.sh'));
   cpSync(join(realScriptsDir, 'download-source-overrides.sh'), join(scriptsDir, 'download-source-overrides.sh'));
+  cpSync(join(realScriptsDir, 'lib', 'node-runtime-guard.sh'), join(scriptsDir, 'lib', 'node-runtime-guard.sh'));
+  cpSync(join(realScriptsDir, 'lib', 'redis-rdb-first.sh'), join(scriptsDir, 'lib', 'redis-rdb-first.sh'));
   chmodSync(join(scriptsDir, 'start-dev.sh'), 0o755);
   return tmp;
+}
+
+function copyStartDevClosure(tempRoot, scriptPath, tempScriptPath, tempOverridesPath) {
+  mkdirSync(join(tempRoot, 'scripts', 'lib'), { recursive: true });
+  cpSync(scriptPath, tempScriptPath);
+  cpSync(resolve(process.cwd(), '../../scripts/download-source-overrides.sh'), tempOverridesPath);
+  cpSync(
+    resolve(process.cwd(), '../../scripts/lib/node-runtime-guard.sh'),
+    join(tempRoot, 'scripts', 'lib', 'node-runtime-guard.sh'),
+  );
+  cpSync(
+    resolve(process.cwd(), '../../scripts/lib/redis-rdb-first.sh'),
+    join(tempRoot, 'scripts', 'lib', 'redis-rdb-first.sh'),
+  );
 }
 
 test('.env.local overrides same-name keys from .env (#603)', () => {
@@ -268,65 +608,80 @@ test('.env.local can activate respect-dotenv-ports mode (#603)', () => {
 });
 
 test('explicit port env vars override .env values for direct startup', () => {
-  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
-  const result = spawnSync(
-    'bash',
-    [
-      '-lc',
-      `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s|%s|%s' "$FRONTEND_PORT" "$API_SERVER_PORT" "$REDIS_PORT"`,
-    ],
-    {
-      encoding: 'utf8',
-      env: baseShellEnv({
-        FRONTEND_PORT: '3023',
-        API_SERVER_PORT: '3024',
-        REDIS_PORT: '6409',
-      }),
-    },
-  );
+  const tmp = createTempProject();
+  try {
+    const scriptPath = join(tmp, 'scripts', 'start-dev.sh');
+    const result = spawnSync(
+      'bash',
+      [
+        '-lc',
+        `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s|%s|%s' "$FRONTEND_PORT" "$API_SERVER_PORT" "$REDIS_PORT"`,
+      ],
+      {
+        encoding: 'utf8',
+        env: baseShellEnv({
+          FRONTEND_PORT: '3023',
+          API_SERVER_PORT: '3024',
+          REDIS_PORT: '6409',
+        }),
+      },
+    );
 
-  assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-  assert.equal(result.stdout.trim(), '3023|3024|6409');
+    assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), '3023|3024|6409');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('explicit NEXT_PUBLIC_API_URL override survives project .env during direct startup', () => {
-  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
-  const result = spawnSync(
-    'bash',
-    [
-      '-lc',
-      `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s' "$NEXT_PUBLIC_API_URL"`,
-    ],
-    {
-      encoding: 'utf8',
-      env: baseShellEnv({
-        NEXT_PUBLIC_API_URL: 'http://localhost:3035',
-      }),
-    },
-  );
+  const tmp = createTempProject();
+  try {
+    const scriptPath = join(tmp, 'scripts', 'start-dev.sh');
+    const result = spawnSync(
+      'bash',
+      [
+        '-lc',
+        `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s' "$NEXT_PUBLIC_API_URL"`,
+      ],
+      {
+        encoding: 'utf8',
+        env: baseShellEnv({
+          NEXT_PUBLIC_API_URL: 'http://localhost:3035',
+        }),
+      },
+    );
 
-  assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-  assert.equal(result.stdout.trim(), 'http://localhost:3035');
+    assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), 'http://localhost:3035');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('explicit PREVIEW_GATEWAY_PORT override survives project .env during direct startup', () => {
-  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
-  const result = spawnSync(
-    'bash',
-    [
-      '-lc',
-      `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s' "$PREVIEW_GATEWAY_PORT"`,
-    ],
-    {
-      encoding: 'utf8',
-      env: baseShellEnv({
-        PREVIEW_GATEWAY_PORT: '5120',
-      }),
-    },
-  );
+  const tmp = createTempProject();
+  try {
+    const scriptPath = join(tmp, 'scripts', 'start-dev.sh');
+    const result = spawnSync(
+      'bash',
+      [
+        '-lc',
+        `set -e\nsource "${scriptPath}" --source-only >/dev/null 2>&1\ntrap - EXIT INT TERM\nprintf '%s' "$PREVIEW_GATEWAY_PORT"`,
+      ],
+      {
+        encoding: 'utf8',
+        env: baseShellEnv({
+          PREVIEW_GATEWAY_PORT: '5120',
+        }),
+      },
+    );
 
-  assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-  assert.equal(result.stdout.trim(), '5120');
+    assert.equal(result.status, 0, `snippet failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), '5120');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('direct command mode can prefer current .env ports over ambient shell ports', () => {
@@ -339,9 +694,7 @@ test('direct command mode can prefer current .env ports over ambient shell ports
   });
 
   try {
-    mkdirSync(join(tempRoot, 'scripts'), { recursive: true });
-    cpSync(scriptPath, tempScriptPath);
-    cpSync(resolve(process.cwd(), '../../scripts/download-source-overrides.sh'), tempOverridesPath);
+    copyStartDevClosure(tempRoot, scriptPath, tempScriptPath, tempOverridesPath);
     writeFileSync(
       join(tempRoot, '.env'),
       'FRONTEND_PORT=3003\nAPI_SERVER_PORT=3004\nNEXT_PUBLIC_API_URL=http://localhost:3004\n',
@@ -380,9 +733,7 @@ test('raw dev entry remaps setup-style Redis 6399 defaults to dev Redis 6398 (IP
   const tempOverridesPath = join(tempRoot, 'scripts', 'download-source-overrides.sh');
 
   try {
-    mkdirSync(join(tempRoot, 'scripts'), { recursive: true });
-    cpSync(scriptPath, tempScriptPath);
-    cpSync(resolve(process.cwd(), '../../scripts/download-source-overrides.sh'), tempOverridesPath);
+    copyStartDevClosure(tempRoot, scriptPath, tempScriptPath, tempOverridesPath);
     writeFileSync(join(tempRoot, '.env'), 'REDIS_PORT=6399\nREDIS_URL=redis://localhost:6399\n', 'utf8');
 
     const result = spawnSync(
@@ -412,9 +763,7 @@ test('respect-dotenv mode keeps explicit Redis 6399 defaults intact for wrappers
   const tempOverridesPath = join(tempRoot, 'scripts', 'download-source-overrides.sh');
 
   try {
-    mkdirSync(join(tempRoot, 'scripts'), { recursive: true });
-    cpSync(scriptPath, tempScriptPath);
-    cpSync(resolve(process.cwd(), '../../scripts/download-source-overrides.sh'), tempOverridesPath);
+    copyStartDevClosure(tempRoot, scriptPath, tempScriptPath, tempOverridesPath);
     writeFileSync(join(tempRoot, '.env'), 'REDIS_PORT=6399\nREDIS_URL=redis://localhost:6399\n', 'utf8');
 
     const result = spawnSync(
@@ -440,10 +789,11 @@ test('respect-dotenv mode keeps explicit Redis 6399 defaults intact for wrappers
 });
 
 test('redis port override also recomputes isolated redis dirs', () => {
-  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tmp = createTempProject();
   const tempHome = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-redis-override-'));
 
   try {
+    const scriptPath = join(tmp, 'scripts', 'start-dev.sh');
     const result = spawnSync(
       'bash',
       [
@@ -465,6 +815,7 @@ test('redis port override also recomputes isolated redis dirs', () => {
       ['dev-6409', `${tempHome}/.cat-cafe/redis-dev-6409`, `${tempHome}/.cat-cafe/redis-backups/dev-6409`].join('|'),
     );
   } finally {
+    rmSync(tmp, { recursive: true, force: true });
     rmSync(tempHome, { recursive: true, force: true });
   }
 });
@@ -821,7 +1172,9 @@ test('api_launch_command output is actually executable: pnpm gets invoked with N
     const result = spawnSync(
       'bash',
       [
-        '-lc',
+        '--noprofile',
+        '--norc',
+        '-c',
         `set -e
 source "${scriptPath}" --source-only >/dev/null 2>&1
 trap - EXIT INT TERM
@@ -861,7 +1214,82 @@ printf '%s' "$(frontend_launch_command)"
 `,
   );
 
-  assert.equal(output, 'cd packages/web && PORT=3013 exec pnpm exec next start -p 3013 -H 0.0.0.0');
+  assert.equal(
+    output,
+    'cd packages/web && pnpm run sync:vendor-assets && PORT=3013 exec pnpm exec next start -p 3013 -H 0.0.0.0',
+  );
+});
+
+test('frontend_launch_command syncs vendor assets before Next dev when package lifecycle hooks are bypassed', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const output = runSourceOnlySnippet(
+    scriptPath,
+    `
+PROD_WEB=false
+WEB_PORT=3011
+printf '%s' "$(frontend_launch_command)"
+`,
+  );
+
+  assert.equal(
+    output,
+    'cd packages/web && NODE_ENV=development NEXT_IGNORE_INCORRECT_LOCKFILE=1 PORT=3011 exec pnpm exec node scripts/sync-vendor-assets.mjs --watch -- next dev -p 3011',
+  );
+});
+
+test('frontend_launch_command dev mode overrides inherited production NODE_ENV', () => {
+  const scriptPath = resolve(process.cwd(), '../../scripts/start-dev.sh');
+  const tempRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-start-dev-frontend-node-env-'));
+  const fakeWebDir = join(tempRoot, 'packages', 'web');
+  const shimDir = join(tempRoot, 'bin');
+  const capturePath = join(tempRoot, 'captured.txt');
+
+  try {
+    mkdirSync(fakeWebDir, { recursive: true });
+    mkdirSync(shimDir, { recursive: true });
+    writeFileSync(
+      join(shimDir, 'pnpm'),
+      `#!/usr/bin/env bash\nprintf 'NODE_ENV=%s\\nARGS=%s\\n' "\${NODE_ENV:-<unset>}" "$*" > "${capturePath}"\n`,
+      'utf8',
+    );
+    chmodSync(join(shimDir, 'pnpm'), 0o755);
+
+    const result = spawnSync(
+      'bash',
+      [
+        '--noprofile',
+        '--norc',
+        '-c',
+        `set -e
+source "${scriptPath}" --source-only >/dev/null 2>&1
+trap - EXIT INT TERM
+PROD_WEB=false
+WEB_PORT=3011
+cmd=$(frontend_launch_command)
+cd "${tempRoot}"
+eval "$cmd"`,
+      ],
+      {
+        encoding: 'utf8',
+        env: baseShellEnv({ PATH: `${shimDir}:${process.env.PATH ?? ''}`, NODE_ENV: 'production' }),
+      },
+    );
+
+    assert.equal(
+      result.status,
+      0,
+      `bash failed to exec frontend_launch_command\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    const captured = readFileSync(capturePath, 'utf8');
+    assert.match(captured, /NODE_ENV=development/, 'frontend next dev inherited production NODE_ENV');
+    assert.match(
+      captured,
+      /ARGS=exec node scripts\/sync-vendor-assets\.mjs --watch -- next dev -p 3011/,
+      'pnpm args incorrect',
+    );
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test('web_production_build_ready requires BUILD_ID instead of only .next directory', () => {

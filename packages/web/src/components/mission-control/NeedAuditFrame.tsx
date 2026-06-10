@@ -68,7 +68,7 @@ export function NeedAuditFrame({ projectId, frame, onSaved }: NeedAuditFrameProp
   ];
 
   return (
-    <div className="rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
+    <div className="rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
       <h3 className="mb-3 text-sm font-bold text-cafe">Stage 0: Frame — 六问定位</h3>
       <div className="space-y-3">
         {fields.map((f) => (
@@ -79,7 +79,7 @@ export function NeedAuditFrame({ projectId, frame, onSaved }: NeedAuditFrameProp
               value={f.value}
               onChange={(e) => f.set(e.target.value)}
               placeholder={f.placeholder}
-              className="console-form-input mt-1 w-full text-xs"
+              className="mt-1 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-3 py-1.5 text-xs text-cafe focus:outline-none focus:ring-1 focus:ring-cafe-accent"
             />
           </label>
         ))}
@@ -93,7 +93,7 @@ export function NeedAuditFrame({ projectId, frame, onSaved }: NeedAuditFrameProp
         type="button"
         onClick={() => void handleSave()}
         disabled={submitting}
-        className="console-button-primary mt-3 w-full disabled:opacity-40"
+        className="mt-3 w-full rounded-lg bg-[var(--mc-accent)] py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)] disabled:opacity-40"
       >
         {submitting ? '保存中...' : frame ? '更新 Frame' : '保存 Frame'}
       </button>

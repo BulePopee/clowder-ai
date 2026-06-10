@@ -213,7 +213,7 @@ PUT  /api/workspace/file    { worktreeId, path, content, baseSha256, editSession
 - [x] AC-19: 面板宽度（sidebar/chat-workspace/tree-viewer）刷新后保持，双击 resize handle 重置（Gap 6, PR #308）
 - [x] AC-20: 深层目录（depth≥4）展开时按需加载子节点（Gap 7, PR #311）
 - [x] AC-21: 切换线程后恢复该线程上次的文件树展开状态和打开的文件标签（Gap 7, PR #311）
-- [ ] AC-22: 演示锁定模式：team lead锁定当前 Workspace 文档后，切换 thread 仍保持右侧文档/行号/滚动位置；退出锁定后恢复各 thread 原本的 Workspace 状态
+- [x] AC-22: 演示锁定模式：team lead锁定当前 Workspace 文档后，切换 thread 仍保持右侧文档/行号/滚动位置；退出锁定后恢复各 thread 原本的 Workspace 状态（PR #1570）
 
 ## 需求点 Checklist
 
@@ -234,7 +234,7 @@ PUT  /api/workspace/file    { worktreeId, path, content, baseSha256, editSession
 | R13 | "你们发的文本里的那些地址我点击 右边这里能打开吗？" | AC-13 | manual: 点消息中路径 → workspace 面板自动打开文件 | [x] |
 | R14 | "要允许我能够调整两个的占比？或者说三个？聊天 然后文件系统 然后打开的文件" | AC-14 | manual: 拖拽分隔条调整三视图比例 | [x] |
 | R15 | "直接点击一个文件然后在 chat 里 mention，或者选中某些行某个文件点击 add to chat" | AC-15 | manual: 选中代码/文件 → 点击引用 → 插入到聊天输入框 | [x] |
-| R16 | "演示时切换 thread，右边 Workspace 仍固定在原本打开的文件/行号" | AC-22 | manual + store test: 锁定文档 → 切换 thread → 右侧不变；退出锁定 → 各 thread workspace 未被污染 | [ ] |
+| R16 | "演示时切换 thread，右边 Workspace 仍固定在原本打开的文件/行号" | AC-22 | manual + store test: 锁定文档 → 切换 thread → 右侧不变；退出锁定 → 各 thread workspace 未被污染 | [x] |
 
 ### 覆盖检查
 - [x] 每个需求点都能映射到至少一个 AC
@@ -252,6 +252,7 @@ PUT  /api/workspace/file    { worktreeId, path, content, baseSha256, editSession
 | 文件编辑能力 | 只读 / 可编辑 | **可编辑** — team lead帮忙编辑后猫猫可直接 commit | team lead (2026-03-05) |
 | Worktree 感知 | 忽略 / 感知 | **必须感知 worktree** — 猫猫可能在不同 worktree 工作，文件系统需显示对应 worktree 的文件 | team lead (2026-03-05) |
 | 演示锁定追踪方式 | 单开新 feature / 作为 F063 增量 | **作为 F063 post-completion enhancement 追踪** — 不单开新 feature，避免 Workspace 能力分散 | team lead (2026-05-06) |
+| Mermaid 图表渲染 | 新 feature / 作为 F063 Markdown 渲染增量 | **作为 F063 post-completion enhancement 追踪** — workspace 已负责 Markdown rendered mode，`mermaid` fenced block 是同一渲染面的格式支持 | team lead (2026-05-19) |
 | 参考实现 | 自研 / 参考现有 | **参考 Claude.ai Project + Codex 布局**，取其精华 | team lead (2026-03-05) |
 | UI 设计语言 | 通用 / 猫猫化 | **对齐 F056 Cat Café 设计语言（猫猫化不是猫化）** | team lead (2026-03-05) |
 | 设计稿工具 | Figma / Pencil | **Pencil MCP**（用 `pencil-design` skill） | team lead (2026-03-05) |
@@ -360,6 +361,7 @@ team lead评价 Phase 1 UI："有点丑不够猫猫，感觉没有设计感"。�
 | P2B-9 | **BUG**: 引用到聊天不带 worktree 信息 — 格式改为 `` `path` (🌿 branch) ``，让猫猫知道引用的是哪个 worktree | AC-15 | **done** |
 | P2B-10 | **BUG**: "Add to chat" 按钮固定在文件查看器顶部，滚动到下方代码时按钮不可见 — 改为跟随选区浮动或 sticky 在可视区域 | AC-15 | **done** |
 | P2B-11 | **BUG**: Markdown 渲染模式下相对链接不可跳转 — `[F046](features/F046-xxx.md)` 这样的相对路径链接在 Rendered 模式下点击无效（`target="_blank"` 打开的是无意义的浏览器 URL）。应拦截相对 `.md` 链接，解析为相对于当前文件的路径，用 `setWorkspaceOpenFile` 在 workspace 内打开目标文件 | — | **done** |
+| P2B-12 | **Enhancement**: Markdown rendered mode 支持 `mermaid` fenced code block，避免长文/设计文档里的流程图退化成普通代码块 | — | **done** |
 
 ### Phase 2C: 预览能力
 
@@ -546,7 +548,7 @@ team lead看到实际 UI 后指出两个层级问题：
 
 ## Phase: Presentation Lock（演示锁定）
 
-> **Status**: planned | **Date**: 2026-05-06 | **Owner**: TBD
+> **Status**: done | **Date**: 2026-05-06 | **Owner**: Ragdoll | **PR**: #1570
 
 ### Why
 
@@ -574,12 +576,26 @@ team lead看到实际 UI 后指出两个层级问题：
 
 ### Acceptance Criteria
 
-- [ ] AC-PL1: 锁定当前文件后，切换 thread 右侧 Workspace 仍显示锁定文件。
-- [ ] AC-PL2: 锁定包含 worktree、file path、line/scroll、tabs，刷新前的 thread 切换不丢。
-- [ ] AC-PL3: 退出锁定后，当前 thread 恢复它自己的 Workspace 打开状态。
-- [ ] AC-PL4: 锁定期间切到其他 thread 不会把锁定文件写入该 thread 的 `ThreadState`。
-- [ ] AC-PL5: 锁定期间自动 workspace navigate 不抢占；用户可显式替换锁定对象。
-- [ ] AC-PL6: 与 Focus Mode 兼容：锁定文件专注后切 thread 不自动退出。
+- [x] AC-PL1: 锁定当前文件后，切换 thread 右侧 Workspace 仍显示锁定文件。
+- [x] AC-PL2: 锁定包含 worktree、file path、line/scroll、tabs，刷新前的 thread 切换不丢。
+- [x] AC-PL3: 退出锁定后，当前 thread 恢复它自己的 Workspace 打开状态。
+- [x] AC-PL4: 锁定期间切到其他 thread 不会把锁定文件写入该 thread 的 `ThreadState`。
+- [x] AC-PL5: 锁定期间自动 workspace navigate 不抢占；用户可显式替换锁定对象。
+- [x] AC-PL6: 与 Focus Mode 兼容：锁定文件专注后切 thread 不自动退出。
+
+### Review 记录
+
+- Maine Coon(codex) R5: 本地 review 放行（0 P1/P2）
+- 云端 Codex R1–R8: 迭代 8 轮（R6 P1 推动 store-level lock sync 架构改进）→ R9 放行 "Didn't find any major issues"
+- `pnpm gate` 通过，PR #1570 squash merged 2026-05-06
+- 愿景守护：Maine Coon(GPT-5.4) 放行，0 P1/P2
+
+### Residual Risk（愿景守护发现）
+
+| Risk | 描述 | 当前保障 | 回归触发条件 |
+|------|------|----------|-------------|
+| AC-PL6 测试层次 | Focus Mode 兼容只有 store-level 测试（mode 不随 thread 切换变化），组件级 auto-mode-switch 抑制靠 `WorkspacePanel.tsx:258` 的 `if (presentationLock) return` | store test + code guard | 若重构 mode-sync effect 移除 lock 检查 |
+| ~~AC-PL2 scroll~~ | ~~滚动位置靠 viewer 不 remount 自然保持，无显式 state 建模~~ | **已修复 PR #1578**: scrollTop 显式存入 PresentationLockSnapshot + CodeViewer/Markdown viewport bridge | — |
 
 ## Known Bugs (Follow-up)
 

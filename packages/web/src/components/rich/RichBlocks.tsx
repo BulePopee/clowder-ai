@@ -8,10 +8,13 @@ import { CardBlock } from './CardBlock';
 import { ChecklistBlock } from './ChecklistBlock';
 import { DiffBlock } from './DiffBlock';
 import { FileBlock } from './FileBlock';
+import { FrustrationIssueCard, isFrustrationIssueCardBlock } from './FrustrationIssueCard';
+import { HandoffProposalCard, isHandoffProposalCardBlock } from './HandoffProposalCard';
 import { HtmlWidgetBlock } from './HtmlWidgetBlock';
 import { InteractiveBlock } from './InteractiveBlock';
 import { InteractiveBlockGroup } from './InteractiveBlockGroup';
 import { MediaGalleryBlock } from './MediaGalleryBlock';
+import { isProposalCardBlock, ProposalCard } from './ProposalCard';
 
 function RichBlockRenderer({
   block,
@@ -26,6 +29,15 @@ function RichBlockRenderer({
 }) {
   switch (block.kind) {
     case 'card': {
+      // F128: proposal cards have dedicated approval-card renderer
+      if (isProposalCardBlock(block)) return <ProposalCard block={block} messageId={messageId} />;
+      // F225: cat-initiated session handoff cards get a dedicated approve/reject renderer that wires
+      // the buttons to /api/session-handoff/:id/approve|reject (else they fall through to inert CardBlock).
+      if (isHandoffProposalCardBlock(block)) return <HandoffProposalCard block={block} messageId={messageId} />;
+      // F222: frustration auto-issue cards with trusted provenance get dedicated renderer
+      if (isFrustrationIssueCardBlock(block, messageSource)) {
+        return <FrustrationIssueCard block={block} messageId={messageId} />;
+      }
       // F174 D2b-1: cards tagged with meta.kind = 'callback_auth_failure' get the
       // dedicated in-context observability renderer ("明厨亮灶" — entity carries its
       // own state). Plain cards continue to use the default CardBlock.
@@ -58,7 +70,7 @@ function RichBlockRenderer({
       return <FileBlock block={block} />;
     default:
       return (
-        <div className="rounded-lg border border-[var(--console-border-soft)] px-3 py-2 text-xs text-cafe-muted">
+        <div className="rounded-lg border border-cafe px-3 py-2 text-xs text-cafe-muted">
           未知富块类型: {(block as { kind: string }).kind}
         </div>
       );

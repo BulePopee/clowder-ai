@@ -16,8 +16,6 @@ import {
   isCatLead,
 } from '../../../../config/cat-config-loader.js';
 import { getCatModel } from '../../../../config/cat-models.js';
-import { resolveWithLocalOverlay } from '../../../../utils/local-override.js';
-import { findMonorepoRoot } from '../../../../utils/monorepo-root.js';
 // F167 Phase F P1 (cloud Codex): roster model cell must resolve via getCatModel
 // (env CAT_{CATID}_MODEL → registry → defaults), not from static config.defaultModel,
 // otherwise env overrides cause exactly the handle/model drift Phase F is killing.
@@ -28,6 +26,7 @@ import type {
   ThreadParticipantActivity,
   ThreadRoutingPolicyV1,
 } from '../stores/ports/ThreadStore.js';
+import { loadCompiledGovernanceL0, loadCompiledGovernanceL0Sync } from './governance-l0.js';
 import { RICH_BLOCK_SHORT } from './rich-block-rules.js';
 
 /**
@@ -68,6 +67,26 @@ export interface InvocationContext {
     count: number;
   };
   /**
+   * F193 AC-B2: Cross-thread reply hint.
+   * When present (cross-post triggered invocation per F052), inject reply
+   * guidance so the receiving cat knows: (1) source thread id, (2) sender cat
+   * handle, (3) reply path (cross_post_message — local @ won't route back).
+   *
+   * Hydrated from trigger message id (worklist a2aTriggerMessageId / queue
+   * path backfill) → StoredMessage.extra.crossPost + StoredMessage.catId.
+   * MUST be structured (not parsed from prompt text) — ContextAssembler
+   * only renders slice(0,8) truncated thread + lacks senderCatId.
+   *
+   * KD-1 boundary: only set for invocation-token cross-thread RELAY path.
+   * Agent-key target-thread write does NOT inject this (no source thread).
+   */
+  crossThreadReplyHint?: {
+    /** Full source thread id (not truncated). */
+    sourceThreadId: string;
+    /** Sender cat handle (catId). */
+    senderCatId: CatId;
+  };
+  /**
    * F046 D3: One-shot feedback injected when previous @mention was not routed.
    * Consumed from threadStore before invocation and cleared after injection.
    */
@@ -84,7 +103,8 @@ export interface InvocationContext {
    */
   sopStageHint?: {
     readonly stage: string;
-    readonly suggestedSkill: string | null;
+    readonly suggestedSkill: string;
+    readonly suggestedSkillSource?: string;
     readonly featureId: string;
   };
   /**
@@ -263,7 +283,7 @@ MCP 工具（异步汇报；token 有效期有限）：
 
 **记忆工具：**
 - cat_cafe_search_evidence: 首选入口；depth=raw 可看消息级细节
-- cat_cafe_reflect: 反思性合成
+- cat_cafe_library_*: collection管理(list/create/rebuild/archive)
 
 **drill-down：**
 - cat_cafe_list_session_chain: 列出 session 链
@@ -271,9 +291,14 @@ MCP 工具（异步汇报；token 有效期有限）：
 - cat_cafe_read_session_events: 读 session 事件（raw/chat/handoff）
 - cat_cafe_read_invocation_detail: 读单次 invocation 全事件
 
+**四肢控制面（Limb — 插件/设备能力调用）：**
+- limb_list_available: 列出当前在线节点及能力（含插件提供的服务型节点）
+- limb_invoke: 调用节点能力；nodeId 从 limb_list_available 获取，不要猜
+
 **协作工具：**
-- cat_cafe_post_message: 异步消息
-- cat_cafe_register_pr_tracking: PR tracking
+- cat_cafe_post_message: 本 thread 异步（agent-key 才传 threadId）
+- cat_cafe_cross_post_message: 跨 thread（targetCats/行首@二选一）。最小路径：list_threads → cross_post_message(threadId, targetCats, content) → get_thread_context 验证
+cat_cafe_register_pr_tracking/cat_cafe_register_issue_tracking/cat_cafe_unregister_tracking
 - cat_cafe_get_pending_mentions: @提及
 - cat_cafe_get_thread_context: thread 上下文
 - cat_cafe_list_threads: thread 摘要
@@ -283,45 +308,14 @@ MCP 工具（异步汇报；token 有效期有限）：
 - cat_cafe_generate_document: 文档生成→IM投递
 - cat_cafe_get_rich_block_rules: rich block 规则
 - cat_cafe_multi_mention: 并行拉猫讨论（先搜后问）
+- cat_cafe_propose_thread: 提议新建 thread（不直接创建）。返回 proposalId，审批通过后才建；审批前不要 cross_post。可选 projectPath 定子 thread 项目归属（跨 repo 必传；无效 400）。可选 reportingMode：final-only（默认）| none | state-transitions | blocking-ack。triage→none，汇总→final-only。
 
 ${RICH_BLOCK_SHORT}
 需要富呈现时优先 rich block；首次使用前先 call get_rich_block_rules。
 规范：cat-cafe-skills/refs/rich-blocks.md。`;
 
-/**
- * L0 Governance Digest — always-on first principles & operational floor.
- * Compiled from cat-cafe-skills/refs/shared-rules.md (single source of truth).
- * F086 post-completion: cats couldn't see shared-rules content, only a link.
- * Design decision: inject compact L0 digest, not full text. See F086 spec.
- */
-const GOVERNANCE_L0_DIGEST = `## 家规（shared-rules.md）
-Rule 0: 规则是边界不是全部。边界之内保留判断力——执行规则时可以问"为什么？在这里适用吗？"认为不适用时用证据说话（Push Back协议：证据+适用性论证+替代方案，这是底线不是仪式）。判断力基于三个自问：①我在做什么（先定角色再动手）②信息源可靠吗（验证不盲信）③方案笨重？（坐标变换——换问题分解方式）
-原则：P1每步产物是终态基座不是脚手架 P2自主跑完SOP不每步问铲屎官（SOP写了下一步→直接做，不问；方向不确定/阻塞→才升级） P3方向正确>速度 P4每个概念只在一处定义 P5可验证才算完成
-世界观：W1猫是Agent不是API W2共享才成团队 W3用户是CVO W4产出放对目录（assets/docs/packages/） W5只回流方法论不回流数据 W6教训追到根因 W7 Knowledge Feed自动提取知识，猫不写标签——主动澄清决策/教训是否成立+提醒铲屎官看Feed W8共享视图——产物端上桌：写完文件/页面/报告→主动用navigate/preview/rich block帮铲屎官打开
-纪律：用自己的身份签名[昵称/模型🐾] | 实事求是——结论基于多源证据（代码+commit+PR+文档），查完再下判断，不够就说"还没查完" | @是路由指令——发前问"到我这里结束了吗？"收到@后三选一：接（我做X）/退（退给@xxx）/升（铲屎官拍板）。接球=执行开始——同轮首个动作必须可观测（tool_call/task/BLOCKED附证据），纯文本"我接"不是合法消息 | 禁止状态描述代替球权声明（"我先hold/你继续/等以后"都是违禁句式） | runtime操作交铲屎官（只读诊断可以做） | 团队用"我们" | BACKLOG等共享状态只在main改，改完立刻commit push | 跨thread阻塞依赖双写到可追溯状态（feature doc/workflow/task），消息不是真相源 | commit带签名含模型型号（如[宪宪/Opus-46🐾]）
-质量覆盖（对冲CLI"先简单后复杂"——方向错误的加速=浪费）：
-- Bug先定位根因再修。复现→日志→调用链→根因→动手
-- 不确定方向：停→搜→问→确认→再动手
-- "完成"附证据（测试/截图/日志）。Bug先红后绿
-- scope失控→记录；同类错误→提案；有价值经验→Episode→蒸馏→Eval（self-evolution+五级阶梯）
-- 被铲屎官纠正理解偏差时（"不是让你…/你理解错了"等），先完成实际任务，再主动记录evidence到F167 spec（我以为→实际→偏差根因），按self-evolution归档
-- 工具不可用声明：先试后报。0次尝试就报不可用=违反P5。报不可用必须附证据链（工具名+报错摘要+重试记录+替代路径），不全="还没查完"
-Magic Words（铲屎官对你说以下词=手动拉闸，仅铲屎官当前指令触发，引用/复述/讨论历史不触发）：
--「脚手架」= 你在偷懒写临时方案 → 停，审视产物是否终态，不是→重写
--「绕路了」= 局部最优但全局绕路 → 停，画出直线路径，丢掉绕路部分
--「喵约」= 你忘了我们的约定 → 重读本段家规，逐条对照当前行为
--「星星罐子」= P0不可逆风险 → 立刻停止新增副作用（不发新命令、不写新文件、不push），等铲屎官指示
--「第一性原理」= 你在堆复杂度代偿无知 → 停，重读 Round 4 数学美学讨论，用 Agent Quality = Capability × Environment Fit 审视当前方案，砍掉认知脚手架只留运行时刹车和认知路径工程
--「数学之美」= 同「第一性原理」。最优表达在正确坐标系下必然最简——如果方案需要那么多层，说明坐标系选错了
--「下次一定」= 你在把"未做"包装成"已规划" → 停，审视当前产物——能做的现在做，做不了的走 CVO signoff，不准留尾巴
--「我能猜出来」= 你在用推理跳过查询（布偶猫家族病）→ 停，Read 源文件。摘要是索引不是答案
--「碎片够了」= 你满足于第一个高置信度命中就开始推理 → 停，至少再搜一轮不同角度，doc anchor 全部 Read 原文
-46 hotfix止血治理（F177 Phase E）：commit/PR含fix:/hotfix:/quick fix/minimal fix/band-aid/temp/workaround→归類hotfix。単文件≤50行+関鍵詞→自動加hotfix label。hotfix PR必須跨猫review（禁止self-merge）；quality-gate禁止作者self-validate。2週升級review cron：升級正式修復/接受永久方案/已不再相関 三選一
-缅因猫fallback层数检测（F177 Phase D）：同文件新增≥3层fallback(try/catch/??/||/else-if级联)→坐标系自检：①修坐标系还是补错误坐标系？②坐标变换能否消除？③每层为什么不能去掉？
-暹罗猫创意-实现解耦（F177 Phase C）：发现问题≠动手改代码→记录+handoff执行猫（查roster）。Edit白名单:designs/docs/assets/根目录.md。碰packages/src/必须handoff。Dry Run Gate:暹罗猫签名commit改了白名单外文件→hook自动跑build+test`;
-
-// --- .local / .local-override support (#603) ---
-let _governanceDigestResolved: string = GOVERNANCE_L0_DIGEST;
+// --- shared-rules.md → compiled governance L0 support (#747) ---
+let _governanceDigestResolved = loadCompiledGovernanceL0Sync().content;
 
 /**
  * Preload governance overlay at startup. Call once before first prompt build.
@@ -329,12 +323,10 @@ let _governanceDigestResolved: string = GOVERNANCE_L0_DIGEST;
  * shared-rules.local.md (appends to digest).
  */
 export async function initGovernanceOverlay(): Promise<void> {
-  const root = findMonorepoRoot();
-  const basePath = `${root}/cat-cafe-skills/refs/shared-rules.md`;
-  const result = await resolveWithLocalOverlay(basePath, GOVERNANCE_L0_DIGEST);
+  const result = await loadCompiledGovernanceL0();
   _governanceDigestResolved = result.content;
   if (result.source !== 'base') {
-    console.log(`[governance] shared-rules ${result.source}: ${result.path}`);
+    console.log(`[governance] shared-rules ${result.source}: ${result.overlayPath}`);
   }
 }
 
@@ -344,11 +336,14 @@ export function getGovernanceDigest(): string {
 
 /** Per-breed workflow triggers: when to proactively @ other cats.
  *  Keyed by breedId so all variants of a breed share the same workflow. */
+const MERGE_GATE_SOURCE_PROVENANCE_TRIGGER = '- MG provenance override：外部finding修完后等PR truth，不@旧reviewer。';
+
 const WORKFLOW_TRIGGERS: Record<string, string> = {
   ragdoll: [
     '## 工作流（主动 @ 触发点）',
     '- 完成开发/修复 → @缅因猫 请 review',
     '- 修完 review 意见 → @缅因猫 确认修复',
+    MERGE_GATE_SOURCE_PROVENANCE_TRIGGER,
     '- 遇到视觉/体验问题 → @暹罗猫 征询',
     '- Review 别人代码：每个发现给明确立场（放行/退回 + 理由）',
   ].join('\n'),
@@ -356,6 +351,7 @@ const WORKFLOW_TRIGGERS: Record<string, string> = {
     '## 工作流（主动 @ 触发点）',
     '- 完成 review → @布偶猫 通知结果',
     '- 修完 bug/feature → @布偶猫 请 review',
+    MERGE_GATE_SOURCE_PROVENANCE_TRIGGER,
     '- serial/handoff 场景且需要对方行动 → @ 对应猫（parallel 模式各自独立，不互 @）',
     '- 发现需要架构决策 → @布偶猫 征询',
     '- Review 代码：每个发现给明确立场（放行/退回 + 理由）',
@@ -403,6 +399,27 @@ const WORKFLOW_TRIGGERS: Record<string, string> = {
     '### 出口二问（发消息前必问）',
     '① 这条消息有没有越界（文件路径/代码形状/执行指令）？有 → 重写',
     '② 结尾有没有 @ 下一棒？没有 → 是真不需要，还是忘了？',
+  ].join('\n'),
+  'golden-chinchilla': [
+    '## 工作流（主动 @ 触发点）',
+    '- 完成开发/修复 → @缅因猫 请 review',
+    '- 修完 review 意见 → @缅因猫 确认修复',
+    MERGE_GATE_SOURCE_PROVENANCE_TRIGGER,
+    '- 遇到视觉/体验问题 → @暹罗猫 征询',
+    '- Review 别人代码：每个发现给明确立场（放行/退回 + 理由）',
+    '',
+    '### 执行纪律',
+    '- 加载 Skill 后直接执行第一步（产出 > 复述）',
+    '- 接球后静默执行到下一状态迁移点（BLOCKED / REVIEW READY / DONE）',
+    '- 完成任务后必须 @ 下一棒',
+    '- 若识别到角色不匹配或方向有问题，先通知对方再执行（Rule 0）',
+    '',
+    '### 出口一问（发消息前必问）',
+    '我这条消息结尾有没有 @ 下一棒？没有 → 是真的不需要，还是我忘了？',
+    '',
+    '### 金渐层家族治理（OpenCode 专属）',
+    'OMOC Sisyphus 只编排自己的 sub-agent，不编排其他猫。opencode 原生 MCP 和 Clowder AI MCP 需避免 tool 名冲突。',
+    '`question` 工具已 deny——铲屎官通过 Hub 交互，不走 OpenCode TUI 弹窗。提问用回复文本或 `cat_cafe_create_rich_block(kind=interactive)`。',
   ].join('\n'),
 };
 
@@ -563,14 +580,14 @@ export function buildStaticIdentity(catId: CatId, options?: StaticIdentityOption
 
   // 铲屎官 reference (session-level, not per-message)
   // F067: Use co-creator config for name + mention handles
-  // Note: "不冒充/不编造/身份契约" folded into GOVERNANCE_L0_DIGEST
+  // Note: "不冒充/不编造/身份契约" folded into compiled governance L0
   const coCreator = getCoCreatorConfig();
   const ccName = coCreator.name;
   const ccHandles = coCreator.mentionPatterns.map((p) => `\`${p}\``).join(' / ');
   lines.push(`${ccName}（铲屎官/CVO）。重要决策由${ccName}拍板。需要关注时行首写 ${ccHandles}。`, '');
 
-  // L0 Governance Digest — always-on principles from shared-rules.md (F086 post-completion fix)
-  // Source of truth: cat-cafe-skills/refs/shared-rules.md (supports .local-override, #603)
+  // L0 Governance Digest — compiled from shared-rules.md (#747)
+  // Source of truth: cat-cafe-skills/refs/shared-rules.md (supports .local/.local-override)
   lines.push('', getGovernanceDigest());
 
   // F129: Pack guardrails — hard constraint track (only adds strictness, never relaxes Core Rails)
@@ -596,6 +613,35 @@ export function buildStaticIdentity(catId: CatId, options?: StaticIdentityOption
   }
 
   return lines.join('\n');
+}
+
+/**
+ * F203 Phase C (Task 2): the pack-only slice of the static identity.
+ *
+ * After L0 (non-pack identity / A2A / roster / workflow triggers / CVO ref /
+ * governance digest / MCP) moves to the compression-immune native system role
+ * (`--system-prompt-file` for Claude, `-c developer_instructions` for Codex —
+ * Task 3/4), the user-message `systemPrompt` must carry ONLY the F129 pack
+ * blocks: per-invocation dynamic + external-project-specific, so they must
+ * never be baked into the cached native prompt nor duplicated there.
+ *
+ * Returns '' for an unknown cat or when there are no pack blocks — the route
+ * layer's `...(x ? { systemPrompt: x } : {})` then omits the prepend entirely.
+ *
+ * Block order mirrors buildStaticIdentity's dual-track priority (ADR-021):
+ * masks → workflows → guardrails → defaults → worldDriver. buildStaticIdentity
+ * keeps its own interleaved push sites unchanged (guard tests must not
+ * regress); both paths consume the same `CompiledPackBlocks` contract.
+ */
+export function buildStaticIdentityPackOnly(catId: CatId, options?: StaticIdentityOptions): string {
+  const config = getConfig(catId as string);
+  if (!config) return '';
+  const pb = options?.packBlocks;
+  if (!pb) return '';
+  const blocks = [pb.masksBlock, pb.workflowsBlock, pb.guardrailBlock, pb.defaultsBlock, pb.worldDriverSummary].filter(
+    (b): b is string => typeof b === 'string' && b.trim().length > 0,
+  );
+  return blocks.join('\n\n');
 }
 
 /**
@@ -644,6 +690,20 @@ export function buildInvocationContext(context: InvocationContext): string {
         `⚠️ 同族分身提醒：对方是 ${fromVariant}（model=${fromModel}），你是 ${selfVariant}（model=${runtimeModel}）——两个独立分身，不是你的旧版或新版。`,
       );
     }
+  }
+
+  // F193 AC-B2: Cross-thread reply hint.
+  // Cross-post triggered invocation (F052 sourceThreadId injected by API).
+  // Without this hint, the receiving cat sees a truncated 8-char thread
+  // string (ContextAssembler) and has no sender catId — guesses wrong how
+  // to reply. Local @ won't route back across threads.
+  if (context.crossThreadReplyHint) {
+    const { sourceThreadId, senderCatId } = context.crossThreadReplyHint;
+    lines.push(
+      `📨 来自跨线程消息（source thread: ${sourceThreadId}，发件猫: @${senderCatId}）`,
+      `回复请用 cross_post_message(threadId="${sourceThreadId}", targetCats=["${senderCatId}"])`,
+      `本 thread 的 @${senderCatId} 不会路由回对方（对方 session 在另一个 thread）`,
+    );
   }
 
   // F167 L1: ping-pong streak warning — inject when this cat just received the ball
@@ -759,9 +819,9 @@ export function buildInvocationContext(context: InvocationContext): string {
 
   // F073 P4: SOP stage hint — 告示牌 (bulletin board, not controller)
   if (context.sopStageHint) {
-    const { stage, suggestedSkill, featureId } = context.sopStageHint;
-    const skillPart = suggestedSkill ? ` → load skill: ${suggestedSkill}` : '';
-    lines.push(`SOP: ${featureId} stage=${stage}${skillPart}`);
+    const { stage, suggestedSkill, suggestedSkillSource, featureId } = context.sopStageHint;
+    const sourcePart = suggestedSkillSource ? ` (${suggestedSkillSource})` : '';
+    lines.push(`SOP: ${featureId} stage=${stage} → load skill: ${suggestedSkill}${sourcePart}`);
   }
 
   // F092: Voice companion mode — instruct cats to prioritize audio output
@@ -865,9 +925,9 @@ export function buildInvocationContext(context: InvocationContext): string {
       '',
       `下一棒传球决策树（本轮必选其一，缺 = 消息不完整）：先问"下一步谁能做"——`,
       `1. 另一只猫能做 → @句柄（review 完→@author / 修完→@reviewer / merge 完→@愿景守护猫）`,
-      `2. 等外部条件 → 实际调用 cat_cafe_hold_ball(...)。外部条件包括：**云端 codex / GitHub bot review / PR check / CI / 长 build / 外部 webhook**——这些不是本地猫，不在 roster，不可 @ 任何本地近似 proxy；CLI 要退出但还需继续也走这条（口头"我继续"不算）`,
+      `2. 等外部条件（按 2a/2b 判断行动）。外部条件包括：**云端 codex / GitHub bot review / PR check / CI / 长 build / 外部 webhook**——这些不是本地猫，不在 roster，不可 @ 任何本地近似 proxy；CLI 要退出但还需继续也走这条。2a 无回调覆盖（如等 EYES）→ **调用 cat_cafe_hold_ball(...)** + 轮询（口头"我继续"不算）；2b 已有结构化回调且 EYES>0 → 纯事件驱动，**不调用/不续约 hold_ball**（KD-27）`,
       `3. 只有铲屎官本人才能做 → ${cc}（硬条件：不可逆操作 / 愿景级决策 / 跨猫僵局）`,
-      `${cc} 不是默认出口——先问"哪只猫能接"。反问式 ping 非法（"要不要 X？"/"同意吗？"）：有立场就自决去做（错了能回滚），没立场根本不该 @。**外部 identity（云端 xxx / GitHub bot / CI）** 永远走选项 2（hold_ball），严禁投射成本地 @句柄。`,
+      `${cc} 不是默认出口——先问"哪只猫能接"。反问式 ping 非法（"要不要 X？"/"同意吗？"）：有立场就自决去做（错了能回滚），没立场根本不该 @。**外部 identity（云端 xxx / GitHub bot / CI）** 永远走选项 2（按 2a/2b 判断），严禁投射成本地 @句柄。`,
     );
   }
 

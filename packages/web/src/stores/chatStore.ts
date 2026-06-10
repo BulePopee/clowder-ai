@@ -3,6 +3,7 @@ import { getBubbleInvocationId } from '@/debug/bubbleIdentity';
 import { isBubbleInvariantStrictModeOn, recordBubbleInvariantViolation } from '@/debug/bubbleInvariantDiagnostics';
 import { recordDebugEvent } from '@/debug/invocationEventDebug';
 import { getCachedCats } from '@/hooks/useCatData';
+import { inferFileKind, inferRenderMode } from '@/lib/file-kind';
 import { saveThreadMessages as saveMessagesSnapshot, saveThreads as saveThreadsSnapshot } from '../utils/offline-store';
 import { findBubbleStoreInvariantViolations } from './bubble-invariants';
 import type {
@@ -11,7 +12,10 @@ import type {
   ChatMessage,
   ChatMessageMetadata,
   ChatMessagePatch,
+  ComposerDraftInsert,
   GameState,
+  PresentationLockSnapshot,
+  PresentationSurfaceState,
   QueueEntry,
   RichBlock,
   Thread,
@@ -20,6 +24,7 @@ import type {
   ToolEvent,
 } from './chat-types';
 import { DEFAULT_THREAD_STATE } from './chat-types';
+import { crossesUserTurnBoundary } from './turn-boundary';
 
 // Re-export types so existing consumers keep working with `import { ... } from '@/stores/chatStore'`
 export type {
@@ -107,6 +112,7 @@ function snapshotActive(s: ChatState): ThreadState {
     intentMode: s.intentMode,
     targetCats: s.targetCats,
     catStatuses: s.catStatuses,
+    catStatusDetails: s.catStatusDetails,
     catInvocations: s.catInvocations,
     currentGame: s.currentGame,
     unreadCount: 0, // active thread always 0
@@ -231,6 +237,15 @@ const MAX_BLOB_MESSAGES = 200;
 
 const UI_THINKING_EXPANDED_KEY = 'catcafe.ui.thinkingExpandedByDefault';
 const THINKING_CHUNK_SEPARATOR = '\n\n---\n\n';
+
+function loadUiThinkingExpandedByDefault(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(UI_THINKING_EXPANDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function persistUiThinkingExpandedByDefault(next: boolean) {
   if (typeof window === 'undefined') return;
@@ -479,7 +494,10 @@ function findAssistantDuplicate(messages: ChatMessage[], incoming: ChatMessage):
       const existing = messages[i]!;
       if (existing.type !== 'assistant' || existing.catId !== incoming.catId) continue;
       const existingInvId = getBubbleInvocationId(existing);
-      if (existingInvId === incomingInvId) return i;
+      if (existingInvId === incomingInvId) {
+        if (existing.id !== incoming.id && crossesUserTurnBoundary(messages, existing, incoming)) continue;
+        return i;
+      }
     }
   }
 
@@ -615,6 +633,8 @@ export interface ChatState {
   intentMode: 'execute' | 'ideate' | null;
   targetCats: string[];
   catStatuses: Record<string, CatStatusType>;
+  /** F198 Phase C AC-C3: daemon detail text per catId */
+  catStatusDetails: Record<string, string>;
   catInvocations: Record<string, CatInvocationInfo>;
   /** F101: Active game in current thread */
   currentGame: GameState | null;
@@ -705,7 +725,7 @@ export interface ChatState {
   /** F045: Set or append extended thinking content on an assistant message */
   setMessageThinking: (messageId: string, thinking: string) => void;
   /** F081: Persist stream invocation identity onto a message for replace/hydration reconcile */
-  setMessageStreamInvocation: (messageId: string, invocationId: string) => void;
+  setMessageStreamInvocation: (messageId: string, invocationId: string, turnInvocationId?: string) => void;
   clearMessages: () => void;
   /** Bug C: Monotonic counter + target threadId — increment to request a history catch-up fetch */
   /**
@@ -833,6 +853,7 @@ export interface ChatState {
   updateThreadThinkingMode: (threadId: string, mode: 'debug' | 'play') => void;
 
   updateThreadPreferredCats: (threadId: string, preferredCats: string[]) => void;
+  updateThreadLabels: (threadId: string, labels: string[]) => Promise<void>;
   updateThreadBubbleDisplay: (threadId: string, field: 'bubbleThinking' | 'bubbleCli', value: BubbleOverride) => void;
   setGlobalBubbleDefaults: (defaults: GlobalBubbleDefaults) => void;
   fetchGlobalBubbleDefaults: () => Promise<void>;
@@ -851,7 +872,12 @@ export interface ChatState {
   setThreadMessageMetadata: (threadId: string, messageId: string, metadata: ChatMessageMetadata) => void;
   setThreadMessageUsage: (threadId: string, messageId: string, usage: TokenUsage) => void;
   setThreadMessageThinking: (threadId: string, messageId: string, thinking: string) => void;
-  setThreadMessageStreamInvocation: (threadId: string, messageId: string, invocationId: string) => void;
+  setThreadMessageStreamInvocation: (
+    threadId: string,
+    messageId: string,
+    invocationId: string,
+    turnInvocationId?: string,
+  ) => void;
   setThreadMessageStreaming: (threadId: string, messageId: string, streaming: boolean) => void;
   setThreadLoading: (threadId: string, loading: boolean) => void;
   setThreadHasActiveInvocation: (threadId: string, active: boolean) => void;
@@ -881,7 +907,7 @@ export interface ChatState {
   armUnreadSuppression: (threadId: string) => void;
   /** F069: Initialize unread state from API (page load recovery) */
   initThreadUnread: (threadId: string, unreadCount: number, hasUserMention: boolean) => void;
-  updateThreadCatStatus: (threadId: string, catId: string, status: CatStatusType) => void;
+  updateThreadCatStatus: (threadId: string, catId: string, status: CatStatusType, detail?: string) => void;
   /** F173 PR-C Task 10: clear targetCats / catStatuses + mark stale catInvocations completed
    *  for a specific thread. Mirrors flat when active. Replaces the flat-only clearCatStatuses
    *  inside reconcile / hydration paths so KD-2 mirror invariant holds. */
@@ -930,7 +956,7 @@ export interface ChatState {
   ) => void;
 
   // ── F63: Workspace Explorer ──
-  rightPanelMode: 'status' | 'workspace';
+  rightPanelMode: 'status' | 'workspace' | 'transcript';
   workspaceWorktreeId: string | null;
   workspaceOpenTabs: string[];
   workspaceOpenFilePath: string | null;
@@ -940,7 +966,7 @@ export interface ChatState {
   /** @internal Last workspace-file-set event context (timestamp + threadId).
    * Used by WorkspacePanel to distinguish fresh navigate from stale leftovers on mount. */
   _workspaceFileSetAt: { ts: number; threadId: string | null };
-  setRightPanelMode: (mode: 'status' | 'workspace') => void;
+  setRightPanelMode: (mode: 'status' | 'workspace' | 'transcript') => void;
   setWorkspaceWorktreeId: (id: string | null) => void;
   setWorkspaceOpenFile: (
     path: string | null,
@@ -955,30 +981,49 @@ export interface ChatState {
   workspaceRevealPath: string | null;
   setWorkspaceRevealPath: (path: string | null, originThreadId?: string | null) => void;
 
+  // F063: Presentation Lock — freeze workspace during demos
+  presentationLock: PresentationLockSnapshot | null;
+  enablePresentationLock: () => void;
+  disablePresentationLock: () => void;
+  replacePresentationLockTarget: (snapshot: PresentationLockSnapshot) => void;
+  setPresentationLockViewport: (scrollTop: number) => void;
+  workspaceScrollTop: number | null;
+
+  // F226: Presentation Surface — file/md tear-off floating window
+  presentationSurface: PresentationSurfaceState | null;
+  detachToFloat: () => void;
+  dockBack: () => void;
+  closeFloat: () => void;
+  minimizeFloat: (minimized: boolean) => void;
+  setFloatPos: (pos: { x: number; y: number }) => void;
+  setFloatSize: (size: { width: number; height: number }) => void;
+  toggleMaximize: () => void;
+
   // Phase H + F139 + F160 + F168: Workspace mode
   workspaceMode: 'dev' | 'recall' | 'schedule' | 'tasks' | 'community';
   setWorkspaceMode: (mode: 'dev' | 'recall' | 'schedule' | 'tasks' | 'community') => void;
+
+  // ── F195 Phase C: Floating transcript window ──
+  floatingTranscriptVisible: boolean;
+  setFloatingTranscriptVisible: (visible: boolean) => void;
 
   // ── F120: Preview auto-open (always-mounted listener) ──
   pendingPreviewAutoOpen: { port: number; path: string } | null;
   setPendingPreviewAutoOpen: (data: { port: number; path: string }) => void;
   consumePreviewAutoOpen: () => { port: number; path: string } | null;
 
-  // ── F63-AC15: Code-to-chat reference ──
-  pendingChatInsert: { threadId: string; text: string } | null;
-  setPendingChatInsert: (insert: { threadId: string; text: string } | null) => void;
-
-  // ── Standalone member editor (avatar click) ──
-  memberEditorTarget: string | null;
-  openMemberEditor: (catId: string) => void;
-  closeMemberEditor: () => void;
-  coCreatorEditorOpen: boolean;
-  openCoCreatorEditor: () => void;
-  closeCoCreatorEditor: () => void;
+  // ── F63-AC15: Code-to-chat reference ── #706: typed ComposerDraftInsert for recall-edit
+  pendingChatInsert: ComposerDraftInsert | null;
+  setPendingChatInsert: (insert: ComposerDraftInsert | null) => void;
 
   // ── F079: Vote modal ──
   showVoteModal: boolean;
   setShowVoteModal: (show: boolean) => void;
+
+  // ── #699: Reply-to (quote) state (threadId scoped for split-pane safety) ──
+  replyToMessage: { id: string; content: string; senderCatId: string | null; threadId: string } | null;
+  setReplyTo: (msg: { id: string; content: string; senderCatId: string | null; threadId: string }) => void;
+  clearReplyTo: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -992,6 +1037,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   intentMode: null,
   targetCats: [],
   catStatuses: {},
+  catStatusDetails: {},
   catInvocations: {},
   currentGame: null,
   queue: [],
@@ -1010,7 +1056,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   threads: [],
   isLoadingThreads: true,
   isOfflineSnapshot: false,
-  uiThinkingExpandedByDefault: false,
+  uiThinkingExpandedByDefault: loadUiThinkingExpandedByDefault(),
   globalBubbleDefaults: {
     // Always start collapsed — server config overwrites via fetchGlobalBubbleDefaults().
     // Previously used localStorage as initial fallback, but this races with thread loading:
@@ -1234,6 +1280,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       workspaceEditToken: null,
       workspaceEditTokenExpiry: null,
     });
+    const lock = get().presentationLock;
+    if (lock) {
+      set({
+        presentationLock: { ...lock, worktreeId: id, tabs: [], filePath: null, line: null, scrollTop: null },
+        workspaceScrollTop: null,
+      });
+    }
   },
   setWorkspaceOpenFile: (path, line, targetWorktreeId, originThreadId) => {
     if (path) {
@@ -1261,6 +1314,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
           _workspaceFileSetAt: stamp,
         });
       }
+      const lock = get().presentationLock;
+      if (lock) {
+        const newWorktreeId = get().workspaceWorktreeId ?? lock.worktreeId;
+        const worktreeChanged = newWorktreeId !== lock.worktreeId;
+        const lockTabs = worktreeChanged ? [path] : lock.tabs.includes(path) ? lock.tabs : [...lock.tabs, path];
+        const fileChanged = path !== lock.filePath;
+        set({
+          presentationLock: {
+            ...lock,
+            filePath: path,
+            line: line ?? null,
+            tabs: lockTabs,
+            worktreeId: newWorktreeId,
+            scrollTop: fileChanged || worktreeChanged ? null : lock.scrollTop,
+          },
+          ...((fileChanged || worktreeChanged) && { workspaceScrollTop: null }),
+        });
+      }
     } else {
       set({
         workspaceOpenFilePath: null,
@@ -1277,6 +1348,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ workspaceOpenTabs: newTabs, workspaceOpenFilePath: next, workspaceOpenFileLine: null });
     } else {
       set({ workspaceOpenTabs: newTabs });
+    }
+    const lock = get().presentationLock;
+    if (lock) {
+      const lockOldTabs = lock.tabs;
+      const lockNewTabs = lockOldTabs.filter((t) => t !== path);
+      let filePath = lock.filePath;
+      let { line: lockLine } = lock;
+      if (filePath === path) {
+        const idx = lockOldTabs.indexOf(path);
+        filePath = lockNewTabs[Math.min(idx, lockNewTabs.length - 1)] ?? null;
+        lockLine = null;
+      }
+      set({ presentationLock: { ...lock, tabs: lockNewTabs, filePath, line: lockLine } });
     }
   },
   restoreWorkspaceTabs: (tabs, openFile) => {
@@ -1302,9 +1386,176 @@ export const useChatStore = create<ChatState>((set, get) => ({
       _workspaceFileSetAt: { ts: Date.now(), threadId: originThreadId ?? state.currentThreadId },
     })),
 
+  // F063: Presentation Lock
+  presentationLock: null,
+  enablePresentationLock: () =>
+    set((state) => ({
+      presentationLock: {
+        ownerThreadId: state.currentThreadId,
+        ownerWorkspace: {
+          worktreeId: state.workspaceWorktreeId,
+          filePath: state.workspaceOpenFilePath,
+          line: state.workspaceOpenFileLine,
+          tabs: state.workspaceOpenTabs,
+        },
+        worktreeId: state.workspaceWorktreeId,
+        filePath: state.workspaceOpenFilePath,
+        line: state.workspaceOpenFileLine,
+        tabs: state.workspaceOpenTabs,
+        scrollTop: null,
+      },
+    })),
+  disablePresentationLock: () =>
+    set((state) => {
+      if (!state.presentationLock) return {};
+      if (state.presentationLock.ownerThreadId === state.currentThreadId) {
+        const ow = state.presentationLock.ownerWorkspace;
+        return {
+          presentationLock: null,
+          workspaceScrollTop: null,
+          workspaceWorktreeId: ow.worktreeId,
+          workspaceOpenTabs: ow.tabs,
+          workspaceOpenFilePath: ow.filePath,
+          workspaceOpenFileLine: ow.line,
+        };
+      }
+      const threadState = state.threadStates[state.currentThreadId];
+      const restored = flattenThread(threadState ?? { ...DEFAULT_THREAD_STATE });
+      return {
+        presentationLock: null,
+        workspaceScrollTop: null,
+        ...(restored.workspaceWorktreeId !== undefined && {
+          workspaceWorktreeId: restored.workspaceWorktreeId,
+        }),
+        workspaceOpenTabs: restored.workspaceOpenTabs ?? [],
+        workspaceOpenFilePath: restored.workspaceOpenFilePath ?? null,
+        workspaceOpenFileLine: restored.workspaceOpenFileLine ?? null,
+      };
+    }),
+  replacePresentationLockTarget: (snapshot) =>
+    set((state) => (state.presentationLock ? { presentationLock: snapshot } : {})),
+  setPresentationLockViewport: (scrollTop) =>
+    set((state) => {
+      if (!state.presentationLock) return {};
+      return {
+        presentationLock: { ...state.presentationLock, scrollTop },
+        workspaceScrollTop: scrollTop,
+      };
+    }),
+  workspaceScrollTop: null,
+
+  // F226: Presentation Surface — file/md tear-off floating window
+  presentationSurface: null,
+  detachToFloat: () =>
+    set((state) => {
+      const filePath = state.workspaceOpenFilePath;
+      if (!filePath) return {};
+      const W = 420;
+      const H = 320;
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      return {
+        presentationSurface: {
+          content: {
+            worktreeId: state.workspaceWorktreeId,
+            filePath,
+            tabs: state.workspaceOpenTabs,
+            fileKind: inferFileKind(filePath),
+            renderMode: inferRenderMode(filePath),
+            line: state.workspaceOpenFileLine,
+            // F226 云端 P2: snapshot the tracked presentation viewport (recorded by
+            // setPresentationLockViewport) so dock-back restores the reader's scroll position
+            // instead of jumping a long doc back to the top. Null when no viewport was tracked.
+            scrollTop: state.workspaceScrollTop,
+            title: filePath.split('/').pop() ?? filePath,
+          },
+          // 右下角默认位置（烁烁 UX：避免压住右侧 workspace mode tab 按钮条）
+          pos: { x: Math.max(16, vw - W - 24), y: Math.max(16, vh - H - 80) },
+          size: { width: W, height: H },
+          minimized: false,
+          maximized: false,
+          preMaximizeGeometry: null,
+        },
+      };
+    }),
+  // dock-back contract (砚砚 P1.2): switch docked back to dev + restore file snapshot
+  dockBack: () =>
+    set((state) => {
+      const surface = state.presentationSurface;
+      if (!surface) return {};
+      const c = surface.content;
+      return {
+        presentationSurface: null,
+        workspaceMode: 'dev' as const,
+        rightPanelMode: 'workspace' as const,
+        workspaceWorktreeId: c.worktreeId,
+        workspaceOpenFilePath: c.filePath,
+        workspaceOpenTabs: c.tabs,
+        workspaceOpenFileLine: c.line,
+        // F226 云端 P2: restore the snapped viewport so a long doc returns to where the presenter
+        // was (WorkspacePanel.restoreScrollTop consumes workspaceScrollTop while presentationLock holds).
+        workspaceScrollTop: c.scrollTop,
+        // F226 云端 P2: edit tokens are worktree-bound. dock-back restores worktreeId directly, so a
+        // token obtained in the interim worktree (while the docked panel was freed) must be cleared —
+        // normal worktree switches clear it (see setWorkspaceWorktreeId); otherwise edits / file-mgmt
+        // in the restored worktree fail with a stale token until the user forces a refresh.
+        workspaceEditToken: null,
+        workspaceEditTokenExpiry: null,
+      };
+    }),
+  // close/minimize must NOT mutate docked mode (砚砚 P1.2)
+  closeFloat: () => set((state) => (state.presentationSurface ? { presentationSurface: null } : {})),
+  minimizeFloat: (minimized) =>
+    set((state) =>
+      state.presentationSurface ? { presentationSurface: { ...state.presentationSurface, minimized } } : {},
+    ),
+  setFloatPos: (pos) =>
+    set((state) => (state.presentationSurface ? { presentationSurface: { ...state.presentationSurface, pos } } : {})),
+  setFloatSize: (size) =>
+    set((state) => (state.presentationSurface ? { presentationSurface: { ...state.presentationSurface, size } } : {})),
+  // F226 尺寸快捷: 一键适配 PPT (16:9 居中放大) ↔ 恢复手动尺寸。记 pre-maximize geometry → toggle 不用重新拖。
+  toggleMaximize: () =>
+    set((state) => {
+      const s = state.presentationSurface;
+      if (!s) return {};
+      if (s.maximized) {
+        // restore：回到 maximize 前的手动尺寸/位置
+        const pre = s.preMaximizeGeometry;
+        return {
+          presentationSurface: {
+            ...s,
+            maximized: false,
+            preMaximizeGeometry: null,
+            ...(pre ? { pos: pre.pos, size: pre.size } : {}),
+          },
+        };
+      }
+      // maximize：按 PPT 16:9 适配 viewport（~85%）并居中，一键看清 PPT 图
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const W = Math.round(Math.min(vw * 0.85, (vh * 0.85 * 16) / 9));
+      const H = Math.round((W * 9) / 16);
+      return {
+        presentationSurface: {
+          ...s,
+          maximized: true,
+          preMaximizeGeometry: { pos: s.pos, size: s.size },
+          pos: { x: Math.round((vw - W) / 2), y: Math.max(16, Math.round((vh - H) / 2)) },
+          size: { width: W, height: H },
+        },
+      };
+    }),
+
   // Phase H: Workspace mode
   workspaceMode: 'dev' as const,
   setWorkspaceMode: (mode) => set({ workspaceMode: mode, rightPanelMode: 'workspace' }),
+
+  // F195 Phase C: Floating transcript window
+  floatingTranscriptVisible: false,
+  setFloatingTranscriptVisible: (visible) => {
+    set({ floatingTranscriptVisible: visible });
+    if (visible) set({ rightPanelMode: 'status' });
+  },
 
   // ── F120: Preview auto-open ──
   pendingPreviewAutoOpen: null,
@@ -1319,15 +1570,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   pendingChatInsert: null,
   setPendingChatInsert: (insert) => set({ pendingChatInsert: insert }),
 
-  memberEditorTarget: null,
-  openMemberEditor: (catId) => set({ memberEditorTarget: catId }),
-  closeMemberEditor: () => set({ memberEditorTarget: null }),
-  coCreatorEditorOpen: false,
-  openCoCreatorEditor: () => set({ coCreatorEditorOpen: true }),
-  closeCoCreatorEditor: () => set({ coCreatorEditorOpen: false }),
-
   showVoteModal: false,
   setShowVoteModal: (show) => set({ showVoteModal: show }),
+
+  // ── #699: Reply-to (quote) state ──
+  replyToMessage: null,
+  setReplyTo: (msg) => set({ replyToMessage: msg }),
+  clearReplyTo: () => set({ replyToMessage: null }),
 
   // ── Active-thread actions ──
 
@@ -1676,8 +1925,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return {
         targetCats: [],
         catStatuses: {},
+        catStatusDetails: {},
         catInvocations: cleanedInvocations,
-        ...mirrorActiveFlat(state, { targetCats: [], catStatuses: {}, catInvocations: cleanedInvocations }),
+        ...mirrorActiveFlat(state, {
+          targetCats: [],
+          catStatuses: {},
+          catStatusDetails: {},
+          catInvocations: cleanedInvocations,
+        }),
       };
     }),
 
@@ -1702,10 +1957,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       };
       if (threadId === state.currentThreadId) {
         const cleaned = cleanInvocations(state.catInvocations);
-        const patch = { targetCats: [] as string[], catStatuses: {}, catInvocations: cleaned };
+        const patch = { targetCats: [] as string[], catStatuses: {}, catStatusDetails: {}, catInvocations: cleaned };
         return {
           targetCats: [],
           catStatuses: {},
+          catStatusDetails: {},
           catInvocations: cleaned,
           ...mirrorActiveFlat(state, patch),
         };
@@ -1720,6 +1976,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...existing,
             targetCats: [],
             catStatuses: {},
+            catStatusDetails: {},
             catInvocations: cleaned,
           },
         },
@@ -1756,7 +2013,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: state.messages.map((m) => (m.id === messageId ? { ...m, ...appendThinkingChunk(m, thinking) } : m)),
     })),
 
-  setMessageStreamInvocation: (messageId, invocationId) =>
+  setMessageStreamInvocation: (messageId, invocationId, turnInvocationId) =>
     set((state) => ({
       messages: state.messages.map((m) =>
         m.id === messageId
@@ -1764,7 +2021,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
               ...m,
               extra: {
                 ...m.extra,
-                stream: { ...m.extra?.stream, invocationId },
+                stream: {
+                  ...m.extra?.stream,
+                  invocationId,
+                  // F194 Phase Z3 R10 P1-1 (砚砚): preserve dual id contract — bubble identity SoT = turn,
+                  // chain SoT = parent. Caller passes both; without turn, leave key untouched (legacy bubble).
+                  ...(turnInvocationId ? { turnInvocationId } : {}),
+                },
               },
             }
           : m,
@@ -1913,6 +2176,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ),
     })),
 
+  updateThreadLabels: async (threadId, labels) => {
+    const prev = get().threads.find((t) => t.id === threadId)?.labels;
+    set((state) => ({
+      threads: state.threads.map((t) =>
+        t.id === threadId ? { ...t, labels: labels.length > 0 ? labels : undefined } : t,
+      ),
+    }));
+    try {
+      const { apiFetch } = await import('@/utils/api-client');
+      const res = await apiFetch(`/api/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ labels }),
+      });
+      if (!res.ok) throw new Error(`PATCH labels failed: ${res.status}`);
+    } catch {
+      set((state) => ({
+        threads: state.threads.map((t) => (t.id === threadId ? { ...t, labels: prev } : t)),
+      }));
+      throw new Error('Failed to save labels');
+    }
+  },
+
   /**
    * Switch active thread.
    * Saves current flat state into threadStates map, then restores the target thread's state.
@@ -1923,12 +2209,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (threadId === state.currentThreadId) return state;
 
       // Save current flat state to map
-      const saved = snapshotActive(state);
+      let saved = snapshotActive(state);
+
+      // F063 Presentation Lock: flat workspace fields reflect the lock overlay,
+      // not the outgoing thread's real state. We must restore the correct workspace:
+      // - Lock owner: use the lock snapshot (that IS the owner's pre-lock workspace)
+      // - Non-owner: use its previous threadStates entry (or defaults)
+      if (state.presentationLock) {
+        const lock = state.presentationLock;
+        const isOwner = state.currentThreadId === lock.ownerThreadId;
+        if (isOwner) {
+          saved = {
+            ...saved,
+            workspaceWorktreeId: lock.ownerWorkspace.worktreeId,
+            workspaceOpenTabs: lock.ownerWorkspace.tabs,
+            workspaceOpenFilePath: lock.ownerWorkspace.filePath,
+            workspaceOpenFileLine: lock.ownerWorkspace.line,
+          };
+        } else {
+          const prevThreadState = state.threadStates[state.currentThreadId];
+          saved = {
+            ...saved,
+            workspaceWorktreeId: prevThreadState?.workspaceWorktreeId ?? null,
+            workspaceOpenTabs: prevThreadState?.workspaceOpenTabs ?? [],
+            workspaceOpenFilePath: prevThreadState?.workspaceOpenFilePath ?? null,
+            workspaceOpenFileLine: prevThreadState?.workspaceOpenFileLine ?? null,
+          };
+        }
+      }
+
       // F164: Write-through outgoing thread's messages to IndexedDB (fire-and-forget)
       // Always write — even empty arrays — so server-cleared threads don't leave stale snapshots
       void saveMessagesSnapshot(state.currentThreadId, saved.messages, saved.hasMore).catch(() => {});
       // Load target thread state (or defaults for first visit)
       const loaded = state.threadStates[threadId] ?? { ...DEFAULT_THREAD_STATE };
+      const flattened = flattenThread(loaded);
+
+      // F063 Presentation Lock: overlay locked workspace fields so the visible
+      // workspace doesn't change on thread switch (AC-PL1).
+      if (state.presentationLock) {
+        const lock = state.presentationLock;
+        flattened.workspaceWorktreeId = lock.worktreeId;
+        flattened.workspaceOpenTabs = lock.tabs;
+        flattened.workspaceOpenFilePath = lock.filePath;
+        flattened.workspaceOpenFileLine = lock.line;
+        flattened.workspaceScrollTop = lock.scrollTop;
+      }
 
       return {
         currentThreadId: threadId,
@@ -1936,7 +2262,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.threadStates,
           [state.currentThreadId]: saved,
         },
-        ...flattenThread(loaded),
+        ...flattened,
+        // #699: Clear reply-to when switching threads
+        replyToMessage: null,
       };
     }),
 
@@ -2185,13 +2513,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })),
     ),
 
-  setThreadMessageStreamInvocation: (threadId, messageId, invocationId) =>
+  setThreadMessageStreamInvocation: (threadId, messageId, invocationId, turnInvocationId) =>
     set((state) =>
       updateThreadMessage(state, threadId, messageId, (m) => ({
         ...m,
         extra: {
           ...m.extra,
-          stream: { ...m.extra?.stream, invocationId },
+          // F194 Phase Z3 R12 P1 (砚砚): preserve dual id — invocationId=parent (chain SoT),
+          // turnInvocationId=child (bubble SoT). Background bind same contract as active.
+          stream: { ...m.extra?.stream, invocationId, ...(turnInvocationId ? { turnInvocationId } : {}) },
         },
       })),
     ),
@@ -2331,7 +2661,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return {
           intentMode: mode,
           catStatuses: {},
-          ...mirrorActiveToThreadStates(state, threadId, { intentMode: mode, catStatuses: {} }),
+          catStatusDetails: {},
+          ...mirrorActiveToThreadStates(state, threadId, { intentMode: mode, catStatuses: {}, catStatusDetails: {} }),
         };
       }
       const existing = state.threadStates[threadId] ?? { ...DEFAULT_THREAD_STATE };
@@ -2342,6 +2673,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...existing,
             intentMode: mode,
             catStatuses: {},
+            catStatusDetails: {},
             lastActivity: Date.now(),
           },
         },
@@ -2558,21 +2890,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }),
 
   /** Update a specific cat's status in a background thread (for sidebar indicators) */
-  updateThreadCatStatus: (threadId, catId, status) =>
+  updateThreadCatStatus: (threadId, catId, status, detail) =>
     set((state) => {
       if (threadId === state.currentThreadId) {
-        if (state.catStatuses[catId] === status) return state;
+        if (state.catStatuses[catId] === status && !detail) return state;
         const catStatuses = { ...state.catStatuses, [catId]: status };
-        return { catStatuses, ...mirrorActiveToThreadStates(state, threadId, { catStatuses }) };
+        const catStatusDetails = detail ? { ...state.catStatusDetails, [catId]: detail } : state.catStatusDetails;
+        return {
+          catStatuses,
+          catStatusDetails,
+          ...mirrorActiveToThreadStates(state, threadId, { catStatuses, catStatusDetails }),
+        };
       }
       const existing = state.threadStates[threadId] ?? { ...DEFAULT_THREAD_STATE };
-      if (existing.catStatuses[catId] === status) return state;
+      if (existing.catStatuses[catId] === status && !detail) return state;
+      const catStatusDetails = detail ? { ...existing.catStatusDetails, [catId]: detail } : existing.catStatusDetails;
       return {
         threadStates: {
           ...state.threadStates,
           [threadId]: {
             ...existing,
             catStatuses: { ...existing.catStatuses, [catId]: status },
+            catStatusDetails,
             lastActivity: Date.now(),
           },
         },

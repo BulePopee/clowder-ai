@@ -7,7 +7,7 @@ export interface CallbackDeliveryDecisionInput {
   threadId: string;
   log: Pick<FastifyBaseLogger, 'error' | 'warn'>;
   logContext?: Record<string, unknown>;
-  enqueueA2A: () => Promise<{ enqueued: readonly unknown[] }>;
+  enqueueA2A: () => Promise<{ enqueued: readonly string[]; coalesced?: readonly string[] }>;
   markDelivered?: (deliveredAt: number) => Promise<unknown> | unknown;
   zeroEnqueuedWarnMessage: string;
   enqueueFailureMessage: string;
@@ -15,6 +15,9 @@ export interface CallbackDeliveryDecisionInput {
 
 export interface CallbackDeliveryDecision {
   shouldBroadcastNow: boolean;
+  enqueued: readonly string[];
+  enqueueAttempted: boolean;
+  enqueueFailed: boolean;
 }
 
 async function recoverQueuedMessage(input: CallbackDeliveryDecisionInput, warnMessage: string): Promise<void> {
@@ -38,17 +41,24 @@ export class MessageDeliveryService {
       if (input.willEnqueueToQueue) {
         await recoverQueuedMessage(input, input.zeroEnqueuedWarnMessage);
       }
-      return { shouldBroadcastNow: true };
+      return { shouldBroadcastNow: true, enqueued: [], enqueueAttempted: false, enqueueFailed: false };
     }
 
     let messageStaysQueued = input.willEnqueueToQueue;
+    let enqueued: readonly string[] = [];
+    let enqueueFailed = false;
     try {
       const a2aResult = await input.enqueueA2A();
-      if (input.willEnqueueToQueue && a2aResult.enqueued.length === 0) {
+      enqueued = a2aResult.enqueued;
+      // F216 AC-D6: coalesced targets are handled (content merged into existing entry).
+      // Only warn/recover when truly nothing was handled (enqueued=0 AND coalesced=0).
+      const anyHandled = a2aResult.enqueued.length > 0 || (a2aResult.coalesced?.length ?? 0) > 0;
+      if (input.willEnqueueToQueue && !anyHandled) {
         await recoverQueuedMessage(input, input.zeroEnqueuedWarnMessage);
         messageStaysQueued = false;
       }
     } catch (err) {
+      enqueueFailed = true;
       input.log.error(
         { ...input.logContext, err, messageId: input.messageId, threadId: input.threadId },
         input.enqueueFailureMessage,
@@ -59,6 +69,11 @@ export class MessageDeliveryService {
       messageStaysQueued = false;
     }
 
-    return { shouldBroadcastNow: !messageStaysQueued };
+    return {
+      shouldBroadcastNow: !messageStaysQueued,
+      enqueued,
+      enqueueAttempted: true,
+      enqueueFailed,
+    };
   }
 }

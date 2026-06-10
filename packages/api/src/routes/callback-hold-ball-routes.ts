@@ -19,19 +19,14 @@ import { createModuleLogger } from '../infrastructure/logger.js';
 import type { DynamicTaskStore } from '../infrastructure/scheduler/DynamicTaskStore.js';
 import type { TaskRunnerV2 } from '../infrastructure/scheduler/TaskRunnerV2.js';
 import type { TaskTemplate } from '../infrastructure/scheduler/templates/types.js';
+import { c1ZombieHoldCount } from '../infrastructure/telemetry/instruments.js';
 import type { SocketManager } from '../infrastructure/websocket/index.js';
-import { resolveUserId } from '../utils/request-identity.js';
 import { requireCallbackAuth } from './callback-auth-prehandler.js';
+import { registerHoldBallCancelRoutes } from './callback-hold-ball-cancel-routes.js';
 import { deriveCallbackActor } from './callback-scope-helpers.js';
-import { executeHoldCancel, findHoldBallTask } from './hold-ball-cancel.js';
+import { HOLD_BALL_SOURCE } from './hold-ball-source.js';
 
 const log = createModuleLogger('routes/callback-hold-ball');
-
-const HOLD_BALL_SOURCE = {
-  connector: 'hold-ball',
-  label: '持球通知',
-  icon: '🏓',
-} as const;
 
 /**
  * F167 Phase G P2 fix (cloud Codex round-2 + gpt52 local review):
@@ -85,6 +80,12 @@ export interface HoldBallRouteDeps {
   messageStore: IMessageStore;
   socketManager: SocketManager;
   threadStore: { get(threadId: string): { createdBy: string } | null | Promise<{ createdBy: string } | null> };
+  onHoldBallCancelFeedback?: (input: {
+    taskId: string;
+    threadId: string;
+    userId: string;
+    catId: string;
+  }) => void | Promise<void>;
 }
 
 export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldBallRouteDeps): void {
@@ -157,8 +158,13 @@ export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldB
 
     const taskId = `hold-ball-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const fireAt = Date.now() + wakeAfterMs;
+    // F167 Phase M (M-2): de-frozen wake copy — guide re-evaluation instead of
+    // commanding execution of a possibly-stale reason. The wake fires later (or after
+    // defer), by which time the awaited condition may have changed; so prompt the cat
+    // to re-judge rather than replay "球仍在你手上，现在执行".
     const wakeMessage =
-      `持球唤醒：${reason}。球仍在你手上。现在执行：${nextStep}。` + '若条件仍未满足：再持一次或升级；禁止无限持球。';
+      `持球唤醒：你之前因为「${reason}」持球。先重新评估当前是否还需要等——` +
+      `若条件已满足，继续：${nextStep}；若仍未满足，可再持一次或升级（禁止无限持球）。`;
 
     const taskParams = {
       trigger: { type: 'once' as const, fireAt },
@@ -166,6 +172,10 @@ export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldB
         message: wakeMessage,
         targetCatId: catIdStr,
         triggerUserId: userId,
+        // F167 Phase M (M-1 activation): pre-fire defer. If this cat's thread is busy
+        // when the wake fires, the scheduler re-arms instead of delivering a stale wake.
+        // Mechanism is scheduler-generic (firePolicy); hold_ball opts in here.
+        deferWhileThreadBusy: true,
       },
       deliveryThreadId: threadId as string | null,
     };
@@ -208,6 +218,7 @@ export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldB
       try {
         taskRunner.unregister(prior.id);
         dynamicTaskStore.remove(prior.id);
+        c1ZombieHoldCount.add(1);
         log.info(
           { threadId, catId: catIdStr, priorTaskId: prior.id, newTaskId: taskId },
           'F167 Phase G: cancelled prior pending hold wake (single-slot replace)',
@@ -224,7 +235,7 @@ export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldB
 
     const wakeAtStr = new Date(fireAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const holdMessage = `🏓 ${catIdStr} 持球中 — ${reason}。预计 ${wakeAtStr} 唤醒，下一步：${nextStep}`;
-    const holdSource = { ...HOLD_BALL_SOURCE, meta: { taskId } };
+    const holdSource = { ...HOLD_BALL_SOURCE, meta: { taskId, threadId, catId: catIdStr } };
     try {
       const stored = await messageStore.append({
         userId: 'system',
@@ -274,60 +285,5 @@ export function registerCallbackHoldBallRoutes(app: FastifyInstance, deps: HoldB
     };
   });
 
-  app.delete<{ Params: { taskId: string } }>('/api/callbacks/hold-ball/:taskId', async (request, reply) => {
-    const userId = resolveUserId(request);
-    if (!userId) {
-      reply.status(401);
-      return { error: 'Unauthorized' };
-    }
-
-    const { taskId } = request.params;
-    const task = findHoldBallTask(taskId, dynamicTaskStore);
-    if (!task) {
-      reply.status(404);
-      return { error: 'Hold task not found or not a hold-ball task' };
-    }
-
-    const threadId = task.deliveryThreadId;
-    if (threadId) {
-      const thread = await deps.threadStore.get(threadId);
-      if (!thread || (thread.createdBy !== userId && thread.createdBy !== 'system')) {
-        reply.status(403);
-        return { error: 'Not authorized to cancel holds in this thread' };
-      }
-    }
-
-    executeHoldCancel(task, { dynamicTaskStore, taskRunner });
-    const catId = task.createdBy?.replace('hold-ball:', '') ?? 'unknown';
-    log.info({ taskId, threadId, catId, userId }, 'F167 Phase J: hold_ball cancelled by user');
-
-    if (threadId) {
-      try {
-        const cancelMessage = `🏓 ${catId} 持球已取消`;
-        const stored = await messageStore.append({
-          userId: 'system',
-          catId: null,
-          content: cancelMessage,
-          mentions: [],
-          timestamp: Date.now(),
-          threadId,
-          source: HOLD_BALL_SOURCE,
-        });
-        socketManager.broadcastToRoom(`thread:${threadId}`, 'connector_message', {
-          threadId,
-          message: {
-            id: stored.id,
-            type: 'connector',
-            content: stored.content,
-            source: HOLD_BALL_SOURCE,
-            timestamp: stored.timestamp,
-          },
-        });
-      } catch (err) {
-        log.warn({ taskId, threadId, err }, 'F167 Phase J: failed to post hold cancel visibility message');
-      }
-    }
-
-    return { status: 'ok', cancelled: true, taskId };
-  });
+  registerHoldBallCancelRoutes(app, deps);
 }

@@ -8,7 +8,7 @@ vi.mock('@/utils/api-client', () => ({
 }));
 
 import { apiFetch } from '@/utils/api-client';
-import { PluginsContent, resolvePluginStatuses } from '../settings/PluginsContent';
+import { PluginsContent } from '../settings/PluginsContent';
 
 const mockApiFetch = vi.mocked(apiFetch);
 
@@ -30,81 +30,6 @@ function setInputValue(input: HTMLInputElement, value: string) {
   setter?.call(input, value);
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
-
-describe('resolvePluginStatuses', () => {
-  it('platform plugins are active when API is reachable', () => {
-    const result = resolvePluginStatuses([], true);
-    const platform = result.filter((p) => p.source === 'platform');
-
-    expect(platform.length).toBe(1);
-    expect(platform[0].id).toBe('github');
-    expect(platform[0].status).toBe('active');
-    expect(platform[0].statusLabel).toBe('已连接');
-  });
-
-  it('platform plugins show unreachable when API is down', () => {
-    const result = resolvePluginStatuses([], false);
-    const platform = result.filter((p) => p.source === 'platform');
-
-    for (const p of platform) {
-      expect(p.status).toBe('available');
-      expect(p.statusLabel).toBe('API 不可达');
-    }
-  });
-
-  it('service plugins show active when their features are running', () => {
-    const services = [
-      {
-        manifest: { id: 'whisper-stt', enablesFeatures: ['voice-input', 'connector-stt'] },
-        status: 'running' as const,
-      },
-      {
-        manifest: { id: 'mlx-tts', enablesFeatures: ['voice-output', 'voice-companion'] },
-        status: 'running' as const,
-      },
-    ];
-    const result = resolvePluginStatuses(services, true);
-    const voice = result.find((p) => p.id === 'voice-companion');
-
-    expect(voice?.status).toBe('active');
-    expect(voice?.statusLabel).toBe('已连接');
-  });
-
-  it('service plugins show configured when features known but not running', () => {
-    const services = [
-      {
-        manifest: { id: 'whisper-stt', enablesFeatures: ['voice-input', 'connector-stt'] },
-        status: 'stopped' as const,
-      },
-    ];
-    const result = resolvePluginStatuses(services, true);
-    const voice = result.find((p) => p.id === 'voice-companion');
-
-    expect(voice?.status).toBe('configured');
-    expect(voice?.statusLabel).toBe('已配置');
-  });
-
-  it('service plugins show available when no matching features exist', () => {
-    const result = resolvePluginStatuses([], true);
-    const voice = result.find((p) => p.id === 'voice-companion');
-
-    expect(voice?.status).toBe('available');
-    expect(voice?.statusLabel).toBe('未连接');
-  });
-
-  it('platform status is independent of service registry contents', () => {
-    const services = [
-      {
-        manifest: { id: 'whisper-stt', enablesFeatures: ['voice-input'] },
-        status: 'running' as const,
-      },
-    ];
-    const result = resolvePluginStatuses(services, true);
-
-    const github = result.find((p) => p.id === 'github');
-    expect(github?.status).toBe('active');
-  });
-});
 
 describe('PluginsContent GitHub configuration', () => {
   let container: HTMLDivElement;
@@ -131,18 +56,20 @@ describe('PluginsContent GitHub configuration', () => {
     vi.clearAllMocks();
   });
 
-  it('opens editable GitHub config fields and saves changed values', async () => {
+  it('opens editable GitHub config fields and saves via plugin path', async () => {
     mockApiFetch.mockImplementation(async (url, init) => {
-      if (url === '/api/services') {
-        return jsonResponse({ services: [] });
-      }
-      if (url === '/api/connector/status') {
+      if (url === '/api/plugins') {
         return jsonResponse({
-          platforms: [
+          plugins: [
             {
               id: 'github',
-              category: 'plugin',
-              fields: [
+              name: 'GitHub',
+              version: '1.0.0',
+              icon: 'github',
+              iconBg: '#24292e',
+              status: 'configured',
+              hasHealthCheck: false,
+              config: [
                 {
                   envName: 'GITHUB_TOKEN',
                   label: 'Personal Access Token',
@@ -151,22 +78,17 @@ describe('PluginsContent GitHub configuration', () => {
                 },
                 {
                   envName: 'GITHUB_SETUP_NOISE_BOT_LOGINS',
-                  label: 'Noise 过滤 Bot 列表',
+                  label: 'Noise Bot Login List',
                   sensitive: false,
                   currentValue: 'chatgpt-codex-connector[bot]',
                 },
-                {
-                  envName: 'GITHUB_MCP_PAT',
-                  label: 'MCP 专用 Token',
-                  sensitive: true,
-                  currentValue: null,
-                },
               ],
+              resources: [],
             },
           ],
         });
       }
-      if (url === '/api/config/secrets' && init?.method === 'POST') {
+      if (url === '/api/plugins/github/config' && init?.method === 'POST') {
         return jsonResponse({ ok: true });
       }
       return jsonResponse({}, 404);
@@ -202,7 +124,7 @@ describe('PluginsContent GitHub configuration', () => {
     });
 
     const save = Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('保存 GitHub 配置'),
+      button.textContent?.includes('保存配置'),
     );
     expect(save).toBeTruthy();
 
@@ -211,7 +133,7 @@ describe('PluginsContent GitHub configuration', () => {
     });
     await flushEffects();
 
-    const saveCall = mockApiFetch.mock.calls.find((call) => call[0] === '/api/config/secrets');
+    const saveCall = mockApiFetch.mock.calls.find((call) => call[0] === '/api/plugins/github/config');
     expect(saveCall).toBeTruthy();
     expect(JSON.parse((saveCall?.[1] as { body: string }).body)).toEqual({
       updates: [

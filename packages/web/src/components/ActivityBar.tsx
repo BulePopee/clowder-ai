@@ -1,13 +1,17 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useState } from 'react';
-import { useCafeTheme } from '@/hooks/useCafeTheme';
+import { lazy, Suspense, useCallback, useState } from 'react';
 import { usePinnedSections } from '@/hooks/usePinnedSections';
+import { useCallbackAuthAggregate, useCallbackAuthAvailable } from '@/stores/callbackAuthStore';
+import { useChatStore } from '@/stores/chatStore';
 import { HubIcon } from './hub-icons';
 import { MemoryIcon } from './icons/MemoryIcon';
 import { SETTINGS_SECTIONS } from './settings/settings-nav-config';
+import { ThemeMenu } from './ThemeMenu';
 import { getThreadIdFromPathname } from './ThreadSidebar/thread-navigation';
+
+const OklchTuner = lazy(() => import('./dev/OklchTuner').then((m) => ({ default: m.OklchTuner })));
 
 const NAV_ITEMS = [
   { id: 'home', path: '/', label: '对话', match: (p: string) => p === '/' || p.startsWith('/thread/') },
@@ -59,32 +63,6 @@ function SignalIcon({ className = 'w-5 h-5' }: { className?: string }) {
   );
 }
 
-function SunIcon({ className = 'w-5 h-5' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className}>
-      <title>日间模式</title>
-      <circle cx="12" cy="12" r="5" />
-      <line x1="12" y1="1" x2="12" y2="3" />
-      <line x1="12" y1="21" x2="12" y2="23" />
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-      <line x1="1" y1="12" x2="3" y2="12" />
-      <line x1="21" y1="12" x2="23" y2="12" />
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-    </svg>
-  );
-}
-
-function MoonIcon({ className = 'w-5 h-5' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className}>
-      <title>夜间模式</title>
-      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
 function SettingsIcon({ className = 'w-5 h-5' }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className}>
@@ -111,6 +89,30 @@ interface ActivityBarProps {
   className?: string;
 }
 
+function readFromParam(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('from');
+}
+
+function getNavigationReferrer(pathname: string): string | null {
+  const threadId = getThreadIdFromPathname(pathname);
+  return threadId !== 'default' ? threadId : readFromParam();
+}
+
+function appendReferrer(path: string, referrer: string): string {
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}from=${encodeURIComponent(referrer)}`;
+}
+
+function resolveNavTarget(path: string, pathname: string): string {
+  if (path === '/') {
+    const fromParam = readFromParam();
+    return fromParam ? `/thread/${encodeURIComponent(fromParam)}` : '/';
+  }
+  const referrer = getNavigationReferrer(pathname);
+  return referrer ? appendReferrer(path, referrer) : path;
+}
+
 function PinnedSections({ pinned, onNav }: { pinned: readonly string[]; onNav: (path: string) => void }) {
   const searchParams = useSearchParams();
   const activeSection = searchParams?.get('s') ?? '';
@@ -132,10 +134,10 @@ function PinnedSections({ pinned, onNav }: { pinned: readonly string[]; onNav: (
             key={sec.id}
             type="button"
             onClick={() => onNav(`/settings?s=${sec.id}&standalone=1`)}
-            className={`flex h-10 w-10 items-center justify-center rounded-[9px] transition-all ${
+            className={`flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
               active
-                ? 'bg-[var(--console-rail-active)] shadow-[0_5px_14px_rgba(43,37,32,0.07)]'
-                : 'bg-[var(--console-rail-item)] hover:bg-[var(--console-hover-bg)]'
+                ? 'bg-[var(--console-rail-active)] shadow-[var(--console-rail-shadow)]'
+                : 'hover:bg-[var(--console-rail-item)] hover:shadow-[var(--console-rail-shadow)]'
             }`}
             title={sec.label}
             aria-current={active ? 'page' : undefined}
@@ -148,26 +150,94 @@ function PinnedSections({ pinned, onNav }: { pinned: readonly string[]; onNav: (
   );
 }
 
+const DEGRADED_COLOR = 'var(--semantic-warning)';
+const BROKEN_COLOR = 'var(--semantic-critical)';
+const BROKEN_THRESHOLD = 6;
+
 function SettingsButton({ pathname, onNav }: { pathname: string; onNav: (path: string) => void }) {
   const searchParams = useSearchParams();
   const isSettingsRoute = pathname.startsWith('/settings');
   const isStandalone = isSettingsRoute && searchParams?.get('standalone') === '1';
   const isSettings = isSettingsRoute && !isStandalone;
 
+  const aggregate = useCallbackAuthAggregate();
+  const isAvailable = useCallbackAuthAvailable();
+  const unviewed = isAvailable ? aggregate.unviewedFailures24h : 0;
+  const showBadge = unviewed > 0;
+  const badgeColor = unviewed >= BROKEN_THRESHOLD ? BROKEN_COLOR : DEGRADED_COLOR;
+  const badgeText = unviewed > 99 ? '99+' : String(unviewed);
+
   return (
     <button
       type="button"
       onClick={() => onNav('/settings')}
-      className={`flex h-10 w-10 items-center justify-center rounded-[9px] transition-all ${
+      className={`relative flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
         isSettings
-          ? 'bg-[var(--console-rail-active)] shadow-[0_5px_14px_rgba(43,37,32,0.07)]'
-          : 'bg-[var(--console-rail-item)] hover:bg-[var(--console-hover-bg)]'
+          ? 'bg-[var(--console-rail-active)] shadow-[var(--console-rail-shadow)]'
+          : 'hover:bg-[var(--console-rail-item)] hover:shadow-[var(--console-rail-shadow)]'
       }`}
-      title="设置"
+      title={showBadge ? `设置 · MCP Callback Auth 24h ${unviewed} 次未查看失败` : '设置'}
       aria-current={isSettings ? 'page' : undefined}
       data-guide-id="hub.trigger"
+      data-testid="settings-button"
+      data-callback-auth-unviewed={showBadge ? String(unviewed) : undefined}
     >
       <SettingsIcon className="h-5 w-5" />
+      {showBadge && (
+        <span
+          data-testid="settings-callback-auth-badge"
+          className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-micro font-bold flex items-center justify-center"
+          style={{
+            backgroundColor: badgeColor,
+            color: 'var(--cafe-accent-foreground)',
+            maxWidth: '22px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {badgeText}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function ClapperboardIcon({ className = 'w-5 h-5' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className}>
+      <title>演示浮窗</title>
+      <path
+        d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="m6.2 5.3 3.1 3.9M12.4 3.4l3.1 4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** F226: global presentation-surface toggle — visible across all routes so the
+ *  float can be collapsed/recalled even from Memory Hub / Settings (spec Phase A). */
+function PresentationRailToggle() {
+  const surface = useChatStore((s) => s.presentationSurface);
+  const minimizeFloat = useChatStore((s) => s.minimizeFloat);
+  if (!surface) return null;
+  const minimized = surface.minimized;
+  return (
+    <button
+      type="button"
+      onClick={() => minimizeFloat(!minimized)}
+      className={`flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
+        minimized
+          ? 'hover:bg-[var(--console-rail-item)] hover:shadow-[var(--console-rail-shadow)]'
+          : 'bg-[var(--console-rail-active)] shadow-[var(--console-rail-shadow)]'
+      }`}
+      title={minimized ? '召回演示浮窗（还原讲稿）' : '收起演示浮窗'}
+      data-testid="presentation-rail-toggle"
+    >
+      <ClapperboardIcon className="h-5 w-5" />
     </button>
   );
 }
@@ -175,28 +245,12 @@ function SettingsButton({ pathname, onNav }: { pathname: string; onNav: (path: s
 export function ActivityBar({ className }: ActivityBarProps) {
   const pathname = usePathname() ?? '/';
   const router = useRouter();
-  const { toggleTheme, resolvedTheme } = useCafeTheme();
   const { pinned } = usePinnedSections();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [tunerOpen, setTunerOpen] = useState(false);
 
   const handleNav = useCallback(
     (path: string) => {
-      const threadId = getThreadIdFromPathname(pathname);
-      let referrer = threadId !== 'default' ? threadId : null;
-      if (!referrer && typeof window !== 'undefined') {
-        referrer = new URLSearchParams(window.location.search).get('from');
-      }
-      if (path === '/') {
-        const fromParam =
-          typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('from') : null;
-        router.push(fromParam ? `/thread/${fromParam}` : '/');
-      } else if (referrer) {
-        const sep = path.includes('?') ? '&' : '?';
-        router.push(`${path}${sep}from=${encodeURIComponent(referrer)}`);
-      } else {
-        router.push(path);
-      }
+      router.push(resolveNavTarget(path, pathname));
     },
     [pathname, router],
   );
@@ -214,10 +268,10 @@ export function ActivityBar({ className }: ActivityBarProps) {
             key={item.id}
             type="button"
             onClick={() => handleNav(item.path)}
-            className={`flex h-10 w-10 items-center justify-center rounded-[9px] transition-all ${
+            className={`flex h-10 w-10 items-center justify-center rounded-lg transition-all ${
               active
-                ? 'bg-[var(--console-rail-active)] shadow-[0_5px_14px_rgba(43,37,32,0.07)]'
-                : 'bg-[var(--console-rail-item)] hover:bg-[var(--console-hover-bg)]'
+                ? 'bg-[var(--console-rail-active)] shadow-[var(--console-rail-shadow)]'
+                : 'hover:bg-[var(--console-rail-item)] hover:shadow-[var(--console-rail-shadow)]'
             }`}
             title={item.label}
             aria-current={active ? 'page' : undefined}
@@ -233,19 +287,13 @@ export function ActivityBar({ className }: ActivityBarProps) {
       </Suspense>
 
       <div className="mt-auto flex flex-col items-center gap-1.5">
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="flex h-10 w-10 items-center justify-center rounded-[9px] bg-[var(--console-rail-item)] hover:bg-[var(--console-hover-bg)] transition-all"
-          title={mounted && resolvedTheme === 'dark' ? '切换到日间模式' : '切换到夜间模式'}
-        >
-          {mounted && resolvedTheme === 'dark' ? <MoonIcon className="h-5 w-5" /> : <SunIcon className="h-5 w-5" />}
-        </button>
+        <PresentationRailToggle />
+        <ThemeMenu onEditTheme={() => setTunerOpen(true)} />
         <Suspense
           fallback={
             <button
               type="button"
-              className="flex h-10 w-10 items-center justify-center rounded-[9px] bg-[var(--console-rail-item)] transition-all"
+              className="flex h-10 w-10 items-center justify-center rounded-lg transition-all"
               title="设置"
               data-guide-id="hub.trigger"
             >
@@ -256,6 +304,11 @@ export function ActivityBar({ className }: ActivityBarProps) {
           <SettingsButton pathname={pathname} onNav={handleNav} />
         </Suspense>
       </div>
+      {tunerOpen && (
+        <Suspense>
+          <OklchTuner onClose={() => setTunerOpen(false)} />
+        </Suspense>
+      )}
     </nav>
   );
 }

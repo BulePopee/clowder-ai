@@ -11,16 +11,16 @@ import { createModuleLogger } from '../../../../../infrastructure/logger.js';
 const log = createModuleLogger('context-transport');
 
 import { estimateTokens } from '../../../../../utils/token-counter.js';
-import { formatMessage } from '../../context/ContextAssembler.js';
+import { buildMessageMap, formatMessage } from '../../context/ContextAssembler.js';
 import { checkContextBudget, type DegradationResult } from '../../orchestration/DegradationPolicy.js';
 import { DeliveryCursorStore } from '../../stores/ports/DeliveryCursorStore.js';
 import type { IDraftStore } from '../../stores/ports/DraftStore.js';
 import type { IMessageStore, StoredMessage, StoredToolEvent } from '../../stores/ports/MessageStore.js';
 import type { Thread } from '../../stores/ports/ThreadStore.js';
-import { canViewMessage } from '../../stores/visibility.js';
+import { canViewMessage, resolveVisibleReplyParent } from '../../stores/visibility.js';
 import type { AgentMessage, AgentService } from '../../types.js';
 import type { InvocationDeps } from '../invocation/invoke-single-cat.js';
-import { extractRecentArtifacts, mergeLedger, sortAndCapArtifacts } from './artifact-tracking.js';
+import { extractRecentArtifacts, mergeLedger } from './artifact-tracking.js';
 import type { CoverageMap } from './context-transport.js';
 import {
   buildCoverageMap,
@@ -56,8 +56,16 @@ export interface RouteStrategyDeps {
   evidenceStore?: import('../../../../memory/interfaces.js').IEvidenceStore;
   /** F150: Tool usage counter (fire-and-forget INCR on tool_use events) */
   toolUsageCounter?: import('../../tool-usage/ToolUsageCounter.js').ToolUsageCounter;
+  /** F188 Phase F AC-F10: Tool event log (append-only sequence, fire-and-forget) */
+  toolEventLog?: import('../../tool-usage/ToolEventLog.js').ToolEventLog;
+  /** F188 Phase F AC-F10 (AS-4): Skill load event log (fire-and-forget on Skill tool_use) */
+  skillLoadEventLog?: import('../../tool-usage/SkillLoadEventLog.js').SkillLoadEventLog;
   /** F148 Phase F: Task store for navigation context (optional, fail-open) */
   taskStore?: import('../../stores/ports/TaskStore.js').ITaskStore;
+  /** F222: Frustration auto-issue store (optional, fail-open) */
+  frustrationIssueStore?: import('../../stores/ports/FrustrationIssueStore.js').IFrustrationIssueStore;
+  /** F222: Pending request store — used for cancel burst detection (listRecentDenied) */
+  pendingRequestStore?: import('../../stores/ports/PendingRequestStore.js').IPendingRequestStore;
   /** F093: World context provider for world-building mode (optional, fail-open) */
   worldContextProvider?: import('../../../../world/WorldContextProvider.js').WorldContextProvider;
   /** F093: World store for thread→world lookup (optional, fail-open) */
@@ -80,6 +88,11 @@ export interface RouteOptions {
   contentBlocks?: readonly MessageContent[] | undefined;
   uploadDir?: string | undefined;
   signal?: AbortSignal | undefined;
+  /** Per-cat execution signal resolver. When present, route-parallel gives each cat
+   *  ITS OWN slot signal (signalForCat(catId)) instead of the shared `signal`, so
+   *  canceling one concurrent cat does not abort its siblings (并发取消误伤根因修复).
+   *  Absent → fall back to the shared `signal` (route-serial / legacy callers). */
+  signalForCat?: ((catId: CatId) => AbortSignal | undefined) | undefined;
   promptTags?: readonly string[] | undefined;
   /** Pre-assembled context (deprecated: use history for per-cat budget) */
   contextHistory?: string | undefined;
@@ -87,12 +100,37 @@ export interface RouteOptions {
   history?: StoredMessage[] | undefined;
   /** Current user message ID (enables exact incremental context delivery path) */
   currentUserMessageId?: string | undefined;
+  /** Explicit A2A trigger message ID for queue-dispatched initial targets. */
+  a2aTriggerMessageId?: string | undefined;
   /** Max A2A chain depth for routeSerial (default: MAX_A2A_DEPTH env or 2) */
   maxA2ADepth?: number | undefined;
-  /** Queue fairness hook: when true for current thread, routeSerial must stop extending A2A chain. */
+  /** Queue fairness hook: when true for current thread, routeSerial must stop extending A2A chain.
+   *  F185 Phase B: should use hasQueuedNonAgentForThread (user + connector), not user-only. */
   queueHasQueuedMessages?: ((threadId: string) => boolean) | undefined;
   /** A2A dedup hook: skip text-scan @mention if cat already dispatched via callback path. */
   hasQueuedOrActiveAgentForCat?: ((threadId: string, catId: string) => boolean) | undefined;
+  /** F185 Phase B: deferred A2A enqueue — called when fairness gate blocks text-scan expansion
+   *  but A2A targets were detected. Entry is queued behind non-agent entries instead of being silently dropped. */
+  deferA2AEnqueue?:
+    | ((entry: {
+        threadId: string;
+        userId: string;
+        content: string;
+        source: 'agent';
+        sourceCategory: 'a2a';
+        targetCats: string[];
+        callerCatId: string;
+        messageId?: string;
+        a2aTriggerMessageId?: string;
+        autoExecute: true;
+        priority: 'normal';
+        intent: 'execute';
+        /** F153 Phase I: trace context of the mention_dispatch span, so the dispatched
+         *  route picked up by QueueProcessor reuses it as the parent — preserving cross-route
+         *  causality through the fairness-gate deferred path. */
+        callerTraceContext?: import('../../../../../infrastructure/telemetry/genai-semconv.js').CallerTraceContext;
+      }) => void)
+    | undefined;
   /** ADR-008 S3: When provided, cursor boundaries are collected here instead of acking immediately.
    *  Caller acks after invocation succeeds. If absent, legacy immediate ack behavior. */
   cursorBoundaries?: Map<string, string>;
@@ -116,6 +154,11 @@ export interface RouteOptions {
   completeA2ASlots?: ((threadId: string, catIds: readonly CatId[], controller: AbortController) => void) | undefined;
   /** F153 Phase E: Root route span — invocation spans become children of this. */
   routeSpan?: import('@opentelemetry/api').Span | undefined;
+  /** F222 P1: Whether this route is eligible for frustration auto-issue detection.
+   *  true/undefined = user-origin (eligible, default for backward compat).
+   *  false = agent/connector-origin (A2A handoff, connector trigger) — suppress
+   *  frustration detection to avoid surfacing system-internal errors as user-facing issues. */
+  frustrationAutoIssueEligible?: boolean | undefined;
 }
 
 export interface IncrementalContextResult {
@@ -253,7 +296,17 @@ export function truncateDetail(text: string, maxLength: number): string {
   return `${text.slice(0, maxLength)}…`;
 }
 
-/** Build a StoredToolEvent from a streaming AgentMessage */
+/** Build a StoredToolEvent from a streaming AgentMessage.
+ *
+ * F153 Phase J Slice J-B AC-J7: extends the event with the four-piece telemetry set
+ * (`toolUseId`, `status`, `tracing`, `startTimeMs`/`endTimeMs`) so cold-start hydrate
+ * (AC-J8) can synthesize a real-duration `cat_cafe.tool_use ...` child span instead
+ * of degrading to a flat `cat_cafe.invocation.restored` marker.
+ *
+ * All new fields are optional: messages without Phase J wiring (legacy, or providers
+ * deferred per KD-41) still produce a valid StoredToolEvent that the hydrate path
+ * skips for span synthesis but still surfaces in the Hub history view.
+ */
 export function toStoredToolEvent(msg: AgentMessage): StoredToolEvent | null {
   if (msg.type === 'tool_use') {
     const toolName = msg.toolName ?? 'unknown';
@@ -269,8 +322,15 @@ export function toStoredToolEvent(msg: AgentMessage): StoredToolEvent | null {
       id: `tool-${msg.timestamp}-${Math.random().toString(36).slice(2, 6)}`,
       type: 'tool_use',
       label: `${msg.catId as string} → ${toolName}`,
+      // R6 maintainer: persist native tool name as data field (decoupled from display label).
+      // Hydrate prefers this for span naming; label parse becomes legacy fallback only.
+      toolName,
       ...(detail ? { detail } : {}),
       timestamp: msg.timestamp,
+      ...(msg.toolUseId ? { toolUseId: msg.toolUseId } : {}),
+      ...(msg.toolTracing ? { tracing: msg.toolTracing } : {}),
+      // For tool_use events, msg.timestamp marks when the span opened.
+      startTimeMs: msg.timestamp,
     };
   }
   if (msg.type === 'tool_result') {
@@ -282,6 +342,11 @@ export function toStoredToolEvent(msg: AgentMessage): StoredToolEvent | null {
       label: `${msg.catId as string} ← result`,
       detail,
       timestamp: msg.timestamp,
+      ...(msg.toolUseId ? { toolUseId: msg.toolUseId } : {}),
+      ...(msg.toolResultStatus ? { status: msg.toolResultStatus } : {}),
+      ...(msg.toolTracing ? { tracing: msg.toolTracing } : {}),
+      // For tool_result events, msg.timestamp marks when the span closed.
+      endTimeMs: msg.timestamp,
     };
   }
   return null;
@@ -291,6 +356,9 @@ const USER_FACING_SYSTEM_INFO_TYPES = new Set([
   'a2a_followup_available',
   'governance_blocked',
   'invocation_preempted',
+  // F215 BLOCKING 1 fix: relay signal produces a user-visible text card before this signal,
+  // so marking it user-facing prevents route-serial from appending a misleading silent_completion.
+  'malformed_toolcall_relay_46',
   'mode_switch_proposal',
   'session_seal_requested',
   'silent_completion',
@@ -736,6 +804,7 @@ export async function assembleIncrementalContext(
       recentArtifacts,
       rankedSources,
       storedLedgerArtifacts,
+      viewer,
     );
   }
 
@@ -763,12 +832,38 @@ export async function assembleIncrementalContext(
   }
 
   const truncateLimit = budget.maxContentLengthPerMsg;
+  // #699: Build map from full relevant set for inline reply-to preview.
+  // Cursor gap fix: messages replying to older content (before cursor) need
+  // a targeted fetch so the inline preview can resolve the parent.
+  // Uses resolveVisibleReplyParent — atomic fetch + visibility gate.
+  const replyParentOpts = {
+    threadId,
+    viewer,
+    hideOtherCatStreams: (thinkingMode ?? 'play') === 'play',
+  };
+  const baseMap = new Map(buildMessageMap(relevant));
+  const missingReplyIds = [
+    ...new Set(capped.filter((m) => m.replyTo && !baseMap.has(m.replyTo)).map((m) => m.replyTo!)),
+  ];
+  if (missingReplyIds.length > 0) {
+    const resolved = await Promise.all(
+      missingReplyIds.map((id) => resolveVisibleReplyParent(deps.messageStore, id, replyParentOpts)),
+    );
+    for (const msg of resolved) {
+      if (msg) baseMap.set(msg.id, msg);
+    }
+  }
+  const messageMap: ReadonlyMap<string, StoredMessage> = baseMap;
   const lines = capped.map((m) => {
     // F22: Digest rich blocks into compact summaries for context
     const contentWithDigest = digestRichBlocks(m);
     const cleanContent = sanitizeInjectedContent(contentWithDigest);
     const normalized: StoredMessage = cleanContent === m.content ? m : { ...m, content: cleanContent };
-    const rendered = formatMessage(normalized, { truncate: truncateLimit });
+    const rendered = formatMessage(normalized, {
+      truncate: truncateLimit,
+      messageMap,
+      sanitizeContent: sanitizeInjectedContent,
+    });
     return `[${m.id}] ${rendered}`;
   });
 
@@ -879,6 +974,7 @@ async function assembleSmartWindowContext(
   recentArtifacts: import('./artifact-tracking.js').RecentArtifact[],
   rankedSources: import('./source-ranking.js').RankedSource[],
   preReadStoredArtifacts: import('./artifact-tracking.js').RecentArtifact[],
+  viewer: { type: 'cat'; catId: CatId } | { type: 'user' },
 ): Promise<IncrementalContextResult> {
   const budget = getCatContextBudget(catId as string);
   const truncateLimit = budget.maxContentLengthPerMsg;
@@ -1027,11 +1123,32 @@ async function assembleSmartWindowContext(
   const scrubbedBurst = scrubToolPayloads(burst);
 
   // 6. Format burst messages
+  // #699: Build map from full relevant set for inline reply-to preview.
+  // Cursor gap fix: burst messages may reply to content from the omitted window —
+  // uses resolveVisibleReplyParent — atomic fetch + visibility gate.
+  const replyParentOptsCold = { threadId, viewer, hideOtherCatStreams: true };
+  const baseMap = new Map(buildMessageMap(relevant));
+  const missingReplyIds = [
+    ...new Set(scrubbedBurst.filter((m) => m.replyTo && !baseMap.has(m.replyTo)).map((m) => m.replyTo!)),
+  ];
+  if (missingReplyIds.length > 0) {
+    const resolved = await Promise.all(
+      missingReplyIds.map((id) => resolveVisibleReplyParent(deps.messageStore, id, replyParentOptsCold)),
+    );
+    for (const msg of resolved) {
+      if (msg) baseMap.set(msg.id, msg);
+    }
+  }
+  const messageMap: ReadonlyMap<string, StoredMessage> = baseMap;
   const burstLines = scrubbedBurst.map((m) => {
     const contentWithDigest = digestRichBlocks(m);
     const cleanContent = sanitizeInjectedContent(contentWithDigest);
     const normalized: StoredMessage = cleanContent === m.content ? m : { ...m, content: cleanContent };
-    const rendered = formatMessage(normalized, { truncate: truncateLimit });
+    const rendered = formatMessage(normalized, {
+      truncate: truncateLimit,
+      messageMap,
+      sanitizeContent: sanitizeInjectedContent,
+    });
     return `[${m.id}] ${rendered}`;
   });
 

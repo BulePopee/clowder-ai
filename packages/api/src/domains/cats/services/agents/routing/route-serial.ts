@@ -10,8 +10,7 @@
  * A2A only triggers here in routeSerial; routeParallel never chains (MVP safety boundary).
  */
 
-import type { CatConfig, CatId } from '@cat-cafe/shared';
-import { catRegistry } from '@cat-cafe/shared';
+import { type CatConfig, type CatId, catRegistry, createCatId, resolveWorkflowSopSkill } from '@cat-cafe/shared';
 import type { Span } from '@opentelemetry/api';
 import { context, trace } from '@opentelemetry/api';
 import { getCatContextBudget } from '../../../../../config/cat-budgets.js';
@@ -20,11 +19,20 @@ import { getCatVoice } from '../../../../../config/cat-voices.js';
 import { createModuleLogger } from '../../../../../infrastructure/logger.js';
 import {
   AGENT_ID,
+  type CallerTraceContext,
   ROUTE_HAS_A2A_HANDOFF,
   ROUTE_TOTAL_CATS_INVOKED,
   ROUTE_TOTAL_TOKENS,
+  THREAD_SYSTEM_KIND,
+  TRIGGER,
 } from '../../../../../infrastructure/telemetry/genai-semconv.js';
 import {
+  a2aDispatchCount,
+  c2ExitChecked,
+  c2VerdictHintEmitted,
+  c2VerdictWithoutPassCount,
+  c2VoidHoldChecked,
+  c2VoidHoldHintEmitted,
   inlineActionChecked,
   inlineActionDetected,
   inlineActionFeedbackWriteFailed,
@@ -42,21 +50,27 @@ import {
   guideContextForCat,
   prepareGuideContext,
 } from '../../../../guides/GuideRoutingInterceptor.js';
+import { triggerRecallCorrelation } from '../../../../memory/recall-correlation-hook.js';
 import { assembleContext } from '../../context/ContextAssembler.js';
 import {
   buildInvocationContext,
   buildStaticIdentity,
+  buildStaticIdentityPackOnly,
   type InvocationContext,
 } from '../../context/SystemPromptBuilder.js';
 import { formatDegradationMessage } from '../../orchestration/DegradationPolicy.js';
 import { AuditEventTypes, getEventAuditLog } from '../../orchestration/EventAuditLog.js';
 import { buildSessionBootstrap } from '../../session/SessionBootstrap.js';
 import {
+  hydrateCrossThreadReplyHint,
   hydrateReplyPreview,
   type StoredToolEvent,
   type StreamMetadataAugmentInput,
 } from '../../stores/ports/MessageStore.js';
 import type { Thread, ThreadRoutingPolicyV1 } from '../../stores/ports/ThreadStore.js';
+import { classifyTool } from '../../tool-usage/classify.js';
+import { deriveResultSummary } from '../../tool-usage/derive-result-summary.js';
+import { normalizeMcpToolName } from '../../tool-usage/normalize-mcp-tool-name.js';
 import { getStreamingTtsRegistry, StreamingTtsChunker } from '../../tts/StreamingTtsChunker.js';
 import { getVoiceBlockSynthesizer } from '../../tts/VoiceBlockSynthesizer.js';
 import type { AgentMessage, AgentMessageType, MessageMetadata } from '../../types.js';
@@ -68,11 +82,13 @@ import { resolveDefaultClaudeMcpServerPath } from '../providers/ClaudeAgentServi
 import { detectInlineActionMentionsWithShadow, getMaxA2ADepth, parseA2AMentions } from '../routing/a2a-mentions.js';
 import {
   isSubstantiveTool,
+  peekStreakOnPush,
   registerWorklist,
   unregisterWorklist,
   updateStreakOnPush,
 } from '../routing/WorklistRegistry.js';
 import { accumulateTextAggregate } from '../text-aggregation.js';
+import { formatA2AHandoffContent } from './a2a-handoff-label.js';
 import { extractContextEvalSignals } from './context-eval.js';
 import { validateRoutingSyntax } from './final-routing-slot.js';
 import { buildBriefingMessage } from './format-briefing.js';
@@ -91,8 +107,9 @@ import {
   toStoredToolEvent,
   upsertMaxBoundary,
 } from './route-helpers.js';
+import { resolveRoutingDecisions } from './routing-decision.js';
 import { appendThinkingChunk, renderThinkingChunks } from './thinking-chunks.js';
-import { shouldWarnVerdictWithoutPass } from './verdict-detect.js';
+import { detectMatchedVerdictKeyword, shouldWarnVerdictWithoutPass } from './verdict-detect.js';
 import { shouldWarnVoidHold } from './void-hold-detect.js';
 import { buildVoteTally, checkVoteCompletion, extractVoteFromText, VOTE_RESULT_SOURCE } from './vote-intercept.js';
 
@@ -235,14 +252,17 @@ export async function* routeSerial(
     contentBlocks,
     uploadDir,
     signal,
+    signalForCat,
     promptTags,
     contextHistory,
     history,
     currentUserMessageId,
+    a2aTriggerMessageId,
     modeSystemPrompt,
     modeSystemPromptByCat,
     queueHasQueuedMessages,
     hasQueuedOrActiveAgentForCat,
+    deferA2AEnqueue,
   } = options;
   const previousResponses: { catId: CatId; content: string }[] = [];
   const thinkingMode = options.thinkingMode ?? 'play';
@@ -276,7 +296,9 @@ export async function* routeSerial(
   // F042: Fetch thread routingPolicy once before loop (threadId doesn't change).
   let routingPolicy: ThreadRoutingPolicyV1 | undefined;
   // F073 P4: SOP stage hint from workflow-sop (告示牌 — info only, cats decide actions)
-  let sopStageHint: { stage: string; suggestedSkill: string | null; featureId: string } | undefined;
+  let sopStageHint:
+    | { stage: string; suggestedSkill: string; suggestedSkillSource: string; featureId: string }
+    | undefined;
   // F092: Voice companion mode
   let voiceMode: boolean | undefined;
   // F087: Bootcamp state for CVO onboarding
@@ -295,9 +317,11 @@ export async function* routeSerial(
         try {
           const sop = await deps.invocationDeps.workflowSopStore.get(routeThread.backlogItemId);
           if (sop) {
+            const skill = resolveWorkflowSopSkill(sop);
             sopStageHint = {
               stage: sop.stage,
-              suggestedSkill: sop.nextSkill,
+              suggestedSkill: skill.skill,
+              suggestedSkillSource: skill.source,
               featureId: sop.featureId,
             };
           }
@@ -329,10 +353,20 @@ export async function* routeSerial(
     dismissTracker: deps.invocationDeps.dismissTracker,
   });
 
+  const completedCatInvocationIds: Array<[string, string]> = [];
+
   try {
     while (index < worklist.length) {
-      if (signal?.aborted) break;
       const catId = worklist[index]!;
+      // F-parallel-cancel: per-cat signal — canceling one cat skips ONLY that cat, not the
+      // whole worklist. force-reset/cancelAll aborts every cat's controller, so all entries
+      // skip = equivalent to stopping. Using the shared primaryController.signal made
+      // "cancel the first cat" break the entire worklist (并发取消误伤根因：serial 路径).
+      const catSignal = signalForCat?.(catId) ?? signal;
+      if (catSignal?.aborted) {
+        index++;
+        continue;
+      }
       // F148 OQ-2: briefing→invocation link + context eval
       let briefingMessageId: string | undefined;
       let briefingCoverageMap: import('./context-transport.js').CoverageMap | undefined;
@@ -361,9 +395,28 @@ export async function* routeSerial(
               count: worklistEntry.streakPair.count,
             }
           : undefined;
-      const streamReplyTo = worklistEntry.a2aTriggerMessageId.get(catId);
+      const queueTriggerReplyTo = isOriginalTarget ? a2aTriggerMessageId : undefined;
+      const streamReplyTo = worklistEntry.a2aTriggerMessageId.get(catId) ?? queueTriggerReplyTo;
       const streamReplyPreview = streamReplyTo
         ? await hydrateReplyPreview(deps.messageStore, streamReplyTo)
+        : undefined;
+      // F193 AC-B2: structured cross-thread reply hint hydrated from trigger message.
+      // Closes Codex review P1 (砚砚 2026-05-08): worklist `a2aTriggerMessageId` map
+      // only has entries for downstream A2A targets — initial target via the modern
+      // InvocationQueue path doesn't register in the map. Queue path's trigger id
+      // arrives via `routeOptions.currentUserMessageId` (QueueProcessor → routeExecution).
+      // Fallback chain ensures queue path also gets the hint without changing
+      // streamReplyTo/auto-replyTo behavior (those have different semantics).
+      // Same-thread triggers / agent-key path naturally return null inside the helper.
+      const crossThreadReplyHintTriggerId = worklistEntry.a2aTriggerMessageId.get(catId) ?? currentUserMessageId;
+      const crossThreadReplyHintRaw = crossThreadReplyHintTriggerId
+        ? await hydrateCrossThreadReplyHint(deps.messageStore, crossThreadReplyHintTriggerId)
+        : null;
+      const crossThreadReplyHint = crossThreadReplyHintRaw
+        ? {
+            sourceThreadId: crossThreadReplyHintRaw.sourceThreadId,
+            senderCatId: createCatId(crossThreadReplyHintRaw.senderCatId),
+          }
         : undefined;
       let mentionRoutingFeedback = null;
       if (deps.invocationDeps.threadStore) {
@@ -373,8 +426,15 @@ export async function* routeSerial(
           log.warn({ catId: catId as string, err: feedbackErr }, 'consumeMentionRoutingFeedback failed');
         }
       }
-      // MCP documentation: Claude's MCP_TOOLS_SECTION → staticIdentity (in -p content).
-      // Non-Claude HTTP callback instructions → per-message (session history may be lost on compress).
+      // mcpAvailable still gates the per-message HTTP callback fallback below
+      // (needsMcpInjection). F203 Phase C: the non-pack identity/家规/MCP docs
+      // travel via the compression-immune native system role
+      // (--system-prompt-file / -c) ONLY for providers that inject L0 natively
+      // (ClaudeAgentService -p, ClaudeBgCarrierService, CodexAgent). Other
+      // providers (Gemini, Antigravity, CatAgent, A2A, OpenCode, Dare, Kimi…)
+      // have no native L0 channel, so they MUST still receive the full static
+      // identity via the user-message systemPrompt prepend — otherwise they
+      // lose identity/家规 entirely (云端 Codex P1-cloud-1, 2026-05-16).
       const mcpAvailable = (catConfig?.mcpSupport ?? false) && !!mcpServerPath;
       // F129: Load active pack blocks (best-effort, failure does not block invocation)
       let packBlocks: import('@cat-cafe/shared').CompiledPackBlocks | null = null;
@@ -382,7 +442,11 @@ export async function* routeSerial(
         const { getActivePackBlocks } = await import('../../../../packs/getActivePackBlocks.js');
         packBlocks = await getActivePackBlocks(deps.packStore);
       }
-      const staticIdentity = buildStaticIdentity(catId, { mcpAvailable, packBlocks });
+      const service = getService(deps.services, catId);
+      const hasNativeL0 = service.injectsL0Natively?.() ?? false;
+      const staticIdentity = hasNativeL0
+        ? buildStaticIdentityPackOnly(catId, { packBlocks })
+        : buildStaticIdentity(catId, { mcpAvailable, packBlocks });
       // F041: inject HTTP callback only when MCP is NOT actually available (fallback)
       const mcpInstructions = needsMcpInjection(mcpAvailable, catConfig?.clientId)
         ? buildMcpCallbackInstructions({
@@ -423,11 +487,11 @@ export async function* routeSerial(
           const f163Flags = freezeFlags();
           alwaysOnInjectionMode = f163Flags.alwaysOnInjection;
           if (alwaysOnInjectionMode !== 'off') {
-            const queryAlwaysOn = (
-              deps.evidenceStore as { queryAlwaysOn?: () => Array<{ anchor: string; title: string; summary: string }> }
-            ).queryAlwaysOn;
-            if (queryAlwaysOn) {
-              const docs = queryAlwaysOn();
+            const evStore = deps.evidenceStore as {
+              queryAlwaysOn?: () => Array<{ anchor: string; title: string; summary: string }>;
+            };
+            if (typeof evStore.queryAlwaysOn === 'function') {
+              const docs = evStore.queryAlwaysOn();
               if (docs.length > 0) alwaysOnDocs = docs;
             }
           }
@@ -467,6 +531,7 @@ export async function* routeSerial(
         a2aEnabled,
         ...(directMessageFrom ? { directMessageFrom } : {}),
         ...(pingPongWarning ? { pingPongWarning } : {}),
+        ...(crossThreadReplyHint ? { crossThreadReplyHint } : {}),
         ...(mentionRoutingFeedback ? { mentionRoutingFeedback } : {}),
         ...(activeParticipants.length > 0 ? { activeParticipants } : {}),
         ...(routingPolicy ? { routingPolicy } : {}),
@@ -656,6 +721,10 @@ export async function* routeSerial(
       let hadProviderError = false;
       // Collect error text separately for system-message persistence (F5 reload)
       let collectedErrorText = '';
+      // F212 Phase B (云端 codex P2-8 2026-05-27): persist Phase A's structured
+      // cliDiagnostics alongside the error text so cold hydration (F5 reload) can
+      // restore the folded panel — without this, only the legacy red-pill survives.
+      let collectedCliDiagnostics: import('@cat-cafe/shared').CliDiagnostics | undefined;
       const collectedToolEvents: StoredToolEvent[] = [];
       // F148 OQ-2: Collect tool names for context eval signals
       const collectedToolNames: string[] = [];
@@ -691,17 +760,19 @@ export async function* routeSerial(
         'Invoking cat via invokeSingleCat',
       );
       const leakedPayloadStripper = createLeakedToolCallStreamStripper();
-      const invocationStartedAt = Date.now();
       const invocationSpanRef: { current?: Span } = {};
+      const invocationStartedAt = Date.now();
+      // F215 AC-C3: flag set when invokeSingleCat emits malformed_toolcall_relay_46 signal
+      let malformedRelayPending = false;
       for await (const msg of invokeSingleCat(deps.invocationDeps, {
         catId,
-        service: getService(deps.services, catId),
+        service,
         prompt,
         userId,
         threadId,
         ...(targetContentBlocks ? { contentBlocks: targetContentBlocks } : {}),
         ...(targetUploadDir ? { uploadDir: targetUploadDir } : {}),
-        ...(signal ? { signal } : {}),
+        ...(catSignal ? { signal: catSignal } : {}),
         ...(staticIdentity ? { systemPrompt: staticIdentity } : {}),
         ...(options.parentInvocationId ? { parentInvocationId: options.parentInvocationId } : {}),
         continuityCapsule,
@@ -716,7 +787,7 @@ export async function* routeSerial(
         isLastCat: false,
       })) {
         // F39 bugfix: stop yielding after cancel (pipe buffer may still drain)
-        if (signal?.aborted) break;
+        if (catSignal?.aborted) break;
 
         const effectiveMsgs: AgentMessage[] = [];
         if (msg.type === 'text' && msg.content) {
@@ -755,7 +826,7 @@ export async function* routeSerial(
                       voiceConfig: getCatVoice(catId as string),
                       broadcaster: deps.socketManager,
                       ttsRegistry,
-                      signal,
+                      signal: catSignal,
                     });
                   }
                 }
@@ -799,9 +870,31 @@ export async function* routeSerial(
               if (parsed.type === 'invocation_usage' && parsed.usage) {
                 routeTotalTokens += (parsed.usage.inputTokens ?? 0) + (parsed.usage.outputTokens ?? 0);
               }
+              // F215 AC-C3: detect 46-接力 relay signal — set flag to push opus-4.6 after loop.
+              // This is an internal routing signal; must be consumed here and NOT yielded to the frontend.
+              if (parsed.type === 'malformed_toolcall_relay_46') {
+                const relay46CatId = createCatId('opus');
+                if (catId !== relay46CatId && Object.hasOwn(deps.services, relay46CatId as string)) {
+                  malformedRelayPending = true;
+                  log.info(
+                    { catId: catId as string, threadId, relay46CatId },
+                    '[F215] malformed_toolcall_relay_46 signal received — will push opus-4.6 after loop',
+                  );
+                }
+                continue; // consume routing signal — never surfaces to user as raw JSON
+              }
             } catch {
               /* ignore parse errors */
             }
+          }
+          // F215 AC-C3: suppress malformed error when relay to 46 is already queued
+          if (
+            malformedRelayPending &&
+            effectiveMsg.type === 'error' &&
+            typeof effectiveMsg.error === 'string' &&
+            effectiveMsg.error.startsWith('malformed_toolcall:')
+          ) {
+            continue; // 46 will take over — don't surface error to user
           }
           // Accumulate tool events for persistence (before draft flush so current event is available)
           const toolEvt = toStoredToolEvent(effectiveMsg);
@@ -840,6 +933,22 @@ export async function* routeSerial(
               awaitingCallbackResult = false;
               if (callbackResult.messageId) callbackPostMessageId = callbackResult.messageId;
             }
+            // F188 Phase F AC-F10 (砚砚 六审 P1-B: also scope by catId for serial route consistency).
+            // 砚砚 cloud-3 P1: also pass toolUseId for exact match when available;
+            // otherwise FIFO toolName+catId match handles same-name parallel calls.
+            if (deps.toolEventLog && completedToolName) {
+              const normalizedName = normalizeMcpToolName(completedToolName);
+              const resultSummary = deriveResultSummary(normalizedName, effectiveMsg.content);
+              if (Object.keys(resultSummary).length > 0) {
+                const resultMsg = effectiveMsg as { catId?: string; toolUseId?: string };
+                const matcher: { toolUseId?: string; toolName?: string; catId?: string } = resultMsg.toolUseId
+                  ? { toolUseId: resultMsg.toolUseId }
+                  : resultMsg.catId
+                    ? { toolName: normalizedName, catId: resultMsg.catId }
+                    : { toolName: normalizedName };
+                deps.toolEventLog.updateSummary(threadId, matcher, resultSummary).catch(() => {});
+              }
+            }
           }
 
           // F150: Fire-and-forget tool usage counter
@@ -849,6 +958,59 @@ export async function* routeSerial(
               effectiveMsg.toolName ?? 'unknown',
               effectiveMsg.toolInput as Record<string, unknown> | undefined,
             );
+          }
+          // F188 Phase F AC-F10: append-only tool event log (砚砚 三审 P1 wiring)
+          if (effectiveMsg.type === 'tool_use' && deps.toolEventLog && effectiveMsg.catId) {
+            const msg = effectiveMsg as {
+              catId?: string;
+              toolName?: string;
+              toolInput?: Record<string, unknown>;
+              toolUseId?: string;
+              invocationId?: string;
+              sessionId?: string;
+              threadId?: string;
+              turnIndex?: number;
+            };
+            // 砚砚 四审 P1-1: normalizeMcpToolName handles mcp__/mcp:/cat_cafe_ child extraction
+            const rawToolName = msg.toolName ?? 'unknown';
+            const classification = classifyTool(rawToolName, msg.toolInput);
+            const normalizedToolName =
+              classification.category === 'skill' ? classification.toolName : normalizeMcpToolName(rawToolName);
+            // 砚砚 cloud-3 P1: propagate toolUseId into summary (as _toolUseId) so
+            // updateSummary can do exact match when provider emits it on tool_result.
+            const baseSummary = (msg.toolInput ?? {}) as Record<string, unknown>;
+            const summary: Record<string, unknown> = msg.toolUseId
+              ? { ...baseSummary, _toolUseId: msg.toolUseId }
+              : baseSummary;
+            deps.toolEventLog
+              .append({
+                invocationId: msg.invocationId ?? ownInvocationId ?? 'unknown',
+                sessionId: msg.sessionId ?? ownInvocationId ?? 'unknown',
+                threadId: msg.threadId ?? threadId ?? 'unknown',
+                catId: msg.catId ?? 'unknown',
+                toolName: normalizedToolName,
+                timestamp: Date.now(),
+                turnIndex: msg.turnIndex ?? 0,
+                status: 'success',
+                summary,
+              })
+              .catch(() => {});
+            // 砚砚 二审 P1-4: detect Skill tool_use → SkillLoadEventLog (AS-4 producer path)
+            if (rawToolName === 'Skill' && deps.skillLoadEventLog) {
+              const skillName =
+                msg.toolInput && typeof msg.toolInput['skill'] === 'string'
+                  ? (msg.toolInput['skill'] as string)
+                  : 'unknown';
+              deps.skillLoadEventLog
+                .append({
+                  invocationId: msg.invocationId ?? ownInvocationId ?? 'unknown',
+                  sessionId: msg.sessionId ?? ownInvocationId ?? 'unknown',
+                  skillId: skillName,
+                  loadTrigger: 'explicit_call',
+                  timestamp: Date.now(),
+                })
+                .catch(() => {});
+            }
           }
 
           // #80: Draft flush — fire-and-forget periodic persistence for F5 recovery
@@ -914,9 +1076,17 @@ export async function* routeSerial(
           if (effectiveMsg.type === 'error') {
             hadError = true;
             // #267: errors before abort are real provider failures; errors after abort are cleanup
-            if (!signal?.aborted) hadProviderError = true;
+            if (!catSignal?.aborted) hadProviderError = true;
             if (effectiveMsg.error) {
               collectedErrorText += `${collectedErrorText ? '\n' : ''}${effectiveMsg.error}`;
+            }
+            // F212 Phase B (云端 codex P2-8): capture structured cliDiagnostics from
+            // metadata; keep the first one seen (canonical for this invocation).
+            const meta = effectiveMsg.metadata as
+              | { cliDiagnostics?: import('@cat-cafe/shared').CliDiagnostics }
+              | undefined;
+            if (meta?.cliDiagnostics && !collectedCliDiagnostics) {
+              collectedCliDiagnostics = meta.cliDiagnostics;
             }
           }
           if (effectiveMsg.metadata && !firstMetadata) {
@@ -928,15 +1098,24 @@ export async function* routeSerial(
             if (effectiveMsg.type === 'text' && !effectiveMsg.content) {
               continue;
             }
+            // F194 Phase Z9 砚砚 R1 P1-1: stamp ownInvocationId on yielded stream events
+            // so downstream broadcaster (messages.ts) doesn't fall back to parent when
+            // assigning turnInvocationId. CLI text/done/tool events don't carry
+            // invocationId; only system_info=invocation_created does. Without explicit
+            // stamping, multi-turn same-cat under shared parent collapses to one bubble.
+            const ownStampedMsg =
+              ownInvocationId && !effectiveMsg.invocationId
+                ? { ...effectiveMsg, invocationId: ownInvocationId }
+                : effectiveMsg;
             // Tag CLI stdout text with origin: 'stream' (thinking/internal)
-            yield effectiveMsg.type === 'text'
+            yield ownStampedMsg.type === 'text'
               ? {
-                  ...effectiveMsg,
+                  ...ownStampedMsg,
                   origin: 'stream' as const,
                   ...(streamReplyTo ? { replyTo: streamReplyTo } : {}),
                   ...(streamReplyPreview ? { replyPreview: streamReplyPreview } : {}),
                 }
-              : effectiveMsg;
+              : ownStampedMsg;
           }
         }
       }
@@ -945,6 +1124,33 @@ export async function* routeSerial(
       if (keepaliveTimer) {
         clearInterval(keepaliveTimer);
         keepaliveTimer = undefined;
+      }
+
+      // F215 AC-C3: push opus-4.6 to worklist as relay when 48 炸毛 + fresh retry also failed
+      if (malformedRelayPending) {
+        const relay46CatId = createCatId('opus');
+        if (
+          catId !== relay46CatId &&
+          Object.hasOwn(deps.services, relay46CatId as string) &&
+          // P2 fix + P1 #1 fix: only check PENDING entries (worklist[index+1..]) not the full
+          // worklist. worklist[0..index] are already executed; including them would silently skip
+          // a legitimate relay when opus ran first in the route (e.g. [opus, opus-48]).
+          !worklist.slice(index + 1).includes(relay46CatId)
+        ) {
+          worklist.push(relay46CatId);
+          worklistEntry.a2aCount++;
+          worklistEntry.a2aFrom.set(relay46CatId, catId);
+          log.info(
+            { catId: catId as string, relay46CatId, threadId, a2aCount: worklistEntry.a2aCount },
+            '[F215] Pushed opus-4.6 to worklist for malformed tool-call relay (AC-C3)',
+          );
+        } else if (worklist.slice(index + 1).includes(relay46CatId)) {
+          log.info(
+            { catId: catId as string, relay46CatId, threadId },
+            '[F215] opus-4.6 already pending in worklist — skipping duplicate relay push (P2 dedup)',
+          );
+        }
+        malformedRelayPending = false;
       }
 
       // F111 Phase B: Flush remaining buffered text and send voice_stream_end
@@ -956,7 +1162,7 @@ export async function* routeSerial(
           log.error({ err }, 'Voice chunker flush failed');
         }
         if (deps.socketManager && voiceChunker.hasStarted()) {
-          const aborted = signal?.aborted ?? false;
+          const aborted = catSignal?.aborted ?? false;
           deps.socketManager.broadcastToRoom(`thread:${threadId}`, 'voice_stream_end', {
             type: 'voice_stream_end',
             catId: catId as string,
@@ -1149,6 +1355,33 @@ export async function* routeSerial(
         // reports ending with `@co-creator` / `@铲屎官` (legitimate escalation to co-creator)
         // don't trigger the verdict-no-pass-hint false-positive. parseA2AMentions only
         // returns cat handles, never co-creator ones.
+        //
+        // C2 denominator (F192 2026-05-29): count every turn the verdict-without-pass
+        // exit-check actually evaluates, so attribution can grade verdict_without_pass_count
+        // against a real `c2.checked` base instead of fabricating a 100% ratio. phaseHHit
+        // turns are excluded — a format error short-circuits the check (AC-H5), so they
+        // were never evaluated.
+        // C2 telemetry labels (F192 2026-06-03 build verdict): every C2 counter carries
+        // `thread.system_kind` (the OTel label value behind `THREAD_SYSTEM_KIND`) so
+        // attribution can distinguish eval-domain noise from real product-thread friction.
+        // The verdict fire counters additionally carry `trigger` (`TRIGGER` semconv,
+        // reusing the existing key — values are instrument-scoped) to spot keyword
+        // overload — e.g. a `p1p2`-driven spike (review-discussion vocab) vs a `放行`-driven
+        // one (real verdict-without-pass). All emitted attribute keys are in F152
+        // metric-allowlist or the OTel SDK silently drops them (砚砚 PR #2058 R1 catch).
+        const c2BaseAttr: Record<string, string> = {
+          [AGENT_ID]: catId as string,
+          [THREAD_SYSTEM_KIND]: routeThread?.systemKind ?? 'product',
+        };
+        if (!phaseHHit) {
+          c2ExitChecked.add(1, c2BaseAttr);
+        }
+        // F192 Phase D — local R1 review P1-1 fix: capture trigger here, defer addEvent
+        // emission until `storedMsgId` is bound to the CAT's verdict-bearing message
+        // (line ~1625 / ~1680). The hint message appended below is NOT the original
+        // verdict source — using its id as sample.messageId would land drilldown on
+        // the hint text, not the cat's output that triggered detection.
+        let pendingC2SampleTrigger: string | null = null;
         if (
           !phaseHHit &&
           shouldWarnVerdictWithoutPass({
@@ -1175,6 +1408,16 @@ export async function* routeSerial(
               timestamp: Date.now(),
               source: hintSource,
             });
+            const verdictFireAttr: Record<string, string> = {
+              ...c2BaseAttr,
+              [TRIGGER]: detectMatchedVerdictKeyword(storedContent) ?? 'unknown',
+            };
+            c2VerdictHintEmitted.add(1, verdictFireAttr);
+            c2VerdictWithoutPassCount.add(1, verdictFireAttr);
+            // F192 Phase D — capture trigger for deferred sample emission. The actual
+            // addEvent fires after `storedMsgId` is bound to the cat's verdict message
+            // (post-storage block) so drilldown lands on real content, not on this hint.
+            pendingC2SampleTrigger = verdictFireAttr[TRIGGER] as string;
             if (deps.socketManager) {
               deps.socketManager.broadcastToRoom(`thread:${threadId}`, 'connector_message', {
                 threadId,
@@ -1194,6 +1437,10 @@ export async function* routeSerial(
 
         // F167 Phase I AC-I1 (KD-25): void hold detection — text says "持球" but
         // no cat_cafe_hold_ball tool call this turn.声明-动作一致性 check.
+        // C2 void-hold denominator (PR #1941 P2): count every void-hold evaluation so
+        // attribution grades void_hold_hint against c2.void_hold_checked, NOT the
+        // verdict-check count c2.checked (different guard → wrong ratio / suppression).
+        c2VoidHoldChecked.add(1, c2BaseAttr);
         if (
           shouldWarnVoidHold({
             text: storedContent,
@@ -1210,7 +1457,7 @@ export async function* routeSerial(
               icon: '🏓',
               meta: { presentation: 'system_notice', noticeTone: 'warning' },
             };
-            const stored = await deps.messageStore.append({
+            const voidStored = await deps.messageStore.append({
               userId: 'system',
               catId: null,
               threadId,
@@ -1221,15 +1468,16 @@ export async function* routeSerial(
               timestamp: Date.now(),
               source: hintSource,
             });
+            c2VoidHoldHintEmitted.add(1, c2BaseAttr);
             if (deps.socketManager) {
               deps.socketManager.broadcastToRoom(`thread:${threadId}`, 'connector_message', {
                 threadId,
                 message: {
-                  id: stored.id,
+                  id: voidStored.id,
                   type: 'connector',
-                  content: stored.content,
+                  content: voidStored.content,
                   source: hintSource,
-                  timestamp: stored.timestamp,
+                  timestamp: voidStored.timestamp,
                 },
               });
             }
@@ -1348,7 +1596,21 @@ export async function* routeSerial(
               ...(streamReplyTo ? { replyTo: streamReplyTo } : {}),
               extra: {
                 ...(allRichBlocks.length > 0 ? { rich: { v: 1 as const, blocks: allRichBlocks } } : {}),
-                ...(persistedInvocationId ? { stream: { invocationId: persistedInvocationId } } : {}),
+                // F194 Phase Z3: dual id — invocationId=parent (legacy SoT for liveness/queue/cancel),
+                // turnInvocationId=own (Z3 new SoT for frontend bubble identity stable key, prevents
+                // same-parent multi-turn-same-cat bubble merge).
+                // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId.
+                // First-in-chain (ownInvocationId === parent) still gets explicit
+                // turn stamp so frontend bubble identity never falls back to parent
+                // (which would let multi-turn same-cat under same parent collapse).
+                ...(persistedInvocationId
+                  ? {
+                      stream: {
+                        invocationId: persistedInvocationId,
+                        turnInvocationId: ownInvocationId ?? persistedInvocationId,
+                      },
+                    }
+                  : {}),
                 ...(doneMsg?.tracing ? { tracing: doneMsg.tracing } : {}),
               },
             });
@@ -1363,6 +1625,9 @@ export async function* routeSerial(
               'Stream store skipped — cat_cafe_post_message callback already persisted',
             );
             if (callbackPostMessageId) {
+              // F192 Phase D: bind sample anchor in callback path so post-storage
+              // emission uses the actual cat-stored message id (via callback).
+              storedMsgId = callbackPostMessageId;
               const metadataPatch: StreamMetadataAugmentInput = {
                 ...(thinkingChunks.length > 0 ? { thinking: renderThinkingChunks(thinkingChunks) } : {}),
                 ...(firstMetadata ? { metadata: firstMetadata } : {}),
@@ -1372,7 +1637,21 @@ export async function* routeSerial(
               };
               const extraParts = {
                 ...(allRichBlocks.length > 0 ? { rich: { v: 1 as const, blocks: allRichBlocks } } : {}),
-                ...(persistedInvocationId ? { stream: { invocationId: persistedInvocationId } } : {}),
+                // F194 Phase Z3: dual id — invocationId=parent (legacy SoT for liveness/queue/cancel),
+                // turnInvocationId=own (Z3 new SoT for frontend bubble identity stable key, prevents
+                // same-parent multi-turn-same-cat bubble merge).
+                // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId.
+                // First-in-chain (ownInvocationId === parent) still gets explicit
+                // turn stamp so frontend bubble identity never falls back to parent
+                // (which would let multi-turn same-cat under same parent collapse).
+                ...(persistedInvocationId
+                  ? {
+                      stream: {
+                        invocationId: persistedInvocationId,
+                        turnInvocationId: ownInvocationId ?? persistedInvocationId,
+                      },
+                    }
+                  : {}),
                 ...(doneMsg?.tracing ? { tracing: doneMsg.tracing } : {}),
               };
               if (Object.keys(extraParts).length > 0) metadataPatch.extra = extraParts;
@@ -1412,6 +1691,39 @@ export async function* routeSerial(
               log.warn({ catId: catId as string, err: activityErr }, 'updateParticipantActivity failed');
             }
           }
+          // F192 Phase D — deferred per-fire sample emission (local R1 P1-1 fix +
+          // cloud R1 P1 fix: use dedicated sample span instead of getActiveSpan).
+          //
+          // Why a fresh span and not `invocationSpanRef.current.addEvent(...)`:
+          // invokeSingleCat ends the cat invocation span in its `finally` once the
+          // generator closes. By the time control reaches here (post-storage, outside
+          // the for-await loop), the cat invocation span is ended — `.addEvent()` on
+          // an ended span is a silent no-op in the OTel JS SDK and the sample would
+          // be dropped despite the counter incrementing. A short-lived marker span
+          // parented to a still-open span (route span first, falling back to the
+          // ended invocation span as parent ref only) guarantees the event reaches
+          // LocalTraceStore via RedactingSpanProcessor (which HMACs IDs per the
+          // 782b346d0 events-redaction fix).
+          if (pendingC2SampleTrigger !== null && storedMsgId) {
+            try {
+              const parentSpan = options.routeSpan ?? invocationSpanRef.current;
+              const parentCtx = parentSpan ? trace.setSpan(context.active(), parentSpan) : context.active();
+              const sampleSpan = trace
+                .getTracer('cat-cafe-api', '0.1.0')
+                .startSpan('cat_cafe.a2a.c2.verdict_without_pass_sample', undefined, parentCtx);
+              sampleSpan.addEvent('c2.verdict_without_pass_fired', {
+                messageId: storedMsgId,
+                invocationId: ownInvocationId ?? 'unknown',
+                threadId,
+                [AGENT_ID]: catId as string,
+                [THREAD_SYSTEM_KIND]: routeThread?.systemKind ?? 'product',
+                [TRIGGER]: pendingC2SampleTrigger,
+              });
+              sampleSpan.end();
+            } catch {
+              /* best-effort sample emission */
+            }
+          }
         } catch (err) {
           log.error({ catId: catId as string, err }, 'messageStore.append failed, degrading');
           if (options.persistenceContext) {
@@ -1437,57 +1749,88 @@ export async function* routeSerial(
           }
         }
 
-        // Diagnostic: log when A2A text-scan gate blocks (previously silent)
+        // Diagnostic: log when A2A text-scan gate blocks
         if (a2aMentions.length > 0) {
           if (queuedMessagesPending) {
             log.info(
               { threadId, catId, a2aMentions, a2aCount: worklistEntry.a2aCount },
-              'A2A text-scan blocked: user messages pending in queue (fairness gate)',
+              'A2A text-scan blocked: non-agent messages pending in queue (fairness gate)',
             );
           } else if (worklistEntry.a2aCount >= maxDepth) {
             log.info(
               { threadId, catId, a2aMentions, a2aCount: worklistEntry.a2aCount, maxDepth },
               'A2A text-scan blocked: depth limit reached',
             );
-          } else if (signal?.aborted) {
+          } else if (catSignal?.aborted) {
             log.info({ threadId, catId, a2aMentions }, 'A2A text-scan blocked: signal aborted');
           }
         }
 
-        if (a2aMentions.length > 0 && worklistEntry.a2aCount < maxDepth && !signal?.aborted && !queuedMessagesPending) {
+        if (
+          a2aMentions.length > 0 &&
+          worklistEntry.a2aCount < maxDepth &&
+          !catSignal?.aborted &&
+          !queuedMessagesPending
+        ) {
           // F153: mention_dispatch span — tracks the causal link between mentioner and dispatched targets
           let dispatchSpan: Span | undefined;
           const pendingTail = worklist.slice(index + 1);
           const pendingOriginalTargets = targetCats.slice(index + 1);
+          // F216 c1.3 + P1-2 (砚砚 review): route each mentioned cat through the pure
+          // resolveRoutingDecisions function (unifies the depth/dedup/pendingTail/streak/fairness guards
+          // that used to be inline here + duplicated in the relay path). Resolve+apply ONE cat at a time
+          // so each target's decision observes the prior targets' mutations (a2aCount++ and streak
+          // update) — matching the original sequential semantics. A single batch resolve would freeze
+          // every target's streak peek against the pre-loop streakPair: e.g. "@gemini @codex" with a hot
+          // opus<->codex streak would wrongly block @codex even though processing @gemini first resets
+          // the pair. The decision layer PEEKS streak read-only; this execution layer does the real
+          // updateStreakOnPush mutation + worklist.push + span + yield (砚砚 OQ3: side effects stay here).
+          // callerActivity is loop-invariant (same for every target this turn) → hoist once.
+          const hadSubstantiveToolCall = collectedToolNames.some((n) => isSubstantiveTool(n));
           for (const nextCat of a2aMentions) {
-            if (worklistEntry.a2aCount >= maxDepth) break;
-            // A2A cross-path dedup: skip if this cat is actively processing via callback (InvocationQueue)
-            if (hasQueuedOrActiveAgentForCat && hasQueuedOrActiveAgentForCat(threadId, nextCat)) {
-              log.info(
-                { threadId, catId: nextCat, fromCat: catId },
-                'A2A text-scan dedup: cat actively processing in InvocationQueue, skipping',
-              );
-              continue;
-            }
-            if (pendingTail.includes(nextCat)) {
-              // Keep original user-selected targets replying to user, not to another cat.
-              if (!pendingOriginalTargets.includes(nextCat)) {
-                worklistEntry.a2aFrom.set(nextCat, catId);
-                // F121: response-text path — set trigger message for auto-replyTo
-                if (storedMsgId) worklistEntry.a2aTriggerMessageId.set(nextCat, storedMsgId);
+            const [decision] = resolveRoutingDecisions(
+              { type: 'inline_mention', cats: [nextCat], content: storedContent, callerCatId: catId },
+              {
+                a2aCount: worklistEntry.a2aCount,
+                maxDepth,
+                aborted: Boolean(catSignal?.aborted),
+                queuedMessagesPending,
+                pendingTail,
+                pendingOriginalTargets,
+                hasActiveAgent: (c) => Boolean(hasQueuedOrActiveAgentForCat?.(threadId, c)),
+                peekStreak: (target) =>
+                  peekStreakOnPush(worklistEntry, catId, target, {
+                    hadSubstantiveToolCall,
+                    outputLength: storedContent.length,
+                  }),
+              },
+            );
+            if (!decision) continue; // pending original target → replies to user, no decision emitted
+            if (decision.action === 'skip') {
+              if (decision.reason === 'dedup_active') {
+                log.info(
+                  { threadId, catId: nextCat, fromCat: catId },
+                  'A2A text-scan dedup: cat actively processing in InvocationQueue, skipping',
+                );
               }
               continue;
             }
-            // F167 L1 + Phase D: ping-pong streak check (canonical enqueue point).
-            // callerActivity (substantive tool + output length) gates streak accumulation —
-            // real work / long discussion no longer trips the breaker falsely.
-            // streak=4+ (pure language inertia) → block enqueue + emit a2a_pingpong_terminated.
-            const hadSubstantiveToolCall = collectedToolNames.some((n) => isSubstantiveTool(n));
+            if (decision.action === 'mark_replyto') {
+              // pendingTail hit (non-original target): bind reply metadata, don't push again.
+              worklistEntry.a2aFrom.set(nextCat, catId);
+              // F121: response-text path — set trigger message for auto-replyTo
+              if (storedMsgId) worklistEntry.a2aTriggerMessageId.set(nextCat, storedMsgId);
+              continue;
+            }
+            // enqueue_worklist | block_pingpong both reached the streak gate in the legacy code, so the
+            // real (mutating) updateStreakOnPush must run exactly once here for either — peek above was
+            // read-only prediction; this is the canonical mutation point (parity guaranteed by c1.1).
+            // F167 L1 + Phase D: callerActivity gates streak accumulation; streak>=4 inertia → block.
             const streak = updateStreakOnPush(worklistEntry, catId, nextCat, {
               hadSubstantiveToolCall,
               outputLength: storedContent.length,
             });
-            if (streak.blockPingPong) {
+            if (decision.action === 'block_pingpong') {
               log.info(
                 { threadId, catId: nextCat, fromCat: catId, count: streak.count },
                 'F167 L1: A2A ping-pong terminated (streak >= 4)',
@@ -1506,6 +1849,7 @@ export async function* routeSerial(
               continue;
             }
 
+            // decision.action === 'enqueue_worklist'
             // F153: lazily create mention_dispatch span on first actual push
             if (!dispatchSpan) {
               const mentionerSpan = catInvocationSpans.get(index);
@@ -1518,6 +1862,8 @@ export async function* routeSerial(
                   },
                   parentCtx,
                 );
+                // F153 Phase I: counter for Step Summary aggregate; only AGENT_ID attribute (mentioner cat).
+                a2aDispatchCount.add(1, { [AGENT_ID]: catId as string });
               }
             }
 
@@ -1541,6 +1887,128 @@ export async function* routeSerial(
             } else {
               dispatchSpan.end();
             }
+          }
+        } else if (a2aMentions.length > 0 && queuedMessagesPending && deferA2AEnqueue && !catSignal?.aborted) {
+          // F216 c2: deferred enqueue via the unified resolveRoutingDecisions decision layer.
+          // Same guard chain as inline (depth/dedup/pendingTail/streak) but ctx.queuedMessagesPending=true
+          // makes the LAST gate return defer_queue instead of enqueue_worklist. Resolve+apply ONE cat at a
+          // time (NOT batch) so each target's decision observes prior targets' a2aCount++ and streak
+          // mutations — same per-target ordering fix as the inline path (砚砚 P1-2: a batch resolve would
+          // freeze every peekStreak against the pre-loop streakPair and mis-block later targets).
+          // F185 Phase B: deferred enqueue preserves A2A handoff behind non-agent entries.
+          const pendingTailDeferred = worklist.slice(index + 1);
+          const pendingOriginalTargetsDeferred = targetCats.slice(index + 1);
+          const hadSubstantiveToolCallDeferred = collectedToolNames.some((n) => isSubstantiveTool(n));
+          // F153 Phase I: lazy mention_dispatch span for deferred path. End span immediately because the
+          // child route runs through QueueProcessor in a separate loop; the captured trace context is
+          // propagated via entry.callerTraceContext so the dispatched route parents under this span.
+          let deferredDispatchCtx: CallerTraceContext | undefined;
+          for (const nextCat of a2aMentions) {
+            const [decision] = resolveRoutingDecisions(
+              { type: 'deferred', cats: [nextCat], content: storedContent, callerCatId: catId },
+              {
+                a2aCount: worklistEntry.a2aCount,
+                maxDepth,
+                aborted: Boolean(catSignal?.aborted),
+                queuedMessagesPending: true,
+                pendingTail: pendingTailDeferred,
+                pendingOriginalTargets: pendingOriginalTargetsDeferred,
+                hasActiveAgent: (c) => Boolean(hasQueuedOrActiveAgentForCat?.(threadId, c)),
+                peekStreak: (target) =>
+                  peekStreakOnPush(worklistEntry, catId, target, {
+                    hadSubstantiveToolCall: hadSubstantiveToolCallDeferred,
+                    outputLength: storedContent.length,
+                  }),
+              },
+            );
+            if (!decision) continue; // pending original target → replies to user, no decision
+            if (decision.action === 'skip') {
+              if (decision.reason === 'dedup_active') {
+                log.info(
+                  { threadId, catId: nextCat, fromCat: catId },
+                  'A2A text-scan dedup (deferred): cat actively processing, skipping',
+                );
+              }
+              continue;
+            }
+            if (decision.action === 'mark_replyto') {
+              // pendingTail hit (non-original target): rebind reply metadata, don't enqueue again.
+              worklistEntry.a2aFrom.set(nextCat, catId);
+              if (storedMsgId) worklistEntry.a2aTriggerMessageId.set(nextCat, storedMsgId);
+              continue;
+            }
+            // defer_queue | block_pingpong both passed the peek gate, so the real (mutating)
+            // updateStreakOnPush runs exactly once here for either (parity with inline c1.3 + c1.1).
+            const streakDeferred = updateStreakOnPush(worklistEntry, catId, nextCat, {
+              hadSubstantiveToolCall: hadSubstantiveToolCallDeferred,
+              outputLength: storedContent.length,
+            });
+            if (decision.action === 'block_pingpong') {
+              log.info(
+                { threadId, catId: nextCat, fromCat: catId, count: streakDeferred.count },
+                'F167 L1: A2A ping-pong terminated in deferred path (streak >= 4)',
+              );
+              yield {
+                type: 'system_info' as AgentMessageType,
+                catId,
+                content: JSON.stringify({
+                  type: 'a2a_pingpong_terminated',
+                  fromCatId: catId,
+                  targetCatId: nextCat,
+                  pairCount: streakDeferred.count,
+                }),
+                timestamp: Date.now(),
+              } as AgentMessage;
+              continue;
+            }
+            // decision.action === 'defer_queue'
+            // F153 Phase I: create dispatch span on first real enqueue and capture its trace
+            // context for cross-route causality.
+            if (!deferredDispatchCtx) {
+              const mentionerSpan = catInvocationSpans.get(index);
+              if (mentionerSpan) {
+                const parentCtx = trace.setSpan(context.active(), mentionerSpan);
+                const dSpan = routeSerialTracer.startSpan(
+                  'cat_cafe.mention_dispatch',
+                  {
+                    attributes: {
+                      [AGENT_ID]: catId as string,
+                      'dispatch.target_count': a2aMentions.length,
+                      'dispatch.source': 'text-scan-deferred',
+                    },
+                  },
+                  parentCtx,
+                );
+                a2aDispatchCount.add(1, { [AGENT_ID]: catId as string });
+                const sc = dSpan.spanContext();
+                dSpan.end();
+                deferredDispatchCtx = {
+                  traceId: sc.traceId,
+                  spanId: sc.spanId,
+                  traceFlags: sc.traceFlags,
+                };
+              }
+            }
+            deferA2AEnqueue({
+              threadId,
+              userId,
+              content: storedContent,
+              source: 'agent',
+              sourceCategory: 'a2a',
+              targetCats: [nextCat],
+              callerCatId: catId,
+              messageId: storedMsgId,
+              a2aTriggerMessageId: storedMsgId,
+              autoExecute: true,
+              priority: 'normal',
+              intent: 'execute',
+              ...(deferredDispatchCtx ? { callerTraceContext: deferredDispatchCtx } : {}),
+            });
+            worklistEntry.a2aCount++;
+            log.info(
+              { threadId, catId: nextCat, fromCat: catId },
+              'A2A text-scan deferred: enqueued behind non-agent entries (F185-B)',
+            );
           }
         }
 
@@ -1576,7 +2044,9 @@ export async function* routeSerial(
           yield {
             type: 'a2a_handoff' as AgentMessageType,
             catId,
-            content: `${catConfig?.displayName ?? catId} → ${nextConfig?.displayName ?? pendingCat}`,
+            content: formatA2AHandoffContent(catId, pendingCat, catConfig, nextConfig),
+            invocationId: ownInvocationId,
+            targetCatId: pendingCat,
             timestamp: Date.now(),
           } as AgentMessage;
         }
@@ -1639,8 +2109,15 @@ export async function* routeSerial(
               ...(collectedToolEvents.length > 0 ? { toolEvents: collectedToolEvents } : {}),
               extra: {
                 ...(noTextBlocks.length > 0 ? { rich: { v: 1 as const, blocks: noTextBlocks } } : {}),
+                // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId
+                // (= ownInvocationId, else parent fallback).
                 ...((options.parentInvocationId ?? ownInvocationId)
-                  ? { stream: { invocationId: (options.parentInvocationId ?? ownInvocationId) as string } }
+                  ? {
+                      stream: {
+                        invocationId: (options.parentInvocationId ?? ownInvocationId) as string,
+                        turnInvocationId: (ownInvocationId ?? options.parentInvocationId) as string,
+                      },
+                    }
                   : {}),
                 ...(doneMsg?.tracing ? { tracing: doneMsg.tracing } : {}),
               },
@@ -1718,8 +2195,15 @@ export async function* routeSerial(
             ...((options.parentInvocationId ?? ownInvocationId) || doneMsg?.tracing
               ? {
                   extra: {
+                    // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId
+                    // for error+toolEvents records too.
                     ...((options.parentInvocationId ?? ownInvocationId)
-                      ? { stream: { invocationId: (options.parentInvocationId ?? ownInvocationId) as string } }
+                      ? {
+                          stream: {
+                            invocationId: (options.parentInvocationId ?? ownInvocationId) as string,
+                            turnInvocationId: (ownInvocationId ?? options.parentInvocationId) as string,
+                          },
+                        }
                       : {}),
                     ...(doneMsg?.tracing ? { tracing: doneMsg.tracing } : {}),
                   },
@@ -1802,7 +2286,9 @@ export async function* routeSerial(
         yield {
           type: 'a2a_handoff' as AgentMessageType,
           catId,
-          content: `${catConfig?.displayName ?? catId} → ${nextConfig?.displayName ?? pendingCat}`,
+          content: formatA2AHandoffContent(catId, pendingCat, catConfig, nextConfig),
+          invocationId: ownInvocationId,
+          targetCatId: pendingCat,
           timestamp: Date.now(),
         } as AgentMessage;
       }
@@ -1821,9 +2307,98 @@ export async function* routeSerial(
             origin: 'stream',
             timestamp: Date.now(),
             threadId,
+            // F212 Phase B (云端 codex P2-8): carry cliDiagnostics through to persistence
+            // so cold hydration / F5 reload can re-render the folded panel.
+            ...(collectedCliDiagnostics
+              ? { metadata: { provider: '', model: '', cliDiagnostics: collectedCliDiagnostics } }
+              : {}),
           });
         } catch (err) {
           log.error({ catId: catId as string, err }, 'messageStore.append (error system msg) failed');
+        }
+      }
+
+      // F222: Frustration auto-issue — detect CLI error + cancel burst signals.
+      // Non-blocking: errors in frustration detection must not interrupt the route pipeline.
+      // F222 P1: Skip for A2A/connector origins — only detect frustration on user-driven routes.
+      if (deps.frustrationIssueStore && options.frustrationAutoIssueEligible !== false) {
+        const frustrationDeps = {
+          frustrationIssueStore: deps.frustrationIssueStore,
+          messageStore: deps.messageStore,
+          socketManager: deps.socketManager as
+            | import('../../../../../infrastructure/websocket/index.js').SocketManager
+            | undefined,
+        };
+        try {
+          const { evaluate } = await import('../../frustration/FrustrationDetector.js');
+
+          // Signal 1: CLI error (P1-1 original implementation)
+          if (collectedCliDiagnostics?.reasonCode) {
+            await evaluate(
+              {
+                signal: { type: 'cli_error', diagnostics: collectedCliDiagnostics },
+                threadId,
+                userId,
+                catId: catId as string,
+                invocationId: ownInvocationId,
+              },
+              frustrationDeps,
+            );
+          }
+
+          // Signal 2: Cancel burst — query PendingRequestStore for recent denied
+          // permission requests. This is the precise "user actively cancelled" signal,
+          // distinct from generic tool execution errors. (R2 P1 fix: tool_result.status
+          // === 'error' was too broad — included MCP failures, stream interrupts, etc.)
+          if (deps.pendingRequestStore) {
+            const { CANCEL_WINDOW_MS } = await import('../../frustration/FrustrationDetector.js');
+            const recentDenied = await deps.pendingRequestStore.listRecentDenied(
+              threadId,
+              Date.now() - CANCEL_WINDOW_MS,
+            );
+            if (recentDenied.length >= 3) {
+              await evaluate(
+                {
+                  signal: {
+                    type: 'cancel_burst',
+                    recentDenials: recentDenied.map((r) => ({
+                      action: r.action,
+                      timestamp: r.respondedAt ?? r.createdAt,
+                    })),
+                  },
+                  threadId,
+                  userId,
+                  catId: catId as string,
+                  invocationId: ownInvocationId,
+                },
+                frustrationDeps,
+              );
+            }
+          }
+
+          // Signal 3: A2A timeout — cat invoked but produced no visible output AND
+          // elapsed > threshold. Spec AC-C1: "超过阈值（如 60s）未响应".
+          // P1 fix: exclude instant crashes/parse errors — only genuine timeouts.
+          const A2A_TIMEOUT_THRESHOLD_MS = 60_000;
+          const elapsedMs = Date.now() - invocationStartedAt;
+          if (!catProducedOutput && hadProviderError && elapsedMs >= A2A_TIMEOUT_THRESHOLD_MS) {
+            await evaluate(
+              {
+                signal: {
+                  type: 'a2a_timeout',
+                  targetCatId: catId as string,
+                  elapsedMs,
+                },
+                threadId,
+                userId,
+                catId: catId as string,
+                invocationId: ownInvocationId,
+              },
+              frustrationDeps,
+            );
+          }
+        } catch {
+          // Non-blocking: frustration detection failure must not break routing
         }
       }
 
@@ -1882,11 +2457,15 @@ export async function* routeSerial(
 
       // Yield buffered done with correct isFinal (evaluated AFTER worklist may have grown)
       // MUST always reach here regardless of append success (缅因猫 review P1-2)
+      // F194 Phase Z9 砚砚 R1 P1-1: stamp ownInvocationId on done if not already set.
       if (doneMsg) {
         const isFinal = index === worklist.length - 1;
-        yield { ...doneMsg, ...(mentionsUser ? { mentionsUser } : {}), isFinal };
+        const ownStampedDone =
+          ownInvocationId && !doneMsg.invocationId ? { ...doneMsg, invocationId: ownInvocationId } : doneMsg;
+        yield { ...ownStampedDone, ...(mentionsUser ? { mentionsUser } : {}), isFinal };
         activeTrackedA2ASlots.delete(catId);
         if (isFinal) yieldedFinalDone = true;
+        if (ownInvocationId) completedCatInvocationIds.push([catId, ownInvocationId]);
       }
 
       // F27: Advance executedIndex so pushToWorklist knows which cats are done
@@ -1907,6 +2486,22 @@ export async function* routeSerial(
 
     if (options.invocationController && options.completeA2ASlots && activeTrackedA2ASlots.size > 0) {
       options.completeA2ASlots(threadId, [...activeTrackedA2ASlots], options.invocationController);
+    }
+
+    // F200 AC-A1: fire-and-forget recall correlation after all cats complete
+    if (deps.toolEventLog && deps.evidenceStore && completedCatInvocationIds.length > 0) {
+      const evidenceDb = (deps.evidenceStore as { getDb?: () => import('better-sqlite3').Database }).getDb?.();
+      if (evidenceDb) {
+        deps.toolEventLog
+          .readByThread(threadId)
+          .then((events) => {
+            const raw = events as unknown as Parameters<typeof triggerRecallCorrelation>[1];
+            for (const [catId, invId] of completedCatInvocationIds) {
+              triggerRecallCorrelation(evidenceDb, raw, invId, catId).catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     // F27: Always unregister worklist, even on error/abort.

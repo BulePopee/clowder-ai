@@ -67,8 +67,8 @@ export function TemplateStep({ onSelect }: TemplateStepProps) {
             }}
             className={`flex items-start gap-3 rounded-xl border p-3 text-left transition ${
               selected === t.id
-                ? 'border-conn-amber-ring bg-conn-amber-bg shadow-sm'
-                : 'border-[var(--console-border-soft)] bg-cafe-surface hover:border-conn-amber-ring hover:bg-conn-amber-bg/30'
+                ? 'border-[var(--semantic-warning)] bg-conn-amber-bg shadow-sm'
+                : 'border-[var(--console-border-soft)] bg-cafe-surface-canvas hover:border-conn-amber-ring hover:bg-conn-amber-bg/30'
             }`}
           >
             <div

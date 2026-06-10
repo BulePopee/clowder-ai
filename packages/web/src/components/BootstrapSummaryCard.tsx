@@ -11,9 +11,9 @@ const TIER_LABELS: Record<string, string> = {
 };
 
 const TIER_COLORS: Record<string, string> = {
-  authoritative: 'bg-[var(--console-active-bg)] text-cafe-accent',
-  derived: 'bg-[var(--color-cafe-accent)]/10 text-[var(--color-cafe-accent)]',
-  soft_clue: 'bg-conn-emerald-bg text-conn-emerald-text',
+  authoritative: 'bg-cafe-accent/10 text-cafe-interactive',
+  derived: 'bg-[var(--semantic-info-surface)] text-[var(--semantic-info)]',
+  soft_clue: 'bg-conn-green-bg text-conn-green-text',
 };
 
 interface BootstrapSummaryCardProps {
@@ -88,14 +88,14 @@ export function BootstrapSummaryCard({
 
   return (
     <div data-testid="bootstrap-summary-card" className="flex justify-center mb-3">
-      <div className="max-w-[85%] w-full rounded-lg border border-conn-emerald-ring bg-conn-emerald-bg/50 p-5">
+      <div className="max-w-[85%] w-full rounded-lg border border-conn-green-ring bg-conn-green-bg/50 p-5">
         <div className="flex items-center gap-4 mb-3">
-          <div className="w-12 h-12 rounded-full bg-conn-emerald-bg flex items-center justify-center flex-shrink-0">
-            <CheckCircleIcon className="w-6 h-6 text-conn-emerald-text" />
+          <div className="w-12 h-12 rounded-full bg-conn-green-bg flex items-center justify-center flex-shrink-0">
+            <CheckCircleIcon className="w-6 h-6 text-conn-green-text" />
           </div>
           <div>
             <p className="text-sm font-medium text-conn-emerald-text">记忆索引构建完成</p>
-            <p className="text-xs text-conn-emerald-text mt-0.5">猫猫现在可以搜索这个项目的历史知识了</p>
+            <p className="text-xs text-conn-green-text mt-0.5">猫猫现在可以搜索这个项目的历史知识了</p>
           </div>
         </div>
 
@@ -118,12 +118,12 @@ export function BootstrapSummaryCard({
 
         {summary.kindCoverage && Object.keys(summary.kindCoverage).length > 0 ? (
           <div className="ml-16 mt-3">
-            <p className="text-[10px] text-cafe-muted mb-1.5">知识覆盖</p>
+            <p className="text-micro text-cafe-muted mb-1.5">知识覆盖</p>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(summary.kindCoverage).map(([kind, count]) => (
                 <span
                   key={kind}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${SOURCE_TYPE_COLORS[kind] ?? 'bg-[var(--console-card-soft-bg)] text-cafe-secondary'}`}
+                  className={`px-2 py-0.5 rounded-full text-micro font-medium ${SOURCE_TYPE_COLORS[kind] ?? 'bg-cafe-surface-elevated text-cafe-secondary'}`}
                 >
                   {SOURCE_TYPE_LABELS[kind] ?? kind} · {count}
                 </span>
@@ -132,12 +132,12 @@ export function BootstrapSummaryCard({
           </div>
         ) : Object.keys(summary.tierCoverage).length > 0 ? (
           <div className="ml-16 mt-3">
-            <p className="text-[10px] text-cafe-muted mb-1.5">覆盖分层</p>
+            <p className="text-micro text-cafe-muted mb-1.5">覆盖分层</p>
             <div className="flex flex-wrap gap-1.5">
               {Object.entries(summary.tierCoverage).map(([tier, count]) => (
                 <span
                   key={tier}
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${TIER_COLORS[tier] ?? 'bg-[var(--console-card-soft-bg)] text-cafe-secondary'}`}
+                  className={`px-2 py-0.5 rounded-full text-micro font-medium ${TIER_COLORS[tier] ?? 'bg-cafe-surface-elevated text-cafe-secondary'}`}
                 >
                   {TIER_LABELS[tier] ?? tier} · {count}
                 </span>
@@ -151,7 +151,7 @@ export function BootstrapSummaryCard({
             <button
               type="button"
               onClick={onDismiss}
-              className="px-3 py-1.5 rounded-lg text-xs text-cafe-secondary hover:text-cafe hover:bg-[var(--console-card-soft-bg)] transition-colors"
+              className="px-3 py-1.5 rounded-lg text-xs text-cafe-muted hover:text-cafe-secondary hover:bg-[var(--console-hover-bg)] transition-colors"
             >
               关闭
             </button>
@@ -162,7 +162,7 @@ export function BootstrapSummaryCard({
             onClick={onSearchKnowledge}
             className={
               onSearchKnowledge
-                ? 'px-3 py-1.5 rounded-lg text-xs text-cafe-secondary hover:text-cafe hover:bg-[var(--console-card-soft-bg)] transition-colors inline-flex items-center gap-1'
+                ? 'px-3 py-1.5 rounded-lg text-xs text-cafe-secondary hover:text-cafe hover:bg-[var(--console-hover-bg)] transition-colors inline-flex items-center gap-1'
                 : 'px-3 py-1.5 rounded-lg text-xs text-cafe-muted cursor-not-allowed inline-flex items-center gap-1'
             }
           >
@@ -175,8 +175,8 @@ export function BootstrapSummaryCard({
             onClick={onGoToMemoryHub}
             className={
               onGoToMemoryHub
-                ? 'px-3 py-1.5 rounded-lg bg-[var(--color-conn-emerald-text)] hover:opacity-90 text-[var(--cafe-surface)] text-xs font-medium transition-colors inline-flex items-center gap-1'
-                : 'px-3 py-1.5 rounded-lg bg-[var(--color-conn-emerald-text)]/50 text-[var(--cafe-surface)]/70 text-xs font-medium cursor-not-allowed inline-flex items-center gap-1'
+                ? 'px-3 py-1.5 rounded-lg bg-[var(--semantic-success)] hover:opacity-90 text-[var(--cafe-surface)] text-xs font-medium transition-colors inline-flex items-center gap-1'
+                : 'px-3 py-1.5 rounded-lg bg-[var(--semantic-success)] text-[var(--cafe-surface)] text-xs font-medium cursor-not-allowed opacity-50 inline-flex items-center gap-1'
             }
           >
             <MemoryIcon className="w-3.5 h-3.5" />

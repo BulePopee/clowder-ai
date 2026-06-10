@@ -5,8 +5,8 @@ import { useCallback, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
 
 const STATUS_STYLES: Record<string, { bg: string; text: string }> = {
-  open: { bg: 'bg-conn-amber-bg', text: 'text-conn-amber-text' },
-  answered: { bg: 'bg-conn-emerald-bg', text: 'text-conn-emerald-text' },
+  open: { bg: 'bg-[var(--semantic-warning-surface)]', text: 'text-conn-amber-text' },
+  answered: { bg: 'bg-conn-green-bg', text: 'text-conn-emerald-text' },
   escalated: { bg: 'bg-conn-red-bg', text: 'text-conn-red-text' },
 };
 
@@ -84,7 +84,7 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
         <button
           type="button"
           onClick={() => setShowForm(!showForm)}
-          className="rounded-lg bg-[var(--cafe-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)]"
+          className="rounded-lg bg-[var(--mc-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)]"
         >
           {showForm ? '取消' : 'Add Question'}
         </button>
@@ -92,8 +92,12 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
 
       {/* Add Question form */}
       {showForm && (
-        <div className="space-y-2 rounded-lg bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] p-4">
-          <select value={cardId} onChange={(e) => setCardId(e.target.value)} className="console-form-input">
+        <div className="space-y-2 rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
+          <select
+            value={cardId}
+            onChange={(e) => setCardId(e.target.value)}
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
+          >
             <option value="">选择 Card...</option>
             {cards.map((c) => (
               <option key={c.id} value={c.id}>
@@ -101,7 +105,11 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
               </option>
             ))}
           </select>
-          <select value={path} onChange={(e) => setPath(e.target.value as NonNullPath)} className="console-form-input">
+          <select
+            value={path}
+            onChange={(e) => setPath(e.target.value as NonNullPath)}
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
+          >
             {PATH_OPTIONS.map((p) => (
               <option key={p} value={p}>
                 {p}
@@ -113,20 +121,20 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
             onChange={(e) => setQuestion(e.target.value)}
             placeholder="问题..."
             rows={2}
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           />
           <textarea
             value={recommendation}
             onChange={(e) => setRecommendation(e.target.value)}
             placeholder="建议..."
             rows={2}
-            className="console-form-input"
+            className="w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe"
           />
           <button
             type="button"
             onClick={() => void handleCreate()}
             disabled={submitting || !cardId || !question.trim()}
-            className="w-full rounded-lg bg-[var(--cafe-accent)] py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)] disabled:opacity-40"
+            className="w-full rounded-lg bg-[var(--mc-accent)] py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)] disabled:opacity-40"
           >
             {submitting ? '提交中...' : '提交'}
           </button>
@@ -135,7 +143,7 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
 
       {/* Resolution list */}
       {resolutions.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[var(--console-border-soft)] bg-[var(--console-card-bg)] p-6 text-center text-xs text-cafe-muted">
+        <div className="rounded-lg bg-[var(--console-shell-bg)] p-6 text-center text-xs text-cafe-secondary">
           暂无澄清问题
         </div>
       ) : (
@@ -143,40 +151,43 @@ export function ResolutionQueue({ projectId, resolutions, cards, onUpdate }: Res
           {resolutions.map((item) => {
             const style = STATUS_STYLES[item.status] ?? STATUS_STYLES.open;
             return (
-              <div key={item.id} className="rounded-lg bg-[var(--console-field-bg)] p-3 text-xs">
+              <div
+                key={item.id}
+                className="rounded-xl bg-[var(--console-card-bg)] p-3 text-xs shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+              >
                 <div className="mb-1 flex items-center gap-2">
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${style.bg} ${style.text}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-micro font-medium ${style.bg} ${style.text}`}>
                     {item.status}
                   </span>
-                  <span className="rounded bg-[var(--console-pill-bg)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--cafe-accent)]">
+                  <span className="rounded bg-[var(--console-hover-bg)] px-1.5 py-0.5 text-micro font-medium text-cafe-secondary">
                     {item.path}
                   </span>
-                  <span className="text-[10px] text-cafe-muted">{item.cardId.slice(0, 8)}</span>
+                  <span className="text-micro text-cafe-muted">{item.cardId.slice(0, 8)}</span>
                 </div>
                 <div className="mb-1 font-medium text-cafe">{item.question}</div>
                 {item.recommendation && (
-                  <div className="mb-1 text-[10px] text-cafe-muted">建议: {item.recommendation}</div>
+                  <div className="mb-1 text-micro text-cafe-secondary">建议: {item.recommendation}</div>
                 )}
-                {item.answer && <div className="rounded bg-conn-emerald-bg px-2 py-1 text-cafe">{item.answer}</div>}
+                {item.answer && <div className="rounded bg-conn-green-bg px-2 py-1 text-cafe">{item.answer}</div>}
                 {item.status === 'open' && (
                   <div className="mt-2 flex gap-2">
                     <input
                       value={answerText[item.id] ?? ''}
                       onChange={(e) => setAnswerText((prev) => ({ ...prev, [item.id]: e.target.value }))}
                       placeholder="回答..."
-                      className="console-form-input flex-1"
+                      className="flex-1 rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs"
                     />
                     <button
                       type="button"
                       onClick={() => void handleAnswer(item.id)}
-                      className="rounded bg-[var(--color-conn-emerald-text)] px-2 py-1 text-[10px] font-medium text-[var(--cafe-surface)] hover:opacity-90"
+                      className="rounded bg-[var(--semantic-success)] px-2 py-1 text-micro font-medium text-[var(--cafe-surface)] hover:opacity-90"
                     >
                       Answer
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleEscalate(item.id)}
-                      className="rounded bg-[var(--color-conn-red-text)] px-2 py-1 text-[10px] font-medium text-[var(--cafe-surface)] hover:opacity-90"
+                      className="rounded bg-[var(--semantic-critical)] px-2 py-1 text-micro font-medium text-[var(--cafe-surface)] hover:opacity-90"
                     >
                       Escalate
                     </button>

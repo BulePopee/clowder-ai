@@ -24,6 +24,14 @@ vi.mock('@/components/icons/AttachIcon', () => ({
   AttachIcon: () => React.createElement('span', null, 'attach'),
 }));
 vi.mock('@/utils/compressImage', () => ({ compressImage: (f: File) => Promise.resolve(f) }));
+vi.mock('@/hooks/useCoCreatorConfig', () => ({
+  useCoCreatorConfig: () => ({
+    name: 'ME',
+    aliases: [],
+    mentionPatterns: ['@co-creator'],
+    color: { primary: '#D4A76A', secondary: '#FFF8F0' },
+  }),
+}));
 vi.mock('@/hooks/useCatData', () => ({
   useCatData: () => ({
     cats: [
@@ -186,7 +194,7 @@ describe('ChatInput draft persistence', () => {
     act(() => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
-    expect(onSend).toHaveBeenCalledWith('will be sent', undefined, undefined, undefined);
+    expect(onSend).toHaveBeenCalledWith('will be sent', undefined, undefined, undefined, undefined);
 
     // Unmount and remount — draft should be gone
     act(() => root.unmount());
@@ -195,6 +203,28 @@ describe('ChatInput draft persistence', () => {
       root.render(React.createElement(ChatInput, { threadId: 'thread-C', onSend }));
     });
     expect(getTextarea().value).toBe('');
+  });
+
+  it('consumes pending chat insert into the matching thread composer', async () => {
+    const onSend = vi.fn();
+
+    act(() => {
+      root.render(React.createElement(ChatInput, { threadId: 'thread-RECALL', onSend }));
+    });
+    act(() => {
+      typeInto(getTextarea(), 'current draft');
+    });
+
+    await act(async () => {
+      useChatStore.getState().setPendingChatInsert({
+        threadId: 'thread-RECALL',
+        text: 'recalled queued message',
+      });
+      await Promise.resolve();
+    });
+
+    expect(getTextarea().value).toBe('current draft\nrecalled queued message');
+    expect(useChatStore.getState().pendingChatInsert).toBeNull();
   });
 
   it('restores image preview when remounting with same threadId', async () => {
@@ -263,7 +293,7 @@ describe('ChatInput draft persistence', () => {
     act(() => {
       getTextarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
-    expect(onSend).toHaveBeenCalledWith('msg with image', [fakeImage], undefined, undefined);
+    expect(onSend).toHaveBeenCalledWith('msg with image', [fakeImage], undefined, undefined, undefined);
     expect(getPreviewImage('pic.png')).toBeNull();
 
     act(() => root.unmount());
@@ -317,5 +347,48 @@ describe('ChatInput draft persistence', () => {
 
     // Map should remain empty — no threadId means no persistence
     expect(threadDrafts.size).toBe(0);
+  });
+
+  it('syncs text drafts to sessionStorage for cross-navigation survival', () => {
+    const onSend = vi.fn();
+    const STORAGE_KEY = 'cat-cafe:thread-drafts';
+
+    // Mount and type — draft should be written to sessionStorage
+    act(() => {
+      root.render(React.createElement(ChatInput, { threadId: 'thread-SS', onSend }));
+    });
+    act(() => {
+      typeInto(getTextarea(), 'persisted draft');
+    });
+
+    const stored = window.sessionStorage.getItem(STORAGE_KEY);
+    expect(stored).not.toBeNull();
+    const entries: [string, string][] = JSON.parse(stored!);
+    expect(entries).toContainEqual(['thread-SS', 'persisted draft']);
+  });
+
+  it('clears sessionStorage entry when draft is emptied', () => {
+    const onSend = vi.fn();
+    const STORAGE_KEY = 'cat-cafe:thread-drafts';
+
+    act(() => {
+      root.render(React.createElement(ChatInput, { threadId: 'thread-CL', onSend }));
+    });
+    act(() => {
+      typeInto(getTextarea(), 'temp');
+    });
+    expect(window.sessionStorage.getItem(STORAGE_KEY)).not.toBeNull();
+
+    // Clear the input
+    act(() => {
+      typeInto(getTextarea(), '');
+    });
+
+    // sessionStorage should have no entry for this thread
+    const stored = window.sessionStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const entries: [string, string][] = JSON.parse(stored);
+      expect(entries.find(([k]) => k === 'thread-CL')).toBeUndefined();
+    }
   });
 });

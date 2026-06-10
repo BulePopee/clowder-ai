@@ -58,11 +58,22 @@ export const FIGHTER_NAMES: Record<FighterId, string> = {
 export const PALETTE = {
   ink: '#111318',
   slate: '#1E2430',
-  steel: 'var(--cafe-text-secondary)',
-  bone: 'var(--console-border-soft)',
+  steel: '#3A4658',
+  bone: '#E8DFC7',
   danger: '#D84E3B',
   flash: '#F1E28A',
   dj: '#8D6BFF',
+} as const;
+
+export const PIXEL_FONT_SIZES = {
+  fighterLabel: '6px',
+  fighterName: '7px',
+  subtitle: '8px',
+  micro: '10px',
+  timer: '12px',
+  button: '14px',
+  center: '20px',
+  title: '24px',
 } as const;
 
 export const GROUND_Y = 300;

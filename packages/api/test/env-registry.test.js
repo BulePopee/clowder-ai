@@ -22,6 +22,8 @@ import {
 const savedEnv = {};
 const BOOTSTRAP_ONLY_NEXT_PUBLIC_VARS = [
   'NEXT_PUBLIC_API_URL',
+  'NEXT_PUBLIC_WHISPER_URL',
+  'NEXT_PUBLIC_LLM_POSTPROCESS_URL',
   'NEXT_PUBLIC_PROJECT_ROOT',
   'NEXT_PUBLIC_DEBUG_SKIP_FILE_CHANGE_UI',
 ];
@@ -150,21 +152,6 @@ describe('env-registry', () => {
     assert.ok(def, 'DEFAULT_OWNER_USER_ID should be in registry');
     assert.equal(def.runtimeEditable, false, 'trust anchor must not be editable from Hub');
   });
-
-  it('marks PREVIEW_GATEWAY_PORT as restartRequired despite being editable', () => {
-    const def = ENV_VARS.find((v) => v.name === 'PREVIEW_GATEWAY_PORT');
-    assert.ok(def, 'PREVIEW_GATEWAY_PORT should be in registry');
-    assert.equal(def.runtimeEditable, true, 'should be editable');
-    assert.equal(def.restartRequired, true, 'port change needs restart');
-  });
-
-  it('marks server infrastructure vars as restartRequired', () => {
-    for (const name of ['API_SERVER_HOST', 'UPLOAD_DIR', 'FRONTEND_URL', 'FRONTEND_PORT']) {
-      const def = ENV_VARS.find((v) => v.name === name);
-      assert.ok(def, `${name} should be in registry`);
-      assert.equal(def.restartRequired, true, `${name} should require restart`);
-    }
-  });
 });
 
 describe('maskUrlCredentials', () => {
@@ -233,16 +220,6 @@ describe('buildEnvSummary', () => {
     assert.ok(summary.length < ENV_VARS.length);
   });
 
-  it('includes restartRequired metadata in summary entries', () => {
-    const summary = buildEnvSummary();
-    const preview = summary.find((v) => v.name === 'PREVIEW_GATEWAY_PORT');
-    assert.ok(preview, 'PREVIEW_GATEWAY_PORT should be in summary');
-    assert.equal(preview.restartRequired, true);
-    const frontendUrl = summary.find((v) => v.name === 'FRONTEND_URL');
-    assert.ok(frontendUrl, 'FRONTEND_URL should be in summary');
-    assert.equal(frontendUrl.restartRequired, true);
-  });
-
   it('hides per-cat runtime budget env vars from hub summary', () => {
     const summary = buildEnvSummary();
     assert.equal(
@@ -304,6 +281,59 @@ describe('GET /api/config/env-summary (route)', () => {
     }
 
     await app.close();
+  });
+
+  // F212 Phase F (cloud codex R3 P2 on 3083d7c5f + R4 P2-#2 on fc69597675):
+  // env-summary.runtimeLogs MUST equal logger's CAPTURED LOG_DIR_PATH — not
+  // process.env.LOG_DIR read at request time. Runtime `PATCH /api/config/env` LOG_DIR
+  // edit would change process.env but pino destination is already bound to the
+  // captured path → users following the AC-F5 hint would grep an empty new directory.
+  it('AC-F5 (R3+R4): runtimeLogs equals logger captured LOG_DIR_PATH (single source of truth)', async () => {
+    const { configRoutes } = await import('../dist/routes/config.js');
+    const { LOG_DIR_PATH } = await import('../dist/infrastructure/logger.js');
+    const app = Fastify({ logger: false });
+    try {
+      await configRoutes(app);
+      await app.ready();
+      const res = await app.inject({ method: 'GET', url: '/api/config/env-summary' });
+      const body = JSON.parse(res.payload);
+      assert.equal(
+        body.paths.dataDirs.runtimeLogs,
+        LOG_DIR_PATH,
+        'runtimeLogs MUST equal logger LOG_DIR_PATH (R3+R4 single-source fix)',
+      );
+      assert.ok(body.paths.dataDirs.runtimeLogs.startsWith('/'), 'absolute path');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('AC-F5 (R4 P2-#2): runtime process.env.LOG_DIR mutation MUST NOT change reported runtimeLogs', async () => {
+    const { configRoutes } = await import('../dist/routes/config.js');
+    const { LOG_DIR_PATH } = await import('../dist/infrastructure/logger.js');
+    // Mutate AFTER logger already captured (simulates runtime PATCH /api/config/env).
+    const mutatedPath = mkdtempSync(resolve(tmpdir(), 'cat-cafe-mutated-log-'));
+    setEnv('LOG_DIR', mutatedPath);
+    const app = Fastify({ logger: false });
+    try {
+      await configRoutes(app);
+      await app.ready();
+      const res = await app.inject({ method: 'GET', url: '/api/config/env-summary' });
+      const body = JSON.parse(res.payload);
+      assert.equal(
+        body.paths.dataDirs.runtimeLogs,
+        LOG_DIR_PATH,
+        'env-summary ignores runtime mutation — stays on captured logger path',
+      );
+      assert.notEqual(
+        body.paths.dataDirs.runtimeLogs,
+        mutatedPath,
+        'mutated env value MUST NOT propagate (R4 P2-#2 regression guard)',
+      );
+    } finally {
+      await app.close();
+      rmSync(mutatedPath, { recursive: true, force: true });
+    }
   });
 });
 

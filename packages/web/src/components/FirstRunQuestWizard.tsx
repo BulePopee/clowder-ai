@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useCatData } from '@/hooks/useCatData';
 import { apiFetch } from '@/utils/api-client';
 import { ClientStep, type DetectedClient } from './first-run-quest/ClientStep';
@@ -160,17 +161,17 @@ export function FirstRunQuestWizard({ open, onClose, onCreated }: FirstRunQuestW
     else if (step === 'client') setStep('template');
   };
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--console-overlay-medium)] px-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[var(--console-overlay-medium)] px-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-2xl border border-conn-amber-ring bg-cafe-surface shadow-2xl"
+        className="flex max-h-[88vh] w-full max-w-lg flex-col rounded-2xl border border-conn-amber-ring bg-[var(--console-card-bg)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-conn-amber-ring px-6 py-4">
+        <div className="flex items-center justify-between border-b border-[var(--semantic-warning-surface)] px-6 py-4">
           <div className="flex items-center gap-3">
             {canGoBack && (
               <button type="button" onClick={handleBack} className="text-sm text-cafe-muted hover:text-cafe-secondary">
@@ -221,6 +222,7 @@ export function FirstRunQuestWizard({ open, onClose, onCreated }: FirstRunQuestW
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

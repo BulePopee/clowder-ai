@@ -60,6 +60,37 @@ describe('consumeBackgroundSystemInfo web_search', () => {
     expect(result.consumed).toBe(true);
   });
 
+  // F210 H3: background path agy_trajectory_progress → 累积到 thread 级 catStatusDetails（折叠单行），
+  // 不渲染 raw JSON system bubble（承接 H1-hotfix）。砚砚 scope：active+background 都覆盖。
+  it('consumes agy_trajectory_progress → updateThreadCatStatus detail, no raw bubble (H3 background)', () => {
+    const options = createMockOptions();
+    const msg = {
+      type: 'system_info',
+      catId: 'gemini',
+      threadId: 'thread-1',
+      content: JSON.stringify({
+        type: 'agy_trajectory_progress',
+        idx: 4,
+        stepType: 15,
+        status: 1,
+        label: 'AGY trajectory step #4 (assistant activity) running',
+      }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(msg, undefined, options);
+
+    expect(result.consumed).toBe(true);
+    expect(options.store.updateThreadCatStatus).toHaveBeenCalledWith(
+      'thread-1',
+      'gemini',
+      'streaming',
+      expect.stringContaining('AGY working · 5 steps · assistant activity'),
+    );
+    // 不刷 system bubble（per-step）
+    expect(options.store.addMessageToThread).not.toHaveBeenCalled();
+  });
+
   it('consumes invocation_created and resets stale taskProgress for that cat', () => {
     const options = createMockOptions({
       getThreadState: vi.fn(() => ({
@@ -131,7 +162,117 @@ describe('consumeBackgroundSystemInfo web_search', () => {
     const result = consumeBackgroundSystemInfo(msg, undefined, options);
 
     expect(result.consumed).toBe(true);
-    expect(options.store.setThreadMessageStreamInvocation).toHaveBeenCalledWith('thread-1', 'bg-msg-1', 'inv-new-3');
+    expect(options.store.setThreadMessageStreamInvocation).toHaveBeenCalledWith(
+      'thread-1',
+      'bg-msg-1',
+      'inv-new-3',
+      undefined,
+    );
+  });
+
+  it('finalizes stale same-cat background stream before binding a new invocation', () => {
+    const options = createMockOptions({
+      getThreadState: vi.fn(() => ({
+        messages: [
+          {
+            id: 'bg-old-bound',
+            type: 'assistant',
+            catId: 'codex',
+            content: 'previous invocation finished in backend',
+            isStreaming: true,
+            origin: 'stream',
+            extra: {
+              stream: {
+                invocationId: 'parent-old',
+                turnInvocationId: 'turn-old',
+              },
+            },
+            timestamp: Date.now() - 1_000,
+          },
+          {
+            id: 'bg-new-placeholder',
+            type: 'assistant',
+            catId: 'codex',
+            content: '',
+            isStreaming: true,
+            origin: 'stream',
+            timestamp: Date.now(),
+          },
+        ],
+        catStatuses: {},
+        catInvocations: {},
+      })),
+    });
+
+    const msg = {
+      type: 'system_info',
+      catId: 'codex',
+      threadId: 'thread-1',
+      invocationId: 'parent-new',
+      turnInvocationId: 'turn-new',
+      content: JSON.stringify({ type: 'invocation_created', invocationId: 'turn-new' }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(
+      msg,
+      { id: 'bg-old-bound', threadId: 'thread-1', catId: 'codex' },
+      options,
+    );
+
+    expect(result.consumed).toBe(true);
+    expect(options.store.setThreadMessageStreaming).toHaveBeenCalledWith('thread-1', 'bg-old-bound', false);
+    expect(options.store.setThreadMessageStreamInvocation).toHaveBeenCalledWith(
+      'thread-1',
+      'bg-new-placeholder',
+      'parent-new',
+      'turn-new',
+    );
+  });
+
+  // F194 Phase Z3 R12 (砚砚 R13 RED requirement): background invocation_created with dual id
+  // (msg.invocationId=parent + msg.turnInvocationId=child) must call setThreadMessageStreamInvocation
+  // with parent + turnInvocationId, so existing stream bubble preserves dual id contract.
+  it('Z3 R12: background invocation_created with dual id rebinds existing stream bubble with turnInvocationId', () => {
+    const options = createMockOptions({
+      getThreadState: vi.fn(() => ({
+        messages: [
+          {
+            id: 'bg-msg-z3',
+            type: 'assistant',
+            catId: 'codex',
+            content: 'partial chunk',
+            isStreaming: true,
+            timestamp: Date.now(),
+          },
+        ],
+        catStatuses: {},
+        catInvocations: {},
+      })),
+    });
+
+    const msg = {
+      type: 'system_info',
+      catId: 'codex',
+      threadId: 'thread-1',
+      invocationId: 'parent-chain-z3',
+      turnInvocationId: 'turn-codex-z3',
+      content: JSON.stringify({ type: 'invocation_created', invocationId: 'turn-codex-z3' }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(msg, undefined, options);
+
+    expect(result.consumed).toBe(true);
+    // Critical: setThreadMessageStreamInvocation must be called with FOUR args (parent + turnInvocationId)
+    // so dual id contract (AC-Z8/Z9) survives background bind. Without this, bubble stays parent-only
+    // → same parent multi-turn merges in background path.
+    expect(options.store.setThreadMessageStreamInvocation).toHaveBeenCalledWith(
+      'thread-1',
+      'bg-msg-z3',
+      'parent-chain-z3',
+      'turn-codex-z3',
+    );
   });
 
   it('formats a2a_pingpong_terminated as readable system notice text', () => {
@@ -242,6 +383,95 @@ describe('consumeBackgroundSystemInfo rich_block placeholder', () => {
 
     expect(result.consumed).toBe(true);
     expect(options.store.appendRichBlockToThread).toHaveBeenCalledWith('thread-1', 'target-msg', block);
+  });
+
+  it('AC-Z17: reuses finalized background stream bubble for late rich_block instead of creating bg-rich placeholder', () => {
+    const options = createMockOptions({
+      getThreadState: vi.fn(() => ({
+        messages: [
+          {
+            id: 'bg-finalized-msg',
+            type: 'assistant',
+            catId: 'opus',
+            origin: 'stream',
+            isStreaming: false,
+            content: '🎵 已发！',
+            timestamp: Date.now() - 1000,
+          },
+        ],
+        catStatuses: {},
+        catInvocations: {},
+      })),
+    });
+    options.finalizedBgRefs.set('thread-1::opus', 'bg-finalized-msg');
+    const block = { id: 'rb-z17-bg', kind: 'audio', v: 1, url: '/api/tts/audio/late.wav', mimeType: 'audio/wav' };
+    const msg = {
+      type: 'system_info',
+      catId: 'opus',
+      threadId: 'thread-1',
+      content: JSON.stringify({ type: 'rich_block', block }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(msg, undefined, options);
+
+    expect(result.consumed).toBe(true);
+    expect(options.store.addMessageToThread).not.toHaveBeenCalled();
+    expect(options.store.appendRichBlockToThread).toHaveBeenCalledWith('thread-1', 'bg-finalized-msg', block);
+  });
+
+  it('does not reuse a finalized background bubble for a rich_block with a new invocation id', () => {
+    const options = createMockOptions({
+      getThreadState: vi.fn(() => ({
+        messages: [
+          {
+            id: 'bg-finalized-old-msg',
+            type: 'assistant',
+            catId: 'opus',
+            origin: 'stream',
+            isStreaming: false,
+            content: 'old voice done',
+            timestamp: Date.now() - 1000,
+          },
+        ],
+        catStatuses: {},
+        catInvocations: {},
+      })),
+    });
+    options.finalizedBgRefs.set('thread-1::opus', 'bg-finalized-old-msg');
+    const block = {
+      id: 'rb-new-invocation',
+      kind: 'audio',
+      v: 1,
+      url: '/api/tts/audio/new.wav',
+      mimeType: 'audio/wav',
+    };
+    const msg = {
+      type: 'system_info',
+      catId: 'opus',
+      threadId: 'thread-1',
+      invocationId: 'inv-new-bg',
+      content: JSON.stringify({ type: 'rich_block', block }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(msg, undefined, options);
+
+    expect(result.consumed).toBe(true);
+    expect(options.store.appendRichBlockToThread).not.toHaveBeenCalledWith('thread-1', 'bg-finalized-old-msg', block);
+    expect(options.store.addMessageToThread).toHaveBeenCalledWith(
+      'thread-1',
+      expect.objectContaining({
+        catId: 'opus',
+        origin: 'stream',
+        extra: {
+          stream: { invocationId: 'inv-new-bg' },
+        },
+      }),
+    );
+    const targetId = vi.mocked(options.store.addMessageToThread).mock.calls[0]?.[1]?.id;
+    expect(targetId).toEqual(expect.stringMatching(/^bg-rich-/));
+    expect(options.store.appendRichBlockToThread).toHaveBeenCalledWith('thread-1', targetId, block);
   });
 });
 
@@ -363,6 +593,23 @@ describe('consumeBackgroundSystemInfo warning + telemetry suppression', () => {
       catId: 'opus',
       threadId: 'thread-1',
       content: JSON.stringify({ type: 'strategy_allow_compress', allowCompress: true }),
+      timestamp: Date.now(),
+    };
+
+    const result = consumeBackgroundSystemInfo(msg, undefined, options);
+
+    expect(result.consumed).toBe(true);
+    expect(options.store.addMessageToThread).not.toHaveBeenCalled();
+  });
+
+  it('suppresses tool_activity telemetry after tool_use carries the visible tool event', () => {
+    const options = createMockOptions();
+
+    const msg = {
+      type: 'system_info',
+      catId: 'antig-opus',
+      threadId: 'thread-1',
+      content: JSON.stringify({ type: 'tool_activity', toolName: 'view_file' }),
       timestamp: Date.now(),
     };
 

@@ -64,6 +64,16 @@ const catIdSchema = z
   .max(64)
   .regex(/^[a-z][a-z0-9_-]*$/, 'catId must use lowercase letters, numbers, "_" or "-" and start with a letter');
 
+const voiceConfigSchema = z.object({
+  voice: z.string().min(1),
+  langCode: z.string().min(1),
+  speed: z.number().positive().optional(),
+  refAudio: z.string().min(1).optional(),
+  refText: z.string().min(1).optional(),
+  instruct: z.string().min(1).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+});
+
 const baseCatSchema = z.object({
   catId: catIdSchema,
   name: z.string().min(1),
@@ -84,17 +94,7 @@ const baseCatSchema = z.object({
   caution: z.string().nullable().optional(),
   strengths: z.array(z.string().min(1)).optional(),
   sessionChain: z.boolean().optional(),
-  voiceConfig: z
-    .object({
-      voice: z.string().min(1),
-      langCode: z.string().min(1),
-      speed: z.number().positive().optional(),
-      refAudio: z.string().min(1).optional(),
-      refText: z.string().min(1).optional(),
-      instruct: z.string().min(1).optional(),
-      temperature: z.number().min(0).max(2).optional(),
-    })
-    .optional(),
+  voiceConfig: voiceConfigSchema.optional(),
 });
 
 /** Strip trailing slashes from model names — prevents "MiniMax-M2.7/" artifacts.
@@ -145,18 +145,7 @@ const updateCatSchema = z.object({
   commandArgs: z.array(z.string().min(1)).optional(),
   cliConfigArgs: z.array(z.string().min(1)).optional(),
   provider: z.string().min(1).nullable().optional(),
-  voiceConfig: z
-    .object({
-      voice: z.string().min(1),
-      langCode: z.string().min(1),
-      speed: z.number().positive().optional(),
-      refAudio: z.string().min(1).optional(),
-      refText: z.string().min(1).optional(),
-      instruct: z.string().min(1).optional(),
-      temperature: z.number().min(0).max(2).optional(),
-    })
-    .nullable()
-    .optional(),
+  voiceConfig: voiceConfigSchema.nullable().optional(),
 });
 
 type UpdateCatRequestBody = z.infer<typeof updateCatSchema>;
@@ -298,6 +287,23 @@ function resolveNextCli(params: {
   return undefined;
 }
 
+/**
+ * Infer OpenCode provider from a bare model name.
+ * Returns a known provider string or undefined (triggers validation error).
+ */
+function inferProviderFromModelName(model: string): string | undefined {
+  const m = model.trim().toLowerCase();
+  if (/^(gpt-|o[134]-|o[134]p|davinci|text-|chatgpt)/.test(m)) return 'openai';
+  if (/^claude/.test(m)) return 'anthropic';
+  if (/^gemini/.test(m)) return 'google';
+  if (/^(moonshot|kimi)/.test(m)) return 'kimi';
+  if (/^deepseek/.test(m)) return 'deepseek';
+  if (/^(glm|chatglm)/.test(m)) return 'zhipu';
+  if (/^(qwen|tongyi)/.test(m)) return 'dashscope';
+  if (/^minimax/.test(m)) return 'minimax';
+  return undefined;
+}
+
 function buildEffectiveAccountRefResolver() {
   return async (cat: CatConfig & { contextBudget?: ContextBudget }): Promise<string | undefined> =>
     resolveBoundAccountRefForCat('', cat.id, cat);
@@ -365,6 +371,7 @@ async function toCatResponse(
     caution: cat.caution,
     strengths: cat.strengths,
     sessionChain: cat.sessionChain,
+    voiceConfig: cat.voiceConfig,
     commandArgs: cat.commandArgs,
     cliConfigArgs: cat.cliConfigArgs,
     provider: cat.provider,
@@ -381,7 +388,6 @@ async function toCatResponse(
           evaluation: metadata.roster.evaluation,
         }
       : null,
-    voiceConfig: cat.voiceConfig ?? undefined,
     adapterMode: cat.clientId === 'google' ? (getAcpConfig(cat.id as string) ? 'acp' : 'cli') : undefined,
   };
 }
@@ -503,7 +509,16 @@ export const catsRoutes: FastifyPluginAsync<CatsRoutesOptions> = async (app, opt
 
     const accountRef = resolveAccountRef(body);
     try {
-      const providerNameForValidation = 'provider' in body ? body.provider : undefined;
+      /* Infer provider for opencode API-key accounts from the model name when no
+         explicit provider is given. This avoids hard-coding 'openai' for all bare
+         models — Anthropic/Google accounts get the correct adapter.
+         Unknown model prefixes → undefined → validation error preserved. */
+      const explicitProvider = 'provider' in body ? body.provider : undefined;
+      const providerNameForValidation =
+        explicitProvider ??
+        (body.clientId === 'opencode' && body.defaultModel && !body.defaultModel.includes('/')
+          ? inferProviderFromModelName(body.defaultModel)
+          : undefined);
       await validateAccountBindingOrThrow(
         projectRoot,
         body.clientId,
@@ -569,7 +584,9 @@ export const catsRoutes: FastifyPluginAsync<CatsRoutesOptions> = async (app, opt
               body.clientId === 'opencode'),
           cli: resolvedCli,
           ...(body.cliConfigArgs ? { cliConfigArgs: body.cliConfigArgs } : {}),
-          ...(body.provider ? { provider: body.provider } : {}),
+          ...(body.provider || providerNameForValidation
+            ? { provider: body.provider ?? providerNameForValidation }
+            : {}),
           ...(body.voiceConfig ? { voiceConfig: body.voiceConfig } : {}),
         });
       }

@@ -3,7 +3,7 @@
 import { formatCatName, useCatData } from '@/hooks/useCatData';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { useThreadLiveness } from '@/hooks/useThreadScopedSelectors';
-import { hexToRgba } from '@/lib/color-utils';
+import { catColorMix, catColorVar } from '@/lib/cat-slug';
 import type { TokenUsage } from '@/stores/chat-types';
 import type { CatInvocationInfo } from '@/stores/chatStore';
 import { deriveActiveCats, formatCost, formatDuration, formatTokenCount } from './status-helpers';
@@ -13,15 +13,15 @@ function StatusDot({ status }: { status: string }) {
     case 'pending':
       return <span className="inline-block w-2 h-2 rounded-full bg-cafe-surface-sunken animate-pulse" />;
     case 'streaming':
-      return <span className="inline-block w-2 h-2 rounded-full bg-conn-emerald-bg animate-pulse" />;
+      return <span className="inline-block w-2 h-2 rounded-full bg-conn-emerald-text animate-pulse" />;
     case 'done':
       return <span className="text-conn-emerald-text text-xs">&#10003;</span>;
     case 'error':
       return <span className="text-conn-red-text text-xs">&#10007;</span>;
     case 'alive_but_silent':
-      return <span className="inline-block w-2 h-2 rounded-full bg-conn-amber-bg animate-pulse" />;
+      return <span className="inline-block w-2 h-2 rounded-full bg-conn-amber-text animate-pulse" />;
     case 'suspected_stall':
-      return <span className="inline-block w-2 h-2 rounded-full bg-conn-amber-bg animate-pulse" />;
+      return <span className="inline-block w-2 h-2 rounded-full bg-conn-amber-text animate-pulse" />;
     default:
       return null;
   }
@@ -50,7 +50,7 @@ function CatStatusCard({
     return null;
   })();
 
-  const bgColor = cat ? hexToRgba(cat.color.primary, 0.12) : undefined;
+  const bgColor = cat ? catColorMix(cat.id, 0.12, 'primary') : undefined;
 
   return (
     <div
@@ -58,7 +58,10 @@ function CatStatusCard({
       style={{ backgroundColor: bgColor ?? 'var(--console-pill-bg)' }}
     >
       <StatusDot status={status} />
-      <span className="text-xs font-medium" style={{ color: cat?.color.primary ?? 'var(--cafe-text-secondary)' }}>
+      <span
+        className="text-xs font-medium"
+        style={{ color: cat ? catColorVar(cat.id, 'primary') : 'var(--cafe-text-secondary)' }}
+      >
         {cat ? formatCatName(cat) : catId}
       </span>
       {timeDisplay && <span className="text-xs text-cafe-secondary ml-0.5">{timeDisplay}</span>}
@@ -104,12 +107,16 @@ export function ParallelStatusBar({ onStop, threadId }: { onStop?: () => void; t
     catStatuses,
     catInvocations,
     activeInvocations,
+    intentMode,
     hasActive: hasActiveInvocation,
   } = useThreadLiveness(threadId);
   const activeCats = deriveActiveCats({
     targetCats,
     activeInvocations,
     hasActiveInvocation,
+    // F194 Phase Z5 AC-Z15: ideate mode 下保留 targetCats UNION，让本轮所有猫的卡片
+    // 全程显示，slot 移除（猫完成清 slot）不应让卡片消失
+    intentMode,
   });
 
   if (activeCats.length === 0) return null;
@@ -117,7 +124,7 @@ export function ParallelStatusBar({ onStop, threadId }: { onStop?: () => void; t
   const agg = aggregateUsage(catInvocations, activeCats);
 
   return (
-    <div className="px-5 py-2.5 bg-gradient-to-r from-opus-bg via-codex-bg to-gemini-bg border-b border-[var(--console-border-soft)]">
+    <div className="px-5 py-2.5 bg-gradient-to-r from-opus-bg via-codex-bg to-gemini-bg console-divider-b">
       <div className="flex items-center gap-4">
         <span className="text-sm font-medium text-cafe-secondary">独立观点采样中</span>
         {activeCats.map((catId) => (

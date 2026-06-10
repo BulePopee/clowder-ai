@@ -34,6 +34,7 @@ describe('Callback Routes', () => {
   let taskStore;
   let backlogStore;
   let featIndexProvider;
+  let labelStore;
 
   beforeEach(async () => {
     const { InvocationRegistry } = await import(
@@ -49,6 +50,8 @@ describe('Callback Routes', () => {
     threadStore = new ThreadStore();
     taskStore = new TaskStore();
     backlogStore = new BacklogStore();
+    const { createLabelStore } = await import('../dist/domains/cats/services/stores/factories/LabelStoreFactory.js');
+    labelStore = createLabelStore();
     socketManager = createMockSocketManager();
     evidenceStore = {
       search: async () => [],
@@ -80,6 +83,10 @@ describe('Callback Routes', () => {
       evidenceStore,
       reflectionService,
       markerQueue,
+      fetchPrTrackingBoundary: async () => ({
+        review: { lastCommentCursor: 0, lastDecisionCursor: 0 },
+        ci: { headSha: 'test-head' },
+      }),
     };
     if (backlogStore !== undefined) {
       options.backlogStore = backlogStore;
@@ -89,6 +96,9 @@ describe('Callback Routes', () => {
     }
     if (featIndexProvider) {
       options.featIndexProvider = featIndexProvider;
+    }
+    if (labelStore !== undefined) {
+      options.labelStore = labelStore;
     }
     await app.register(callbacksRoutes, options);
     return app;
@@ -262,6 +272,211 @@ describe('Callback Routes', () => {
     assert.equal(socketManager.getMessages().length, 1);
   });
 
+  test('POST post-message suppresses exact duplicate callback posts in the retry window', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const payload = { content: 'same callback report' };
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload,
+    });
+    assert.equal(first.statusCode, 200);
+    const firstBody = JSON.parse(first.body);
+    assert.equal(firstBody.status, 'ok');
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload,
+    });
+    assert.equal(second.statusCode, 200);
+    const secondBody = JSON.parse(second.body);
+    assert.equal(secondBody.status, 'duplicate');
+    assert.equal(secondBody.messageId, firstBody.messageId);
+
+    const recent = messageStore.getRecent(10);
+    assert.equal(recent.length, 1);
+    assert.equal(socketManager.getMessages().length, 1);
+  });
+
+  // Regression: byte-identical duplicate posts (the screenshot bug). The recent-message
+  // duplicate scan is check-then-act (read recent → later append); two concurrent identical
+  // deliveries (e.g. an at-least-once retry / double-dispatch, each with its own auto-generated
+  // clientMessageId so the clientMessageId SADD does not match) both pass the "no duplicate"
+  // read before either appends → both persist → two identical messages. Closing the race needs
+  // an ATOMIC claim before append. This test forces the interleave by holding the first append
+  // open until the second request has run its duplicate check.
+  test('POST post-message does not double-store byte-identical concurrent posts (atomic dedup)', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const realAppend = messageStore.append.bind(messageStore);
+    let releaseFirstAppend;
+    const firstAppendGate = new Promise((resolve) => {
+      releaseFirstAppend = resolve;
+    });
+    let signalFirstAppendEntered;
+    const firstAppendEntered = new Promise((resolve) => {
+      signalFirstAppendEntered = resolve;
+    });
+    let appendCount = 0;
+    messageStore.append = async (msg) => {
+      appendCount += 1;
+      if (appendCount === 1) {
+        signalFirstAppendEntered();
+        await firstAppendGate; // hold the winner's append open
+      }
+      return realAppend(msg);
+    };
+
+    // No clientMessageId on either request → the clientMessageId dedup is skipped, exercising
+    // the content-fingerprint path specifically (matches production where two deliveries carry
+    // different auto-generated keys).
+    const payload = { content: 'concurrent identical callback report' };
+    const headers = { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken };
+
+    const p1 = app.inject({ method: 'POST', url: '/api/callbacks/post-message', headers, payload });
+    await firstAppendEntered; // p1 passed its duplicate check and is now blocked inside append
+    const second = await app.inject({ method: 'POST', url: '/api/callbacks/post-message', headers, payload });
+    releaseFirstAppend();
+    await p1;
+
+    assert.equal(
+      JSON.parse(second.body).status,
+      'duplicate',
+      'concurrent identical post must be detected as duplicate even before the winner commits its append',
+    );
+    const recent = messageStore.getRecent(10);
+    assert.equal(recent.length, 1, 'concurrent byte-identical posts must persist exactly ONE message');
+    assert.equal(socketManager.getMessages().length, 1, 'only one broadcast for the deduped pair');
+  });
+
+  test('POST post-message suppresses exact duplicate callback posts when first copy is queued', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const queued = messageStore.append({
+      userId: 'user-1',
+      catId: 'opus',
+      content: 'same queued callback report',
+      mentions: [],
+      origin: 'callback',
+      timestamp: Date.now(),
+      threadId: 'default',
+      extra: {
+        stream: {
+          invocationId,
+          turnInvocationId: invocationId,
+        },
+      },
+      deliveryStatus: 'queued',
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { content: 'same queued callback report' },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'duplicate');
+    assert.equal(body.messageId, queued.id);
+
+    assert.equal(messageStore.size, 1);
+    assert.equal(socketManager.getMessages().length, 0);
+  });
+
+  test('POST post-message duplicate scan skips stale candidates without stopping early', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+    const now = Date.now();
+
+    const freshDuplicate = messageStore.append({
+      userId: 'user-1',
+      catId: 'opus',
+      content: 'same callback report behind stale tail',
+      mentions: [],
+      origin: 'callback',
+      timestamp: now,
+      deliveredAt: now,
+      threadId: 'default',
+      extra: {
+        stream: {
+          invocationId,
+          turnInvocationId: invocationId,
+        },
+      },
+    });
+    messageStore.append({
+      userId: 'user-1',
+      catId: 'opus',
+      content: 'old unrelated callback tail',
+      mentions: [],
+      origin: 'callback',
+      timestamp: now - 10_000,
+      deliveredAt: now - 10_000,
+      threadId: 'default',
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { content: 'same callback report behind stale tail' },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'duplicate');
+    assert.equal(body.messageId, freshDuplicate.id);
+
+    assert.equal(messageStore.size, 2);
+    assert.equal(socketManager.getMessages().length, 0);
+  });
+
+  test('POST post-message does not suppress plain text after same-text rich callback', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const first = messageStore.append({
+      userId: 'user-1',
+      catId: 'opus',
+      content: 'same callback payload after rich block consumption',
+      mentions: [],
+      origin: 'callback',
+      timestamp: Date.now(),
+      threadId: 'default',
+      extra: {
+        rich: {
+          v: 1,
+          blocks: [{ kind: 'card', v: 1, id: 'rb-1', data: { title: 'smoke report' } }],
+        },
+        stream: {
+          invocationId,
+          turnInvocationId: invocationId,
+        },
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/post-message',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { content: 'same callback payload after rich block consumption' },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.status, 'ok');
+    assert.notEqual(body.messageId, first.id);
+
+    assert.equal(messageStore.size, 2);
+    assert.equal(socketManager.getMessages().length, 1);
+  });
+
   test('POST post-message supports cross-thread send with threadId', async () => {
     const app = await createApp();
     const threadA = await threadStore.create('user-1', 'thread-a');
@@ -275,6 +490,8 @@ describe('Callback Routes', () => {
       payload: {
         threadId: threadB.id,
         content: 'cross-thread hello',
+        // F193 AC-A4: cross-post requires routing credentials (targetCats or line-start @)
+        targetCats: ['codex'],
       },
     });
 
@@ -513,6 +730,38 @@ describe('Callback Routes', () => {
     assert.equal(body.messages[1].content, 'Reply 1');
   });
 
+  test('GET thread-context exposes HTTP image urls so external runtimes can fetch them (F211-REG3)', async () => {
+    // REG3 Layer B: external runtimes (Antigravity/Bengal) cannot read absolute filesystem
+    // imagePaths under cat-cafe-runtime/uploads (workspace-root boundary). An HTTP url served
+    // by the API /uploads/ static route IS reachable, so the carrier can curl/fetch the bytes.
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    messageStore.append({
+      userId: 'user-1',
+      catId: null,
+      content: 'look at this diagram',
+      contentBlocks: [
+        { type: 'text', text: 'look at this diagram' },
+        { type: 'image', url: '/uploads/diagram.png' },
+      ],
+      mentions: [],
+      timestamp: 1,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/thread-context',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    const withImage = body.messages.find((msg) => Array.isArray(msg.imageUrls) && msg.imageUrls.length > 0);
+    assert.ok(withImage, 'a message with an image must expose imageUrls');
+    assert.match(withImage.imageUrls[0], /^https?:\/\/.+\/uploads\/diagram\.png$/);
+  });
+
   test('GET thread-context respects limit parameter', async () => {
     const app = await createApp();
     const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
@@ -536,6 +785,60 @@ describe('Callback Routes', () => {
     assert.equal(response.statusCode, 200);
     const body = JSON.parse(response.body);
     assert.equal(body.messages.length, 3);
+  });
+
+  test('GET thread-context can open a bounded message window by messageId', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const messages = [];
+    for (let i = 0; i < 5; i++) {
+      messages.push(
+        messageStore.append({
+          userId: 'user-1',
+          catId: i % 2 === 0 ? null : 'opus',
+          content: `Window message ${i}`,
+          mentions: [],
+          timestamp: i + 1,
+        }),
+      );
+    }
+
+    const target = messages[2];
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/callbacks/thread-context?messageId=${target.id}&before=1&after=2`,
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(
+      body.messages.map((m) => m.content),
+      ['Window message 1', 'Window message 2', 'Window message 3', 'Window message 4'],
+    );
+  });
+
+  test('GET thread-context rejects messageId from another thread', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const other = messageStore.append({
+      userId: 'user-1',
+      threadId: 'other-thread',
+      catId: null,
+      content: 'Other thread target',
+      mentions: [],
+      timestamp: 1,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/callbacks/thread-context?messageId=${other.id}`,
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 404);
   });
 
   test('GET thread-context supports catId filter (cat + user)', async () => {
@@ -750,8 +1053,20 @@ describe('Callback Routes', () => {
     assert.equal(body.messages[0].contentBlocks.length, 2);
     assert.equal(body.messages[0].contentBlocks[1].type, 'image');
     assert.equal(body.messages[0].contentBlocks[1].url, '/uploads/1234567890-abc.png');
+    // F211 BUG1 fix: imagePaths should contain resolved absolute filesystem paths
+    assert.ok(body.messages[0].imagePaths, 'imagePaths should be present for image messages');
+    assert.equal(body.messages[0].imagePaths.length, 1);
+    assert.ok(
+      body.messages[0].imagePaths[0].endsWith('1234567890-abc.png'),
+      `imagePath should end with filename, got ${body.messages[0].imagePaths[0]}`,
+    );
+    assert.ok(
+      body.messages[0].imagePaths[0].startsWith('/'),
+      `imagePath should be absolute, got ${body.messages[0].imagePaths[0]}`,
+    );
     // Message without contentBlocks should not have the field
     assert.equal(body.messages[1].contentBlocks, undefined);
+    assert.equal(body.messages[1].imagePaths, undefined);
   });
 
   // ---- F-Swarm-6: Cross-thread context read ----
@@ -907,6 +1222,7 @@ describe('Callback Routes', () => {
       pinned: false,
       messageCount: null,
       participants: ['opus', 'codex'],
+      labels: [],
     });
     assert.deepEqual(body.threads[1], {
       threadId: oldThread.id,
@@ -915,6 +1231,7 @@ describe('Callback Routes', () => {
       pinned: false,
       messageCount: null,
       participants: ['opus'],
+      labels: [],
     });
   });
 
@@ -1069,6 +1386,88 @@ describe('Callback Routes', () => {
     assert.equal(response.statusCode, 403);
   });
 
+  test('GET list-threads includes labels array in summary', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+    const thread = await threadStore.create('user-1', 'Labeled thread');
+    await threadStore.updateLabels(thread.id, ['label-1', 'label-2']);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/list-threads',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.threads[0].labels, ['label-1', 'label-2']);
+  });
+
+  // ---- GET /api/callbacks/list-labels ----
+
+  test('GET list-labels returns user-scoped labels', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+    await labelStore.create({
+      id: 'lb-1',
+      name: 'Feature',
+      color: '#FF0000',
+      sortOrder: 0,
+      createdBy: 'user-1',
+      createdAt: Date.now(),
+    });
+    await labelStore.create({
+      id: 'lb-2',
+      name: 'Bug',
+      color: '#00FF00',
+      sortOrder: 1,
+      createdBy: 'user-1',
+      createdAt: Date.now(),
+    });
+    await labelStore.create({
+      id: 'lb-3',
+      name: 'Other User',
+      color: '#0000FF',
+      sortOrder: 0,
+      createdBy: 'user-2',
+      createdAt: Date.now(),
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/list-labels',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.labels.length, 2);
+    assert.deepEqual(body.labels[0], { id: 'lb-1', name: 'Feature', color: '#FF0000', sortOrder: 0 });
+    assert.deepEqual(body.labels[1], { id: 'lb-2', name: 'Bug', color: '#00FF00', sortOrder: 1 });
+  });
+
+  test('GET list-labels returns 401 without credentials', async () => {
+    const app = await createApp();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/list-labels',
+    });
+    assert.equal(response.statusCode, 401);
+  });
+
+  test('GET list-labels returns 503 when labelStore is not configured', async () => {
+    labelStore = undefined;
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/list-labels',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+    assert.equal(response.statusCode, 503);
+    const body = JSON.parse(response.body);
+    assert.match(body.error, /Label store not configured/);
+  });
+
   // ---- GET /api/callbacks/feat-index ----
 
   test('GET feat-index returns entries with default limit and phase-A threadIds', async () => {
@@ -1160,6 +1559,287 @@ describe('Callback Routes', () => {
     assert.deepEqual(f043.threadIds, [threadB.id]);
   });
 
+  test('GET feat-index returns owner-derived suggested cross-post action when feature has a thread', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F193', name: 'Cross Thread Comm', status: 'in-progress', owner: '布偶猫' },
+    ];
+
+    const backlogF193 = await backlogStore.create({
+      userId: 'user-1',
+      title: '[F193] Cross Thread Comm',
+      summary: 'feature f193',
+      priority: 'p1',
+      tags: ['feature:f193', 'status:in-progress'],
+      createdBy: 'user',
+    });
+    const owningThread = threadStore.create('user-1', 'F193 owning thread');
+    threadStore.linkBacklogItem(owningThread.id, backlogF193.id);
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F193',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F193',
+      name: 'Cross Thread Comm',
+      status: 'in-progress',
+      owner: '布偶猫',
+      ownerCatId: 'opus',
+      threadIds: [owningThread.id],
+      suggestedAction: {
+        type: 'cross_post',
+        threadId: owningThread.id,
+        featureId: 'F193',
+        ownerCatId: 'opus',
+        targetCats: ['opus'],
+        reason: 'F193 is owned by opus; dispatch findings to the owning thread.',
+        source: 'feat_index',
+      },
+    });
+  });
+
+  test('GET feat-index suppresses suggested cross-post action for the current thread', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F193', name: 'Cross Thread Comm', status: 'in-progress', owner: '布偶猫' },
+    ];
+
+    const backlogF193 = await backlogStore.create({
+      userId: 'user-1',
+      title: '[F193] Cross Thread Comm',
+      summary: 'feature f193',
+      priority: 'p1',
+      tags: ['feature:f193', 'status:in-progress'],
+      createdBy: 'user',
+    });
+    const currentThread = threadStore.create('user-1', 'F193 owning thread');
+    threadStore.linkBacklogItem(currentThread.id, backlogF193.id);
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex', currentThread.id);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F193',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F193',
+      name: 'Cross Thread Comm',
+      status: 'in-progress',
+      owner: '布偶猫',
+      ownerCatId: 'opus',
+      threadIds: [currentThread.id],
+    });
+  });
+
+  test('GET feat-index keeps owner-derived suggested action metadata when no feature thread is known', async () => {
+    featIndexProvider = async () => [{ featId: 'F194', name: 'Owner Only Feature', status: 'spec', owner: '布偶猫' }];
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F194',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F194',
+      name: 'Owner Only Feature',
+      status: 'spec',
+      owner: '布偶猫',
+      ownerCatId: 'opus',
+      threadIds: [],
+      suggestedAction: {
+        type: 'cross_post',
+        featureId: 'F194',
+        ownerCatId: 'opus',
+        targetCats: ['opus'],
+        reason: 'F194 is owned by opus; find the feature thread before dispatching findings.',
+        source: 'feat_index',
+      },
+    });
+  });
+
+  test('GET feat-index keeps single owner metadata when owner annotations contain separators', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F195', name: 'Annotated Owner Feature', status: 'spec', owner: '布偶猫 (Opus 4.6, leader)' },
+    ];
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F195',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F195',
+      name: 'Annotated Owner Feature',
+      status: 'spec',
+      owner: '布偶猫 (Opus 4.6, leader)',
+      ownerCatId: 'opus',
+      threadIds: [],
+      suggestedAction: {
+        type: 'cross_post',
+        featureId: 'F195',
+        ownerCatId: 'opus',
+        targetCats: ['opus'],
+        reason: 'F195 is owned by opus; find the feature thread before dispatching findings.',
+        source: 'feat_index',
+      },
+    });
+  });
+
+  test('GET feat-index resolves slash-separated single owner aliases', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F191', name: 'Architecture Governance', status: 'done', owner: '缅因猫/砚砚' },
+    ];
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F191',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F191',
+      name: 'Architecture Governance',
+      status: 'done',
+      owner: '缅因猫/砚砚',
+      ownerCatId: 'codex',
+      threadIds: [],
+      suggestedAction: {
+        type: 'cross_post',
+        featureId: 'F191',
+        ownerCatId: 'codex',
+        targetCats: ['codex'],
+        reason: 'F191 is owned by codex; find the feature thread before dispatching findings.',
+        source: 'feat_index',
+      },
+    });
+  });
+
+  test('GET feat-index does not route slash-separated different owners to one cat', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F127', name: 'Slash Pair Feature', status: 'spec', owner: '布偶猫/缅因猫' },
+    ];
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F127',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F127',
+      name: 'Slash Pair Feature',
+      status: 'spec',
+      owner: '布偶猫/缅因猫',
+      threadIds: [],
+    });
+  });
+
+  test('GET feat-index does not route multi-owner features to a single owner when feature has a thread', async () => {
+    featIndexProvider = async () => [
+      {
+        featId: 'F125',
+        name: 'Alpha Test Channel',
+        status: 'in-progress',
+        owner: '缅因猫(gpt52) + 布偶猫(opus)',
+      },
+    ];
+
+    const backlogF125 = await backlogStore.create({
+      userId: 'user-1',
+      title: '[F125] Alpha Test Channel',
+      summary: 'feature f125',
+      priority: 'p1',
+      tags: ['feature:f125', 'status:in-progress'],
+      createdBy: 'user',
+    });
+    const owningThread = threadStore.create('user-1', 'F125 owning thread');
+    threadStore.linkBacklogItem(owningThread.id, backlogF125.id);
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F125',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F125',
+      name: 'Alpha Test Channel',
+      status: 'in-progress',
+      owner: '缅因猫(gpt52) + 布偶猫(opus)',
+      threadIds: [owningThread.id],
+      suggestedAction: {
+        type: 'cross_post',
+        threadId: owningThread.id,
+        featureId: 'F125',
+        reason: 'F125 has an owning thread; dispatch findings there if relevant.',
+        source: 'feat_index',
+      },
+    });
+  });
+
+  test('GET feat-index skips owner-only suggested action for multi-owner features without a known thread', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F126', name: 'Owner Pair Feature', status: 'spec', owner: '布偶猫 + 缅因猫' },
+    ];
+
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/callbacks/feat-index?featId=F126',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.deepEqual(body.items[0], {
+      featId: 'F126',
+      name: 'Owner Pair Feature',
+      status: 'spec',
+      owner: '布偶猫 + 缅因猫',
+      threadIds: [],
+    });
+  });
+
   test('GET feat-index degrades gracefully when threadStore enrichment fails', async () => {
     featIndexProvider = async () => [{ featId: 'F043', name: 'MCP Unification', status: 'spec' }];
     threadStore = {
@@ -1236,6 +1916,38 @@ describe('Callback Routes', () => {
     const byStatusBody = JSON.parse(byStatus.body);
     assert.equal(byStatusBody.items.length, 1);
     assert.equal(byStatusBody.items[0].featId, 'F046');
+  });
+
+  test('GET feat-index supports query fuzzy match over owner metadata', async () => {
+    featIndexProvider = async () => [
+      { featId: 'F193', name: 'Cross Thread Comm', status: 'in-progress', owner: '布偶猫' },
+      { featId: 'F191', name: 'Architecture Governance', status: 'done', owner: '缅因猫/砚砚' },
+    ];
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'codex');
+
+    const byOwner = await app.inject({
+      method: 'GET',
+      url: `/api/callbacks/feat-index?query=${encodeURIComponent('布偶猫')}`,
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(byOwner.statusCode, 200);
+    const byOwnerBody = JSON.parse(byOwner.body);
+    assert.equal(byOwnerBody.items.length, 1);
+    assert.equal(byOwnerBody.items[0].featId, 'F193');
+    assert.equal(byOwnerBody.items[0].ownerCatId, 'opus');
+
+    const byOwnerCatId = await app.inject({
+      method: 'GET',
+      url: `/api/callbacks/feat-index?query=opus`,
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+    });
+
+    assert.equal(byOwnerCatId.statusCode, 200);
+    const byOwnerCatIdBody = JSON.parse(byOwnerCatId.body);
+    assert.equal(byOwnerCatIdBody.items.length, 1);
+    assert.equal(byOwnerCatIdBody.items[0].featId, 'F193');
   });
 
   test('GET feat-index validates limit max=100', async () => {
@@ -2219,6 +2931,202 @@ describe('Callback Routes', () => {
     assert.equal(found.threadId, 'thread-pr');
   });
 
+  // F140: wake intent — default 'review' (quiet), explicit 'merge', and re-register preserves it.
+
+  test('POST register-pr-tracking defaults intent to review and persists it structurally', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-pr');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 101 },
+    });
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.task.automationState.intent, 'review', 'absent intent persists as review');
+  });
+
+  test('POST register-pr-tracking accepts intent=merge', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-pr');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 102, intent: 'merge' },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(JSON.parse(response.body).task.automationState.intent, 'merge');
+  });
+
+  test('POST register-pr-tracking re-register without intent preserves a prior merge intent', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-pr');
+    const headers = { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken };
+    // 1) register with merge intent
+    await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers,
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 103, intent: 'merge' },
+    });
+    // 2) re-register WITHOUT intent — must not silently downgrade to review
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers,
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 103 },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      JSON.parse(response.body).task.automationState.intent,
+      'merge',
+      'intent-less re-register preserves merge',
+    );
+  });
+
+  test('POST register-pr-tracking allows empty instructions to clear stored instructions', async () => {
+    const app = await createApp();
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-pr');
+    const headers = { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken };
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers,
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        prNumber: 104,
+        instructions: 'Old guidance',
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers,
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        prNumber: 104,
+        instructions: '',
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = JSON.parse(response.body);
+    assert.equal(body.task.automationState.trackingInstructions, '');
+
+    const stored = taskStore.getBySubject('pr:zts212653/cat-cafe#104');
+    assert.equal(stored.automationState.trackingInstructions, '');
+  });
+
+  test('POST register-pr-tracking seeds PR feedback and CI boundaries after unregister/re-register', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    const boundaryCalls = [];
+    const boundaries = [
+      {
+        review: { lastCommentCursor: 10, lastDecisionCursor: 20 },
+        ci: { headSha: 'sha-old', lastFingerprint: 'sha-old:pass', lastBucket: 'pass' },
+      },
+      {
+        review: { lastCommentCursor: 110, lastDecisionCursor: 220 },
+        ci: { headSha: 'sha-current', lastFingerprint: 'sha-current:fail', lastBucket: 'fail' },
+      },
+    ];
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchPrTrackingBoundary: async (repoFullName, prNumber) => {
+        boundaryCalls.push({ repoFullName, prNumber });
+        return boundaries.shift();
+      },
+    });
+
+    const firstInvocation = await registry.create('user-1', 'opus', 'thread-pr-old');
+    const firstHeaders = {
+      'x-invocation-id': firstInvocation.invocationId,
+      'x-callback-token': firstInvocation.callbackToken,
+    };
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: firstHeaders,
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 105 },
+    });
+    assert.equal(first.statusCode, 200);
+    assert.equal(JSON.parse(first.body).task.automationState.review.lastCommentCursor, 10);
+    assert.equal(JSON.parse(first.body).task.automationState.review.lastDecisionCursor, 20);
+    assert.equal(JSON.parse(first.body).task.automationState.ci.lastFingerprint, 'sha-old:pass');
+
+    const unregister = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/unregister-tracking',
+      headers: firstHeaders,
+      payload: { subjectKey: 'pr:zts212653/cat-cafe#105' },
+    });
+    assert.equal(unregister.statusCode, 200);
+
+    const secondInvocation = await registry.create('user-1', 'opus', 'thread-pr-new');
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: {
+        'x-invocation-id': secondInvocation.invocationId,
+        'x-callback-token': secondInvocation.callbackToken,
+      },
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 105 },
+    });
+    assert.equal(second.statusCode, 200);
+    assert.deepEqual(boundaryCalls, [
+      { repoFullName: 'zts212653/cat-cafe', prNumber: 105 },
+      { repoFullName: 'zts212653/cat-cafe', prNumber: 105 },
+    ]);
+
+    const updated = taskStore.getBySubject('pr:zts212653/cat-cafe#105');
+    assert.equal(updated.threadId, 'thread-pr-new');
+    assert.equal(updated.automationState.review.lastCommentCursor, 110);
+    assert.equal(updated.automationState.review.lastDecisionCursor, 220);
+    assert.equal(updated.automationState.ci.lastFingerprint, 'sha-current:fail');
+  });
+
+  test('POST register-pr-tracking rejects boundary seeding when CI cursor is unavailable', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchPrTrackingBoundary: async () => ({
+        review: { lastCommentCursor: 10, lastDecisionCursor: 20 },
+      }),
+    });
+
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-pr');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: { repoFullName: 'zts212653/cat-cafe', prNumber: 106 },
+    });
+
+    assert.equal(response.statusCode, 503);
+    assert.match(JSON.parse(response.body).error, /PR tracking boundary unavailable/);
+    assert.equal(taskStore.getBySubject('pr:zts212653/cat-cafe#106'), null);
+  });
+
   test('POST register-pr-tracking rejects invalid credentials', async () => {
     const app = await createApp();
 
@@ -2295,6 +3203,45 @@ describe('Callback Routes', () => {
     assert.equal(entry.threadId, 'thread-A');
   });
 
+  test('POST register-pr-tracking rejects legacy task takeover when caller thread cannot prove ownership', async () => {
+    const app = await createApp();
+
+    taskStore.create({
+      kind: 'pr_tracking',
+      threadId: 'thread-owner',
+      subjectKey: 'pr:zts212653/cat-cafe#406',
+      title: 'Legacy PR tracking',
+      why: 'legacy task without userId',
+      createdBy: 'opus',
+      ownerCatId: 'opus',
+    });
+
+    const attacker = await registry.create('user-attacker', 'codex', 'thread-attacker');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-pr-tracking',
+      headers: { 'x-invocation-id': attacker.invocationId, 'x-callback-token': attacker.callbackToken },
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        prNumber: 406,
+        instructions: 'reroute notifications',
+      },
+    });
+
+    assert.equal(response.statusCode, 409);
+    assert.match(response.body, /already registered by another user/);
+
+    const entry = taskStore.getBySubject('pr:zts212653/cat-cafe#406');
+    assert.equal(entry.threadId, 'thread-owner', 'legacy task must stay on its original thread');
+    assert.equal(entry.ownerCatId, 'opus', 'legacy task owner must not be overwritten');
+    assert.equal(entry.userId, undefined, 'failed takeover must not stamp attacker userId');
+    assert.equal(
+      entry.automationState?.trackingInstructions,
+      undefined,
+      'failed takeover must not update instructions',
+    );
+  });
+
   test('POST register-pr-tracking converts atomic store ownership conflicts into 409', async () => {
     taskStore = {
       getBySubject() {
@@ -2320,6 +3267,10 @@ describe('Callback Routes', () => {
         const error = new Error('subject ownership conflict');
         error.code = 'TASK_SUBJECT_OWNERSHIP_CONFLICT';
         throw error;
+      },
+      // F140: handler persists intent via patchAutomationState after a successful upsert.
+      async patchAutomationState(_taskId, patch) {
+        return { id: 'task-user-a', automationState: patch };
       },
     };
 
@@ -2441,6 +3392,312 @@ describe('Callback Routes', () => {
     assert.equal(stored.ownerCatId, 'opencode', 'stored task must have authoritative catId');
   });
 
+  test('POST register-issue-tracking seeds cursor from current issue comments', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    const cursorCalls = [];
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchIssueCommentCursor: async (repoFullName, issueNumber) => {
+        cursorCalls.push({ repoFullName, issueNumber });
+        return 1234;
+      },
+    });
+
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-issue');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        issueNumber: 861,
+        instructions: 'Watch for maintainer updates',
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(cursorCalls, [{ repoFullName: 'zts212653/cat-cafe', issueNumber: 861 }]);
+
+    const body = JSON.parse(response.body);
+    assert.equal(body.task.automationState.issue.lastCommentCursor, 1234);
+    assert.equal(body.task.automationState.trackingInstructions, 'Watch for maintainer updates');
+
+    const stored = taskStore.getBySubject('issue:zts212653/cat-cafe#861');
+    assert.equal(stored.automationState.issue.lastCommentCursor, 1234);
+  });
+
+  test('POST register-issue-tracking preserves existing cursor on re-register', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    let cursorCalls = 0;
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchIssueCommentCursor: async () => {
+        cursorCalls++;
+        return 9999;
+      },
+    });
+
+    const firstInvocation = await registry.create('user-1', 'opus', 'thread-issue-1');
+    await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: {
+        'x-invocation-id': firstInvocation.invocationId,
+        'x-callback-token': firstInvocation.callbackToken,
+      },
+      payload: { repoFullName: 'zts212653/cat-cafe', issueNumber: 862 },
+    });
+
+    const task = taskStore.getBySubject('issue:zts212653/cat-cafe#862');
+    taskStore.patchAutomationState(task.id, { issue: { lastCommentCursor: 55, lastNotifiedAt: 1000 } });
+
+    const secondInvocation = await registry.create('user-1', 'opus', 'thread-issue-2');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: {
+        'x-invocation-id': secondInvocation.invocationId,
+        'x-callback-token': secondInvocation.callbackToken,
+      },
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        issueNumber: 862,
+        instructions: 'Updated instructions',
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(cursorCalls, 1, 're-register must not refetch and overwrite an existing cursor');
+
+    const updated = taskStore.getBySubject('issue:zts212653/cat-cafe#862');
+    assert.equal(updated.threadId, 'thread-issue-2');
+    assert.equal(updated.automationState.issue.lastCommentCursor, 55);
+    assert.equal(updated.automationState.issue.lastNotifiedAt, 1000);
+    assert.equal(updated.automationState.trackingInstructions, 'Updated instructions');
+  });
+
+  test('POST register-issue-tracking reseeds cursor when reactivating a done tracker', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    const cursorValues = [55, 777];
+    const cursorCalls = [];
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchIssueCommentCursor: async (repoFullName, issueNumber) => {
+        cursorCalls.push({ repoFullName, issueNumber });
+        return cursorValues.shift();
+      },
+    });
+
+    const firstInvocation = await registry.create('user-1', 'opus', 'thread-issue-old');
+    await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: {
+        'x-invocation-id': firstInvocation.invocationId,
+        'x-callback-token': firstInvocation.callbackToken,
+      },
+      payload: { repoFullName: 'zts212653/cat-cafe', issueNumber: 864 },
+    });
+
+    const oldTask = taskStore.getBySubject('issue:zts212653/cat-cafe#864');
+    taskStore.update(oldTask.id, { status: 'done' });
+
+    const secondInvocation = await registry.create('user-1', 'opus', 'thread-issue-new');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: {
+        'x-invocation-id': secondInvocation.invocationId,
+        'x-callback-token': secondInvocation.callbackToken,
+      },
+      payload: { repoFullName: 'zts212653/cat-cafe', issueNumber: 864 },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(cursorCalls.length, 2, 'reactivating done tracking must seed from the current cursor');
+
+    const updated = taskStore.getBySubject('issue:zts212653/cat-cafe#864');
+    assert.equal(updated.status, 'todo');
+    assert.equal(updated.threadId, 'thread-issue-new');
+    assert.equal(updated.automationState.issue.lastCommentCursor, 777);
+  });
+
+  test('POST register-issue-tracking allows empty instructions to clear stored instructions', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchIssueCommentCursor: async () => 456,
+    });
+
+    const { invocationId, callbackToken } = await registry.create('user-1', 'opus', 'thread-issue');
+    const headers = { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken };
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers,
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        issueNumber: 863,
+        instructions: 'Old issue guidance',
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers,
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        issueNumber: 863,
+        instructions: '',
+      },
+    });
+
+    assert.equal(response.statusCode, 200);
+
+    const body = JSON.parse(response.body);
+    assert.equal(body.task.automationState.trackingInstructions, '');
+    assert.equal(body.task.automationState.issue.lastCommentCursor, 456);
+
+    const stored = taskStore.getBySubject('issue:zts212653/cat-cafe#863');
+    assert.equal(stored.automationState.trackingInstructions, '');
+    assert.equal(stored.automationState.issue.lastCommentCursor, 456);
+  });
+
+  test('POST register-issue-tracking rejects legacy task takeover when caller thread cannot prove ownership', async () => {
+    const { callbacksRoutes } = await import('../dist/routes/callbacks.js');
+    const app = Fastify();
+    await app.register(callbacksRoutes, {
+      registry,
+      messageStore,
+      socketManager,
+      taskStore,
+      threadStore,
+      evidenceStore,
+      reflectionService,
+      markerQueue,
+      fetchIssueCommentCursor: async () => 456,
+    });
+
+    taskStore.create({
+      kind: 'issue_tracking',
+      threadId: 'thread-owner',
+      subjectKey: 'issue:zts212653/cat-cafe#865',
+      title: 'Legacy issue tracking',
+      why: 'legacy task without userId',
+      createdBy: 'opus',
+      ownerCatId: 'opus',
+    });
+
+    const attacker = await registry.create('user-attacker', 'codex', 'thread-attacker');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/register-issue-tracking',
+      headers: { 'x-invocation-id': attacker.invocationId, 'x-callback-token': attacker.callbackToken },
+      payload: {
+        repoFullName: 'zts212653/cat-cafe',
+        issueNumber: 865,
+        instructions: 'reroute issue notifications',
+      },
+    });
+
+    assert.equal(response.statusCode, 409);
+    assert.match(response.body, /already registered by another user/);
+
+    const entry = taskStore.getBySubject('issue:zts212653/cat-cafe#865');
+    assert.equal(entry.threadId, 'thread-owner', 'legacy task must stay on its original thread');
+    assert.equal(entry.ownerCatId, 'opus', 'legacy task owner must not be overwritten');
+    assert.equal(entry.userId, undefined, 'failed takeover must not stamp attacker userId');
+    assert.equal(
+      entry.automationState?.trackingInstructions,
+      undefined,
+      'failed takeover must not update instructions',
+    );
+  });
+
+  test('POST unregister-tracking rejects legacy task delete when caller thread cannot prove ownership', async () => {
+    const app = await createApp();
+
+    taskStore.create({
+      kind: 'pr_tracking',
+      threadId: 'thread-owner',
+      subjectKey: 'pr:zts212653/cat-cafe#404',
+      title: 'Legacy PR tracking',
+      why: 'legacy task without userId',
+      createdBy: 'opus',
+      ownerCatId: 'opus',
+    });
+
+    const attacker = await registry.create('user-attacker', 'codex', 'thread-attacker');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/unregister-tracking',
+      headers: { 'x-invocation-id': attacker.invocationId, 'x-callback-token': attacker.callbackToken },
+      payload: { subjectKey: 'pr:zts212653/cat-cafe#404' },
+    });
+
+    assert.equal(response.statusCode, 403);
+    assert.ok(taskStore.getBySubject('pr:zts212653/cat-cafe#404'), 'legacy task must remain registered');
+  });
+
+  test('POST unregister-tracking allows same-thread cleanup for legacy task without userId', async () => {
+    const app = await createApp();
+
+    taskStore.create({
+      kind: 'pr_tracking',
+      threadId: 'thread-owner',
+      subjectKey: 'pr:zts212653/cat-cafe#405',
+      title: 'Legacy PR tracking',
+      why: 'legacy task without userId',
+      createdBy: 'opus',
+      ownerCatId: 'opus',
+    });
+
+    const owner = await registry.create('user-owner', 'opus', 'thread-owner');
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/callbacks/unregister-tracking',
+      headers: { 'x-invocation-id': owner.invocationId, 'x-callback-token': owner.callbackToken },
+      payload: { subjectKey: 'pr:zts212653/cat-cafe#405' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(taskStore.getBySubject('pr:zts212653/cat-cafe#405'), null);
+  });
+
   // ---- F052: cross-thread identity isolation ----
 
   test('F052: cross-thread post stores extra.crossPost metadata', async () => {
@@ -2457,6 +3714,8 @@ describe('Callback Routes', () => {
       payload: {
         content: 'Hello from source thread',
         threadId: targetThread.id,
+        // F193 AC-A4: cross-post requires routing credentials (targetCats or line-start @)
+        targetCats: ['opus'],
       },
     });
 

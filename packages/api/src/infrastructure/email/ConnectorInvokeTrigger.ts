@@ -15,11 +15,14 @@ import { getDefaultCatId } from '../../config/cat-config-loader.js';
 import type { InvocationQueue } from '../../domains/cats/services/agents/invocation/InvocationQueue.js';
 import type { InvocationTracker } from '../../domains/cats/services/agents/invocation/InvocationTracker.js';
 import type { QueueProcessor } from '../../domains/cats/services/agents/invocation/QueueProcessor.js';
+import { stampVisibleTurn } from '../../domains/cats/services/agents/invocation/visible-turn.js';
 import type { AgentRouter } from '../../domains/cats/services/agents/routing/AgentRouter.js';
 import type { PersistenceContext } from '../../domains/cats/services/agents/routing/route-helpers.js';
 import type { IInvocationRecordStore } from '../../domains/cats/services/stores/ports/InvocationRecordStore.js';
+import type { IMessageStore } from '../../domains/cats/services/stores/ports/MessageStore.js';
 import { mergeTokenUsage, type TokenUsage } from '../../domains/cats/services/types.js';
 import type { SocketManager } from '../../infrastructure/websocket/index.js';
+import { emitQueueUpdated, enrichQueueEntries } from '../../utils/queue-enrichment.js';
 
 import type { OutboundDeliveryHook, ThreadMeta } from '../connectors/OutboundDeliveryHook.js';
 import type { StreamingOutboundHook } from '../connectors/StreamingOutboundHook.js';
@@ -38,6 +41,8 @@ export interface ConnectorInvokeTriggerOptions {
   readonly threadMetaLookup?: (threadId: string) => ThreadMeta | undefined | Promise<ThreadMeta | undefined>;
   /** Per-cat outbound deliver timeout in ms (default 10000). Prevents hanging deliver from blocking cleanup. */
   readonly deliverTimeoutMs?: number;
+  /** #706: MessageStore for queue enrichment (messagePreview in queue_updated SSE). */
+  readonly messageStore?: IMessageStore;
   readonly log: FastifyBaseLogger;
 }
 
@@ -47,9 +52,16 @@ export interface ConnectorTriggerPolicy {
   /** optional reason for diagnostics */
   readonly reason?: string;
   /** F175: origin category for visual grouping */
-  readonly sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a';
+  readonly sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'issue';
   /** F140 Phase C: hint which Skill to auto-load (not a hard constraint — cat can override) */
   readonly suggestedSkill?: string;
+  /**
+   * Optional queue coalescing key for connector bursts that supersede earlier queued work.
+   * Later hits reuse the first queued entry: messageIds are merged, but the original content/body stays in place.
+   * Once that entry is already processing, follow-up feedback gets a fresh queued wake-up.
+   * Queue metadata may still upgrade, e.g. normal COMMENTED feedback becoming urgent CHANGES_REQUESTED.
+   */
+  readonly coalesceKey?: string;
 }
 
 /**
@@ -89,7 +101,7 @@ export class ConnectorInvokeTrigger {
    * @param message   The connector message content (used as invocation trigger)
    * @param messageId The stored connector message ID (for InvocationRecord backfill)
    */
-  trigger(
+  async trigger(
     threadId: string,
     catId: CatId,
     userId: string,
@@ -98,7 +110,7 @@ export class ConnectorInvokeTrigger {
     contentBlocks?: readonly MessageContent[],
     policy?: ConnectorTriggerPolicy,
     sender?: { id: string; name?: string },
-  ): TriggerOutcome {
+  ): Promise<TriggerOutcome> {
     const { invocationTracker } = this.opts;
     const priority = policy?.priority ?? 'normal';
 
@@ -114,6 +126,7 @@ export class ConnectorInvokeTrigger {
         priority,
         policy?.sourceCategory,
         policy?.suggestedSkill,
+        policy?.coalesceKey,
       );
     }
 
@@ -130,6 +143,7 @@ export class ConnectorInvokeTrigger {
         priority,
         policy?.sourceCategory,
         policy?.suggestedSkill,
+        policy?.coalesceKey,
       );
     }
 
@@ -151,7 +165,7 @@ export class ConnectorInvokeTrigger {
     return 'dispatched';
   }
 
-  private enqueueWhileActive(
+  private async enqueueWhileActive(
     threadId: string,
     catId: CatId,
     userId: string,
@@ -161,7 +175,8 @@ export class ConnectorInvokeTrigger {
     priority: 'urgent' | 'normal' = 'normal',
     sourceCategory?: string,
     suggestedSkill?: string,
-  ): 'full' | 'enqueued' {
+    coalesceKey?: string,
+  ): Promise<'full' | 'enqueued'> {
     const { invocationQueue, socketManager, log } = this.opts;
 
     if (invocationQueue.hasEntryWithMessageId(threadId, messageId)) {
@@ -176,23 +191,33 @@ export class ConnectorInvokeTrigger {
       threadId,
       userId,
       content: message,
+      ...(coalesceKey
+        ? {
+            idempotencyKey: `connector:${sourceCategory ?? 'generic'}:${coalesceKey}`,
+            dedupeProcessing: false,
+          }
+        : {}),
       source: 'connector',
       targetCats: [catId],
       intent: 'execute',
       priority,
       ...(sourceCategory
-        ? { sourceCategory: sourceCategory as 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' }
+        ? { sourceCategory: sourceCategory as 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'issue' }
         : {}),
       ...(sender ? { senderMeta: sender } : {}),
       ...(suggestedSkill ? { suggestedSkill } : {}),
     });
 
     if (result.outcome === 'full') {
+      const fullQueue = await enrichQueueEntries(
+        invocationQueue.list(threadId, userId),
+        this.opts.messageStore ?? null,
+      );
       socketManager.emitToUser(userId, 'queue_full_warning', {
         threadId,
         source: 'connector',
         queueSize: invocationQueue.size(threadId, userId),
-        queue: invocationQueue.list(threadId, userId),
+        queue: fullQueue,
       });
       socketManager.broadcastAgentMessage(
         {
@@ -211,11 +236,14 @@ export class ConnectorInvokeTrigger {
       invocationQueue.backfillMessageId(threadId, userId, result.entry.id, messageId);
     }
 
-    socketManager.emitToUser(userId, 'queue_updated', {
+    await emitQueueUpdated(
+      socketManager,
+      userId,
       threadId,
-      queue: invocationQueue.list(threadId, userId),
-      action: result.outcome,
-    });
+      invocationQueue.list(threadId, userId),
+      this.opts.messageStore ?? null,
+      result.outcome,
+    );
     log.info(
       { threadId, catId, outcome: result.outcome },
       '[ConnectorInvokeTrigger] Queued (active invocation running)',
@@ -345,12 +373,15 @@ export class ConnectorInvokeTrigger {
       for await (const msg of router.routeExecution(userId, message, threadId, messageId, targetCats, intent, {
         ...(contentBlocks ? { contentBlocks } : {}),
         ...(controller?.signal ? { signal: controller.signal } : {}),
-        queueHasQueuedMessages: (tid: string) => invocationQueue.hasQueuedUserMessagesForThread(tid),
+        queueHasQueuedMessages: (tid: string) => invocationQueue.hasQueuedNonAgentForThread(tid),
+        deferA2AEnqueue: (e) => invocationQueue.enqueue(e as any),
         hasQueuedOrActiveAgentForCat: (tid: string, catId: string) =>
           invocationQueue.hasActiveOrQueuedAgentForCat(tid, catId),
         cursorBoundaries,
         persistenceContext,
         parentInvocationId: createResult.invocationId,
+        // F222 P1: Connector-triggered execution is not user-origin — suppress frustration detection
+        frustrationAutoIssueEligible: false,
       })) {
         // #768: Broadcast intent_mode on first CLI event — proves CLI is alive.
         if (!intentModeBroadcast) {
@@ -439,7 +470,11 @@ export class ConnectorInvokeTrigger {
             });
           }
         }
-        socketManager.broadcastAgentMessage({ ...msg, invocationId: createResult.invocationId }, threadId);
+        // F194 Phase Z9 (砚砚 R1 P1-2): unified visible turn stamp via helper.
+        socketManager.broadcastAgentMessage(
+          { ...msg, ...stampVisibleTurn(createResult.invocationId, msg.invocationId) },
+          threadId,
+        );
       }
 
       // ⑤ Finalize: abort guard → persistence check → ack + succeeded

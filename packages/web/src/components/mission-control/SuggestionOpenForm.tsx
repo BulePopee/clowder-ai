@@ -42,7 +42,7 @@ export function SuggestionOpenForm({
 }: SuggestionOpenFormProps) {
   return (
     <form
-      className="mt-4 space-y-3"
+      className="mt-4 space-y-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (!catId || !why.trim() || !plan.trim()) return;
@@ -55,12 +55,12 @@ export function SuggestionOpenForm({
         });
       }}
     >
-      <div>
-        <p className="text-xs font-semibold text-cafe">建议领取猫猫</p>
+      <label className="block text-xs font-medium text-cafe-secondary">
+        建议领取猫猫
         <select
           value={catId}
           onChange={(event) => onCatIdChange(event.target.value)}
-          className="console-form-input mt-1.5 text-xs"
+          className="mt-1 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe focus:outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-suggest-cat"
         >
           {catOptions.map((option) => (
@@ -69,29 +69,29 @@ export function SuggestionOpenForm({
             </option>
           ))}
         </select>
-      </div>
-      <div>
-        <p className="text-xs font-semibold text-cafe">Why</p>
+      </label>
+      <label className="block text-xs font-medium text-cafe-secondary">
+        Why
         <textarea
           value={why}
           onChange={(event) => onWhyChange(event.target.value)}
-          className="console-form-input mt-1.5 h-16 w-full text-xs"
+          className="mt-1 h-16 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe focus:outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-suggest-why"
         />
-      </div>
-      <div>
-        <p className="text-xs font-semibold text-cafe">Plan</p>
+      </label>
+      <label className="block text-xs font-medium text-cafe-secondary">
+        Plan
         <textarea
           value={plan}
           onChange={(event) => onPlanChange(event.target.value)}
-          className="console-form-input mt-1.5 h-16 w-full text-xs"
+          className="mt-1 h-16 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1.5 text-xs text-cafe focus:outline-none focus:ring-1 focus:ring-cafe-accent"
           data-testid="mc-suggest-plan"
         />
-      </div>
+      </label>
       <button
         type="submit"
         disabled={submitting || catOptions.length === 0}
-        className="console-button-primary w-full disabled:opacity-40"
+        className="w-full rounded-lg bg-[var(--cafe-text)] px-3 py-2 text-xs font-semibold text-[var(--cafe-surface)] disabled:opacity-40"
         data-testid="mc-suggest-submit"
       >
         提交建议领取

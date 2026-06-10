@@ -120,18 +120,16 @@ function SelectInteraction({
             className={`w-full text-left px-4 py-3 rounded-xl border-[1.5px] text-sm transition-all flex items-center gap-2.5
               ${
                 isSelected
-                  ? 'border-conn-amber-ring bg-conn-amber-bg'
+                  ? 'border-conn-amber-ring bg-conn-amber-bg '
                   : disabled
-                    ? 'border-[var(--console-border-soft)] opacity-50 cursor-not-allowed'
-                    : 'border-[var(--console-border-soft)] hover:border-conn-amber-ring hover:bg-conn-amber-bg/50 cursor-pointer'
+                    ? 'border-cafe opacity-50 cursor-not-allowed'
+                    : 'border-cafe hover:border-conn-amber-ring hover:bg-conn-amber-bg/50 cursor-pointer'
               }`}
           >
             <OptionIcon opt={opt} />
             <div className="flex-1 min-w-0">
               <span className={`font-semibold ${isSelected ? 'text-conn-amber-text' : ''}`}>{opt.label}</span>
-              {opt.description && (
-                <span className="block text-xs text-cafe-secondary dark:text-cafe-muted mt-0.5">{opt.description}</span>
-              )}
+              {opt.description && <span className="block text-xs text-cafe-secondary mt-0.5">{opt.description}</span>}
             </div>
             {isSelected && (
               <svg
@@ -162,7 +160,7 @@ function SelectInteraction({
               if (e.key === 'Enter' && !ime.isComposing() && customText.trim()) handleSubmit();
             }}
             placeholder={pendingOpt?.customInputPlaceholder ?? '输入你的想法...'}
-            className="w-full px-4 py-2.5 rounded-xl border-[1.5px] border-conn-amber-ring bg-cafe-surface dark:bg-cafe-surface-sunken text-sm focus:outline-none focus:border-conn-amber-ring focus:ring-1 focus:ring-conn-amber-ring/30 placeholder:text-cafe-muted"
+            className="w-full px-4 py-2.5 rounded-xl border-[1.5px] border-conn-amber-ring bg-cafe-surface text-sm focus:outline-none focus:border-conn-amber-ring focus:ring-1 focus:ring-conn-amber-ring/30 placeholder:text-cafe-muted"
           />
         </div>
       )}
@@ -174,8 +172,8 @@ function SelectInteraction({
           className={`mt-2 w-full py-2.5 rounded-full text-sm font-semibold transition-colors flex items-center justify-center gap-1.5
             ${
               showCustomInput && !customText.trim()
-                ? 'bg-[var(--console-pill-bg)] text-cafe-muted cursor-not-allowed'
-                : 'bg-conn-amber-text text-[var(--cafe-surface)] hover:opacity-90'
+                ? 'bg-cafe-surface-elevated -elevated text-cafe-muted cursor-not-allowed'
+                : 'bg-[var(--semantic-warning)] text-[var(--cafe-surface)] hover:opacity-90'
             }`}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -231,16 +229,12 @@ function MultiSelectInteraction({
             disabled={disabled}
             onClick={() => toggle(opt.id)}
             className={`flex items-center gap-2.5 w-full px-4 py-3 rounded-xl border-[1.5px] text-sm transition-all text-left
-              ${
-                isChecked
-                  ? 'border-conn-amber-ring bg-conn-amber-bg'
-                  : 'border-[var(--console-border-soft)] hover:border-conn-amber-ring'
-              }
+              ${isChecked ? 'border-conn-amber-ring bg-conn-amber-bg ' : 'border-cafe hover:border-conn-amber-ring'}
               ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <span
               className={`shrink-0 w-5 h-5 rounded-md flex items-center justify-center transition-colors ${
-                isChecked ? 'bg-conn-amber-text' : 'border-[1.5px] border-[var(--console-border-soft)]'
+                isChecked ? 'bg-[var(--semantic-warning)]' : 'border-[1.5px] border-cafe'
               }`}
             >
               {isChecked && (
@@ -264,7 +258,7 @@ function MultiSelectInteraction({
         <button
           type="button"
           onClick={() => onSelect([...checked])}
-          className="mt-2 w-full py-2.5 bg-conn-amber-text text-[var(--cafe-surface)] rounded-full text-sm font-semibold hover:opacity-90 transition-colors flex items-center justify-center gap-1.5"
+          className="mt-2 w-full py-2.5 bg-[var(--semantic-warning)] text-[var(--cafe-surface)] rounded-full text-sm font-semibold hover:opacity-90 transition-colors flex items-center justify-center gap-1.5"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -368,8 +362,8 @@ function CardGridInteraction({
                         : isHighlighted
                           ? 'border-conn-amber-ring bg-conn-amber-bg/80 scale-105'
                           : disabled
-                            ? 'border-[var(--console-border-soft)] opacity-50 cursor-not-allowed'
-                            : 'border-[var(--console-border-soft)] bg-[var(--console-card-bg)] hover:border-conn-amber-ring hover:shadow-sm cursor-pointer'
+                            ? 'border-cafe opacity-50 cursor-not-allowed'
+                            : 'border-cafe bg-cafe-surface-elevated hover:border-conn-amber-ring hover:shadow-sm cursor-pointer'
                     }`}
                 >
                   {(opt.icon || opt.emoji) && (
@@ -380,9 +374,7 @@ function CardGridInteraction({
                   <div className={`font-semibold ${isSelected || isPending ? 'text-conn-amber-text' : ''}`}>
                     {opt.label}
                   </div>
-                  {opt.description && (
-                    <div className="text-xs text-cafe-secondary dark:text-cafe-muted mt-0.5">{opt.description}</div>
-                  )}
+                  {opt.description && <div className="text-xs text-cafe-secondary mt-0.5">{opt.description}</div>}
                 </button>
               );
             })}
@@ -395,7 +387,7 @@ function CardGridInteraction({
             <button
               type="button"
               onClick={handleRandom}
-              className="px-4 py-1.5 bg-gradient-to-r from-[var(--cafe-accent)] to-[var(--cafe-accent-hover)] text-[var(--cafe-surface)] rounded-lg text-sm hover:from-[var(--cafe-accent-hover)] hover:to-[var(--cafe-accent)] transition-all"
+              className="px-4 py-1.5 bg-gradient-to-r from-[var(--semantic-warning)] to-[var(--semantic-warning)] text-[var(--cafe-surface)] rounded-lg text-sm hover:from-[var(--semantic-warning)] hover:to-[var(--semantic-warning)] transition-all"
             >
               <CafeIcon name="shuffle" className="w-4 h-4 inline-block" /> 随机抽
             </button>
@@ -404,7 +396,7 @@ function CardGridInteraction({
             <button
               type="button"
               onClick={handleSubmit}
-              className="flex-1 py-2.5 bg-conn-amber-text text-[var(--cafe-surface)] rounded-full text-sm font-semibold hover:opacity-90 transition-colors flex items-center justify-center gap-1.5"
+              className="flex-1 py-2.5 bg-[var(--semantic-warning)] text-[var(--cafe-surface)] rounded-full text-sm font-semibold hover:opacity-90 transition-colors flex items-center justify-center gap-1.5"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -455,12 +447,12 @@ function ConfirmInteraction({
         className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all border-[1.5px] flex items-center justify-center gap-1.5
           ${
             selectedId === '__cancel__'
-              ? 'bg-conn-red-bg border-conn-red-ring text-conn-red-text'
+              ? 'bg-conn-red-bg border-conn-red-ring text-conn-red-text -text'
               : disabled && selectedId
-                ? 'bg-[var(--console-card-bg)] border-[var(--console-border-soft)] text-cafe-muted opacity-50 cursor-not-allowed'
+                ? 'bg-cafe-surface-elevated border-cafe text-cafe-muted opacity-50 cursor-not-allowed'
                 : disabled
-                  ? 'bg-[var(--console-card-bg)] border-[var(--console-border-soft)] text-cafe-muted cursor-not-allowed'
-                  : 'bg-conn-red-bg/50 border-conn-red-ring/50 text-conn-red-text hover:bg-conn-red-bg hover:border-conn-red-ring cursor-pointer'
+                  ? 'bg-cafe-surface-elevated border-cafe text-cafe-muted cursor-not-allowed'
+                  : 'bg-conn-red-bg/50 border-conn-red-ring text-conn-red-text hover:bg-conn-red-bg hover:border-conn-red-ring cursor-pointer'
           }`}
       >
         {selectedId !== '__cancel__' && (
@@ -477,12 +469,12 @@ function ConfirmInteraction({
         className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all border-[1.5px] flex items-center justify-center gap-1.5
           ${
             selectedId === '__confirm__'
-              ? 'bg-conn-emerald-bg border-conn-emerald-ring text-conn-emerald-text'
+              ? 'bg-conn-green-bg border-conn-green-ring text-conn-green-text '
               : disabled && selectedId
-                ? 'bg-[var(--console-card-bg)] border-[var(--console-border-soft)] text-cafe-muted opacity-50 cursor-not-allowed'
+                ? 'bg-cafe-surface-elevated border-cafe text-cafe-muted opacity-50 cursor-not-allowed'
                 : disabled
-                  ? 'bg-[var(--console-card-bg)] border-[var(--console-border-soft)] text-cafe-muted cursor-not-allowed'
-                  : 'bg-conn-emerald-bg/50 border-conn-emerald-ring/50 text-conn-emerald-text hover:bg-conn-emerald-bg hover:border-conn-emerald-ring cursor-pointer'
+                  ? 'bg-cafe-surface-elevated border-cafe text-cafe-muted cursor-not-allowed'
+                  : 'bg-conn-green-bg/50 border-conn-green-ring text-conn-green-text hover:bg-conn-green-bg hover:border-conn-green-ring cursor-pointer'
           }`}
       >
         {selectedId !== '__confirm__' && (
@@ -626,11 +618,9 @@ export function InteractiveBlock({
   );
 
   return (
-    <div className="rounded-2xl border border-[var(--console-border-soft)] p-4">
+    <div className="rounded-2xl border border-cafe p-4">
       {block.title && <div className="font-semibold text-sm mb-1">{block.title}</div>}
-      {block.description && (
-        <div className="text-xs text-cafe-secondary dark:text-cafe-muted mb-3">{block.description}</div>
-      )}
+      {block.description && <div className="text-xs text-cafe-secondary mb-3">{block.description}</div>}
       {block.interactiveType === 'select' && (
         <SelectInteraction
           options={block.options}

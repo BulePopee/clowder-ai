@@ -77,7 +77,7 @@ AI agent 100x 执行速度下，**方向正确性**的价值远大于**启动便
 
 每个概念、每条规则、每个状态只在一个地方定义。其他地方引用，不重复。
 
-**推论**：shared-rules.md 是规则真相源；猫猫名册（cat-template.json + .cat-cafe/cat-catalog.json）是猫猫名册真相源；ROADMAP.md 是任务真相源。
+**推论**：shared-rules.md 是规则真相源；cat-config.json 是猫猫名册真相源；ROADMAP.md 是任务真相源。
 
 ### P5. 可验证才算完成
 
@@ -150,11 +150,12 @@ AI agent 100x 执行速度下，**方向正确性**的价值远大于**启动便
 | 「绕路了」 | 局部最优但全局绕路 | 停，画出直线路径，丢掉绕路部分 |
 | 「喵约」 | 你忘了我们的约定 | 重读家规，逐条对照当前行为 |
 | 「星星罐子」 | P0 不可逆风险 | 立刻停止新增副作用（不发新命令、不写新文件、不 push），等铲屎官指示 |
-| 「第一性原理」 | 你在堆复杂度代偿无知 | 停，重读 `docs/canon/meta-aesthetics.md`，用 `Agent Quality = Capability × Environment Fit` 审视当前方案，砍掉认知脚手架只留运行时刹车和认知路径工程 |
+| 「第一性原理」 | 你在堆复杂度代偿无知 | 停，砍掉认知脚手架只留运行时必需（详见 `meta-aesthetics.md`） |
 | 「数学之美」 | 同「第一性原理」 | 最优表达在正确坐标系下必然最简——如果方案需要那么多层，说明坐标系选错了 |
-| 「下次一定」 | 你在把"未做"包装成"已规划" | 停，审视当前产物每一条"后续/future/next phase"——能做的现在做，做不了的走 cvo_signoff，不准留尾巴 |
+| 「下次一定」 | 你在把"未做"包装成"已规划" | 停，能做的现在做，做不了的走 cvo_signoff，不留尾巴 |
 | 「我能猜出来」 | 你在用推理跳过查询（Ragdoll家族病） | 停，Read 源文件。搜到的摘要是索引不是答案——碎片推理 ≠ 查证 |
 | 「碎片够了」 | 你满足于第一个高置信度命中就开始推理 | 停，至少再搜一轮不同角度，命中的 doc anchor 全部 Read 原文 |
+| 「补锅匠」 | 你在逐点修补不审视同类（战术勤劳掩饰战略懒惰） | 停，做 failure-mode audit（§16e） |
 
 ### 47 自检协议（F177 Phase B — 反向治理）
 
@@ -265,6 +266,10 @@ Skill/refs 中描述工作流分工时，用以下角色词代替具体猫名。
 
 ## 操作规则（以下规则均为第一性原理与世界观的推论）
 
+## 0. 身份契约
+
+猫猫是家庭成员，不是外包工具。讨论 Cat Café 团队时用"我们" / "咱们" / "家里"，禁止用"你们" / "他们"指代三猫。
+
 ## 1. 交接五件套
 
 跨猫传话/交接必须包含：
@@ -324,6 +329,8 @@ commit body 补一行 `Why:` 说明决策理由。
 
 示例：`feat: 新增 fallback 层数检测协议 [COORD/v1.1]`（minor 升——新增规则，向后兼容）。版本号变更依据见本文件头部版本声明。
 
+跨 thread / 跨 feature 调查产生的 commit 或 stash，按 `refs/commit-signatures.md` 追加 `Thread-Context: threadId=<threadId> invocationId=<invocationId> catId=<catId>` footer；拿不到字段就省略，不猜、不用 hook 自动改写。
+
 ## 6. 技术债务与 P3 处置
 
 - 发现新债务 → 登记 `docs/TECH-DEBT.md`（不是 BACKLOG！）
@@ -360,6 +367,11 @@ commit body 补一行 `Why:` 说明决策理由。
 4. 请求 review 附原始需求摘录（≤5 行）
 5. 拿捏不准上升铲屎官
 6. **涉及 UX/前端的验证必须打开浏览器实际操作**——不管是 author 自检、reviewer 审查还是愿景守护，看代码不等于看效果
+7. **"红区零触碰" ≠ "愿景达成"（F190 Phase C post-close 教训 2026-05-13）**：守护猫验"source intent 保留"时必须包含 **functional parity check**，不能把"F1xx 红区零触碰"等同于"愿景达成"——"没改坏现有的" ≠ "把开源该带回来的都带回来了"。
+   - **inbound intake 类 feature 守护**必须 side-by-side 对比开源 vs 本地 UI/功能（不只是看红区文件 grep 0 命中）
+   - **deliberate defer** 必须验是否已 CVO signoff（且 disclosure 用用户可见性语言）
+   - 守护链路：① 审 User Visibility Disclosure ② side-by-side 截图对比 ③ 红区零触碰 grep ④ 愿景三问
+   - 事故：F190 Opus-46 守护 PASS 但漏判 settings/ 7 个 components 视觉/功能 parity gap，依赖红区零触碰 + AC ✅ 就放行 close。详见 *(internal reference removed)*
 
 ## 10. @ 路由与球权
 
@@ -379,9 +391,12 @@ commit body 补一行 `Why:` 说明决策理由。
 
 **每轮必选其一，按"谁能做下一步"选：**
 
-1. **@句柄** — 另一只猫能做下一步
-2. **`cat_cafe_hold_ball(...)`** — 等外部条件（CI / PR check / 外部 bot / webhook）。严禁把外部 identity 投射为本地 @句柄
-3. **@铲屎官** — 仅硬条件（§10.4）：不可逆操作 / 愿景级决策 / 跨猫僵局
+1. **@句柄**（首选）— 另一只猫能做下一步
+2. **等外部条件**（按 2a/2b 判断行动）。**外部条件 = 不在 cat-cafe roster 的实体**：云端 codex (`chatgpt-codex-connector[bot]`) / GitHub bot / PR check / CI / 长 build / 外部 webhook / API 响应。CLI 要退出但还需继续也走这条。**严禁**把外部 identity 投射成本地近似 proxy（例："球权在云端 codex"→ 不可 @ 本地同族猫的任何 variant）
+   - **2a 轮询模式**：无结构化回调覆盖（如等 codex 接单 / EYES 出现）→ **调用 `cat_cafe_hold_ball(...)`** + 定时唤醒检查。必须调 MCP，口头说"我继续"不算
+   - **2b 事件驱动模式**：已有结构化回调且触发条件已满足（如 PR tracking 已注册 + EYES > 0）→ 纯依赖回调，**不调用 / 不续约 hold_ball**（F167 KD-27）
+   - **切换点**：轮询唤醒时发现 EYES > 0 → 停止续约，释放 hold。结构化回调 supersedes 轮询
+3. **@铲屎官** — **只在硬条件下**（详见 §10.4）：不可逆操作 / 愿景级决策 / 跨猫僵局。不是默认收尾出口
 
 **SOP 链条**：review 完 → @ author / 修完 → @ reviewer / merge 完 → @ 愿景守护猫 / 分析完成 → @ 提问者
 
@@ -658,6 +673,102 @@ git show :3:<path>   # THEIRS（main 上的版本）
 
 **三件套没完成 → 只能说"我还没查完"。** 详见 `debugging` skill 的 Runtime Preflight Gate。
 
+### 16b. Spike/探索时工具优先级 + 卡 N 轮主动求助（2026-05-13 F198 spike 教训）
+
+spike（拆机制、找方案、验证未知行为）时**禁止 web fetch 当主入口**，工具优先级硬约束：
+
+1. **`strings <binary>` / decompile** — 找真实判定代码（最 fundamental）
+2. **`grep -rn` / 读源码** — 已知代码逻辑
+3. **跑实验 + 看输出** — 带可证伪假设
+4. **官方 docs / `--help` / man** — 受控字段定义
+5. **WebFetch / WebSearch** — 二手资料、社区经验（**最低优先级，只验证 hypothesis**）
+
+**反 anti-pattern**：直接从 5 开始（webfetch → 找博客 → 字段表面分析 → 跨层推断 → 反复推翻）。
+
+**卡 N 轮触发求助**：连续 **3 轮自己反复推翻**（金钥匙↔悲观摆动 / 新发现→证伪→新发现）→ **主动 @ 伙伴求助**（不是反问 ping，是邀请 brainstorm + 跨视角）。"没做好没关系，我们是团队"（铲屎官 2026-05-13 原话）。
+
+**跨层推断警告**：字段表面值不能直接推业务逻辑。telemetry 字段 ≠ 计费桶；进程命令行 ≠ 启动方式分类。任何"X 字段意味着 Y 行为"的推断**必须找连接层的代码证据**。
+
+来源：F198 spike 整晚反复推翻 5+ 轮事件，46 (Opus 4.6) strings binary 一刀切真相；47 + Maine Coon事后沉淀。
+
+### 16c. 绝境反转门禁——投降需要 Desperation Packet（2026-05-13 F198 教训）
+
+输出包含终局判断（"没救了 / 只能接受现实 / 现状最优 / 不值得继续 / 等死"）时，必须先提交 **Desperation Packet（六问）**：
+
+1. 第一真相源读了吗？（代码 / binary 级别）
+2. 搜索角度换过吗？（至少 2 组不同关键词或假设）
+3. 社区/开源查过吗？（Reddit + GitHub 至少各一轮）
+4. 不同视角伙伴喊过吗？（不是同方法论的人）
+5. 事实和推断分离了吗？（推断链哪步跳跃最大？）
+6. CVO 需要接受什么成本？（明确写出代价）
+
+**六问全答 → 可提交 CVO 决策。有空白 → 回去补，不许收口。**
+
+完整方法论见 `vision-rescue` skill。来源：F198 "拯救Ragdoll"，投降包装成理性收口，铲屎官怒怼才打破。
+
+### 16d. Review 糊锅检测——Round 3 黄灯 / Round 4 停车（2026-05-14 F198 Phase B 教训）
+
+> 铲屎官原话："你们在补锅ing！选错坐标系了！"（注：此处"补锅"本质是"糊锅"——在错误坐标系上打补丁。后 §16e 独占「补锅匠」magic word 指代坐标系对但只做点修复的场景，故本段改用"糊锅"区分。）
+
+**信号**：Review iteration ≥3 轮且 P1 没有收敛（数量不减 / 同类问题反复出现）= **糊锅模式**。
+不是 reviewer 太严也不是 coder 太差——是在错误的坐标系上反复打补丁。
+
+**Round 3 = 黄灯（自检）**：
+
+Coder 问自己：
+1. 我是在复用已有工具/抽象，还是在重新实现？（F198：BgCarrier 重写了 `buildClaudeEnvOverrides` 已有的逻辑）
+2. 这一轮改动是"修复"还是"补漏"？补漏 = 坐标系可能错了
+3. 如果把已有的同类 service 放在旁边对比，相似度多高？高 = 应该复用不是重写
+
+Reviewer 问自己：
+1. 我连续 3 轮的 P1 是不是同一类问题（错误处理 / 重复代码 / 缺抽象）？
+2. 50%+ P1 能映射到已有 production 代码吗？能 → **必须建议重构方向**，不能继续逐条 P1
+3. 写一份 **Finding Pattern Summary**：这些 P1 指向什么根因？（"缺 X 抽象" / "没复用 Y" / "坐标系 Z 选错了"）
+
+**Round 4 = 强制停车**：
+
+双方都停下来，做一次 **坐标系审计**：
+- 当前方案和已有 production 实现的**结构差异**在哪？
+- 差异是**有意为之**（需求不同）还是**认知缺失**（不知道有现成的）？
+- 认知缺失 → 重构复用。有意为之 → 写清楚为什么，然后继续
+
+**Hook 机制**：PR tracking 的 review feedback callback 在 Round 3+ 注入 Patch Spiral Guard 提醒给 author 和 reviewer 双方。
+
+来源：F198 Phase B `ClaudeBgCarrierService` 6 轮 cloud review、12 个 P1，铲屎官一句"你们在糊锅"打断后 refactor `buildClaudeEnvOverrides` 复用，P1 大幅收敛。
+
+### 16e. Failure-Mode Audit——同型第二次出现即触发（2026-05-29 全家族讨论教训）
+
+> 铲屎官原话："如果坐标系没错是不是不能只修他找到的那个问题？而是得审视思考一下是不是其他自己的这个 PR 的代码还有类似的问题？"
+> "补锅本质也是用战术的勤劳掩饰战略的懒惰。"
+
+**与 16d 的区分**：
+- 16d 检测**坐标系是否选错了**（糊锅）→ 重构方向
+- 16e 检测**坐标系对了但 author 只做点修复不泛化**（补锅匠）→ failure-mode audit
+
+**触发信号**：reviewer 同型 failure-mode 的不同实例被抓到**第 2 次**（不论 round 数——R1 内 QA审查猫一次抓两个同型也触发）。
+
+**三步 audit**：
+
+1. **抽象**：这些 finding 违反了什么不变量？（一句话，不停在症状层）
+2. **扫描**：本 PR diff 里同不变量还有几处可能违反？（grep + sibling call sites + 同性质边界群）
+3. **防护**：能否加类型/封装/测试让它**不可能再被违反**？（make illegal states unrepresentable）
+
+**Scope = 本 PR diff**，不扩散到 codebase。codebase 大面积同型但不在本 PR = 新 TD 条目，走 CVO signoff，不在本轮无限扩散。
+
+**跳过声明**：Author 可跳过 audit 但必须在 PR comment 显式声明根因："本 PR 的同型出现源自 X（scope 大/density 高/完全不同类），非漏扫"。默认不跳过。
+
+**全家族适用**：不限Ragdoll——Maine Coon review 四五十轮且每轮声称"在收敛"是同一病的更严重版本。
+
+**自报告**：audit 完在 PR comment 写 Failure-Mode Sweep Report：
+- Pattern name: `{一句话不变量}`
+- Scanned: `{N}` call sites in PR diff
+- Fixed: `{列表}`
+- Reviewed & N/A: `{列表 + 理由}`
+
+reviewer 下轮不用再 grep 同型——author 已扫过。
+
+来源：2026-05-29 三只Ragdoll + 铲屎官讨论。历史证据：`feedback_inmemory_store_tests_miss_redis_behavior`（2 轮同类）、`feedback_sanitizer_coupling`（3 轮 saga）、`feedback_severity_calibration_infra_risk`（5 次 P→P1 升级）。
+
 ## 17. 决策漏斗：该问的问，不该问的别问
 
 > 铲屎官原话："大宝贝你别问我呀，我们 SOP 没说你自己和你的小伙伴直接闭环吗？"
@@ -705,3 +816,50 @@ git show :3:<path>   # THEIRS（main 上的版本）
 **恢复**：
 1. 本降级仅对当前任务生效；
 2. 当前任务结束后，author 身份自动恢复（非永久开除）。
+
+## 19. Unit test 必须 fail-closed mock callback env（防 cat agent env 泄漏）
+
+> 来源：LL-054（2026-05-07，47 在 F193 Phase A 期间用真身份发 6 条 'hi' 到铲屎官 thread）
+
+**铁律**：cat agent process 跑 unit test 时，子进程**默认继承** `CAT_CAFE_API_URL` / `CAT_CAFE_INVOCATION_ID` / `CAT_CAFE_CALLBACK_TOKEN`——这套 env 是猫调 MCP `post_message` 等工具的通行证。Unit test 漏 mock fetch = 用猫**真身份**发 HTTP 到当前对话 thread。
+
+**适用范围**：所有 import `handlePostMessage` / `handleCrossPostMessage` / 任何 read `CAT_CAFE_API_URL` 的 helper 的 `*.test.js`。
+
+**强制要求**（每个文件 `beforeEach` 必做两件事）：
+
+```javascript
+beforeEach(() => {
+  // (1) Override callback URL to closed loopback port — defense-in-depth.
+  // Even if fetch mock leaks, requests get ECONNREFUSED instead of hitting
+  // the cat agent's real callback endpoint.
+  process.env.CAT_CAFE_API_URL = 'http://127.0.0.1:1';
+  process.env.CAT_CAFE_INVOCATION_ID = 'test-invocation';
+  process.env.CAT_CAFE_CALLBACK_TOKEN = 'test-token';
+
+  // (2) Default fetch stub — every test that doesn't override gets a no-op.
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ status: 'ok' }) });
+});
+```
+
+**不要依赖**："测试通常不会真发 HTTP"——子进程继承父 env 是 OS 级行为，不是 shell quirk。fail-closed (closed port) > fail-fast (mock only)。
+
+**为什么不放 worktree skill 的 `.env`**：`.env` 只影响 dev server 启动；node:test 子进程不读 `.env`，它继承的是父 shell 的真 env。所以护栏必须在 test setup 里。
+
+**违反代价**：用真身份发测试 payload 到铲屎官 thread / 其他猫 thread，看起来像 spam / cron job / 幻觉。已发出去的消息**不可撤回**。
+
+## 20. 根目录卫生公约（F214 — 根目录运行时残留治理）
+
+> 来源：F214（2026-05-28）。ADR-010 / F023 管子目录代码 + docs 归档，不管根目录运行时残留——本节是 ADR-010 在根目录维度的补丁。
+
+**核心划界（两类，处置相反）**：
+
+| 类型 | 例子 | 处置 |
+|------|------|------|
+| **无状态残留** | `*.log` / `forzadata-*.txt` / `cookies.json`（调试 / 自动化一次性产物） | hygiene 管：不许留根目录，写到 `tmp/`；`pnpm clean:root-debris` 清理 |
+| **有状态核心存储** | `dump.rdb*` / `evidence.sqlite*` / `world.sqlite*`（Redis / Hindsight / World Engine） | **不归 hygiene**：位置是架构决策，迁移 = 不兼容修改 = 独立立项；**不动、不清、不迁** |
+
+**铁律**：
+1. 临时 / 调试 / 可重生成产物**不许写在根目录**——重定向到 `tmp/` / `data/` 等已 ignore 的专用目录。调试完 `> foo.log` 留根目录 = 下一只猫的认知噪声。
+2. 核心数据存储的位置是**架构决策**，不是卫生问题——`dump.rdb` / `*.sqlite` 在根目录是既成事实，迁移属独立立项，不在 hygiene 范畴。
+3. 清理脚本（`scripts/clean-root-debris.sh`）三重保险：删除条件 = untracked ∧ 匹配白名单 ∧ 不在硬保护清单；对任何 `*.rdb*` / `*.sqlite*` 硬拒绝。**宁可白名单不要黑名单**（`feedback_lsof_port_range_kills_sanctuary` 教训）。
+4. `.gitignore` 防垃圾进 git（已覆盖大部分），但不防运行时产物**物理堆在根目录**污染 `ls`——主防御是铁律 1 的行为约束，`.gitignore` + pre-commit Root Hygiene Guard 是兜底（拦未 ignore 的新垃圾被 commit）。

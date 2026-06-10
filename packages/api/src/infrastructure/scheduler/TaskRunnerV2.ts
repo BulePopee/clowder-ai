@@ -1,4 +1,4 @@
-import { getNextCronMs } from './cron-utils.js';
+import { computeNextCronSlot } from './cron-utils.js';
 import type { DynamicTaskDef, DynamicTaskStore } from './DynamicTaskStore.js';
 import { executeTaskPipeline } from './execute-pipeline.js';
 import type { RunLedger } from './RunLedger.js';
@@ -37,6 +37,14 @@ export interface TaskRunnerV2Options {
   notifyLifecycle?: ScheduleLifecycleNotifier;
   /** #415: dynamic task store — needed for once-trigger auto-retirement */
   dynamicTaskStore?: DynamicTaskStore;
+  /**
+   * F167 Phase M: busy checker for pre-fire defer. When a task with
+   * firePolicy.deferWhileThreadBusy fires while its thread is busy, the scheduler
+   * re-arms instead of executing. Mechanical occupancy only — NOT structured
+   * callback subject binding (KD-27 safe). Late-bind via setBusyChecker() when the
+   * invocationTracker/queueProcessor are constructed after the runner.
+   */
+  isThreadBusy?: (threadId: string) => boolean;
 }
 
 /** Phase 2.5: Compute human-readable subject preview from subjectKind + lastRun (AC-E2) */
@@ -65,6 +73,11 @@ export function computeSubjectPreview(
       if (key.startsWith('repo:')) return key.slice(5);
       return null;
     }
+    case 'issue': {
+      // F202 Phase 2D: issue tracking uses `issue:owner/repo#N` format
+      if (key.startsWith('issue:')) return key.slice(6);
+      return null;
+    }
     case 'external': {
       return key;
     }
@@ -86,6 +99,14 @@ export class TaskRunnerV2 {
   private running = new Map<string, boolean>();
   private tickCounts = new Map<string, number>();
   private lastRunAt = new Map<string, number | null>();
+  /**
+   * F167 verdict 2026-05-29 (vhp_eval_a2a_2026_05_29T03_11_28Z_double_cron_fire):
+   * epoch-ms of the most recent cron slot already fired per task. Used by
+   * scheduleCronTick() to skip past slots whose tick was already triggered —
+   * prevents the boundary race where setTimeout drift fires the same cron slot
+   * twice via the `.finally` reschedule path.
+   */
+  private cronSlotFired = new Map<string, number>();
   /** Phase 3A: track dynamic task IDs → DynamicTaskDef.id mapping */
   private dynamicTaskIds = new Map<string, string>();
   /** True after start() has been called — used to auto-schedule late-registered tasks */
@@ -100,6 +121,10 @@ export class TaskRunnerV2 {
   private invokeTrigger: TaskRunnerV2Options['invokeTrigger'];
   private notifyLifecycle: TaskRunnerV2Options['notifyLifecycle'];
   private dynamicTaskStore: TaskRunnerV2Options['dynamicTaskStore'];
+  /** F167 Phase M: busy checker for pre-fire defer (queueProcessor.isThreadBusy() || invocationTracker.has()) */
+  private isThreadBusy: TaskRunnerV2Options['isThreadBusy'];
+  /** F167 Phase M: per-task consecutive defer counter (reset on fire) */
+  private deferCounts = new Map<string, number>();
 
   constructor(opts: TaskRunnerV2Options) {
     this.logger = opts.logger;
@@ -112,11 +137,17 @@ export class TaskRunnerV2 {
     this.invokeTrigger = opts.invokeTrigger;
     this.notifyLifecycle = opts.notifyLifecycle;
     this.dynamicTaskStore = opts.dynamicTaskStore;
+    this.isThreadBusy = opts.isThreadBusy;
   }
 
   /** Late-bind invokeTrigger (constructed after TaskRunnerV2 in boot sequence) */
   setInvokeTrigger(trigger: ScheduleInvokeTrigger): void {
     this.invokeTrigger = trigger;
+  }
+
+  /** F167 Phase M: late-bind busy checker (invocationTracker/queueProcessor built after runner in boot) */
+  setBusyChecker(fn: (threadId: string) => boolean): void {
+    this.isThreadBusy = fn;
   }
 
   /** #415: Late-bind dynamicTaskStore (constructed after TaskRunnerV2 in boot sequence) */
@@ -142,6 +173,18 @@ export class TaskRunnerV2 {
     }
   }
 
+  /**
+   * F202 Phase 2: Register a builtin task that may arrive after start() (e.g., plugin schedule activation).
+   * Unlike registerDynamic, this does NOT mark the task in dynamicTaskIds, so it reports
+   * as source: 'builtin' and won't be targeted by SchedulePanel's dynamic PATCH/DELETE.
+   */
+  registerPostStart(task: AnyTaskSpec): void {
+    this.register(task);
+    if (this.started) {
+      this.scheduleTask(task, /* deferFirstTick */ true);
+    }
+  }
+
   /** Phase 3A: unregister a task by spec ID (stops timer if running) */
   unregister(taskId: string): boolean {
     const idx = this.tasks.findIndex((t) => t.id === taskId);
@@ -155,6 +198,7 @@ export class TaskRunnerV2 {
     this.running.delete(taskId);
     this.tickCounts.delete(taskId);
     this.lastRunAt.delete(taskId);
+    this.cronSlotFired.delete(taskId);
     this.dynamicTaskIds.delete(taskId);
     return true;
   }
@@ -235,14 +279,44 @@ export class TaskRunnerV2 {
   /** Schedule next cron tick via setTimeout chain */
   private scheduleCronTick(task: AnyTaskSpec): void {
     if (task.trigger.type !== 'cron') return;
-    const ms = getNextCronMs(task.trigger.expression, task.trigger.timezone);
+    // F167 fix (boundary-race guard): compute the next slot strictly after the
+    // last slot we already fired. Without this, when setTimeout drifts a few
+    // ms before its target cron time and executePipeline returns quickly, the
+    // `.finally` reschedule below can recompute the same slot (Date.now() is
+    // still before it) and fire it a second time. Marking the slot as fired
+    // synchronously inside the setTimeout callback below closes the race.
+    const lastFired = this.cronSlotFired.get(task.id);
+    let nextSlotMs: number;
+    try {
+      nextSlotMs = computeNextCronSlot(task.trigger.expression, task.trigger.timezone, Date.now(), lastFired);
+    } catch (err) {
+      this.logger.error(`[scheduler] ${task.id}: cron expression invalid`, err);
+      return;
+    }
+    const ms = Math.max(1, nextSlotMs - Date.now());
+    // #605: chunk long delays to avoid Node setTimeout 32-bit overflow
+    if (ms > TaskRunnerV2.MAX_TIMER_DELAY) {
+      const timer = setTimeout(() => {
+        if (this.timers.has(task.id)) this.scheduleCronTick(task);
+      }, TaskRunnerV2.MAX_TIMER_DELAY);
+      if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+      this.timers.set(task.id, timer);
+      this.logger.info(
+        `[scheduler] ${task.id}: cron delay ${ms}ms exceeds safe limit, chunking (next check in ${TaskRunnerV2.MAX_TIMER_DELAY}ms)`,
+      );
+      return;
+    }
     const timer = setTimeout(() => {
+      // F167 fix: mark this slot fired BEFORE any async work. The `.finally`
+      // reschedule may run while Date.now() is still milliseconds before
+      // nextSlotMs (timer drift); computeNextCronSlot will then advance past
+      // this entry instead of returning the same slot.
+      this.cronSlotFired.set(task.id, nextSlotMs);
       this.executePipeline(task)
         .catch((err) => {
           this.logger.error(`[scheduler] ${task.id}: pipeline error`, err);
         })
         .finally(() => {
-          // Schedule next occurrence
           if (this.timers.has(task.id)) {
             this.scheduleCronTick(task);
           }
@@ -264,7 +338,9 @@ export class TaskRunnerV2 {
     const remaining = Math.max(0, task.trigger.fireAt - Date.now());
     // Node setTimeout overflows at 2^31-1 ms — chunk long delays into safe steps
     if (remaining > TaskRunnerV2.MAX_TIMER_DELAY) {
-      const timer = setTimeout(() => this.scheduleOnceTick(task), TaskRunnerV2.MAX_TIMER_DELAY);
+      const timer = setTimeout(() => {
+        if (this.timers.has(task.id)) this.scheduleOnceTick(task);
+      }, TaskRunnerV2.MAX_TIMER_DELAY);
       if (typeof timer === 'object' && 'unref' in timer) timer.unref();
       this.timers.set(task.id, timer);
       return;
@@ -272,6 +348,29 @@ export class TaskRunnerV2 {
     const timer = setTimeout(() => {
       // Guard: skip if task was unregistered before timeout fires
       if (!this.timers.has(task.id)) return;
+      // F167 Phase M: pre-fire defer — if the target thread is busy at fire time,
+      // re-arm with a fresh fireAt instead of executing (avoids stale-wake "history
+      // replay" while the cat is mid-work). This happens PRE-FIRE (codex insight:
+      // execute is too late — it delivers-or-fails then retires via .finally). The
+      // busy signal is the scheduler's own mechanical occupancy check (KD-27 safe).
+      const fp = task.firePolicy;
+      if (fp?.deferWhileThreadBusy && task.trigger.type === 'once' && this.isThreadBusy?.(fp.threadId)) {
+        const deferred = this.deferCounts.get(task.id) ?? 0;
+        const maxDefers = fp.maxDefers ?? 10;
+        if (deferred < maxDefers) {
+          this.deferCounts.set(task.id, deferred + 1);
+          task.trigger.fireAt = Date.now() + (fp.deferIntervalMs ?? 30_000);
+          // persist re-armed fireAt so a restart mid-defer doesn't read a stale (missed) window
+          this.dynamicTaskStore?.updateTrigger(task.id, task.trigger);
+          this.logger.info(
+            `[scheduler] ${task.id}: pre-fire defer (thread ${fp.threadId} busy, ${deferred + 1}/${maxDefers})`,
+          );
+          this.scheduleOnceTick(task); // re-arm with new fireAt — no execute, no deliver, no retire
+          return;
+        }
+        this.logger.info(`[scheduler] ${task.id}: maxDefers (${maxDefers}) reached → force-fire despite busy thread`);
+      }
+      this.deferCounts.delete(task.id); // reset defer counter on actual fire
       this.executePipeline(task)
         .catch((err) => {
           this.logger.error(`[scheduler] ${task.id}: pipeline error`, err);
@@ -356,6 +455,7 @@ export class TaskRunnerV2 {
       this.logger.info(`[scheduler] ${id}: stopped`);
     }
     this.timers.clear();
+    this.cronSlotFired.clear();
     this.started = false;
   }
 

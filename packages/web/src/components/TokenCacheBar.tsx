@@ -31,7 +31,7 @@ export function TokenCacheBar({ percent, catId }: TokenCacheBarProps) {
 
   return (
     <div className="flex items-center gap-1.5" data-testid={`cache-bar-${catId}`}>
-      <div className="flex-1 h-[3px] rounded-full bg-[var(--console-pill-bg)] overflow-hidden">
+      <div className="flex-1 h-[3px] rounded-full bg-cafe-surface overflow-hidden">
         <div
           className="h-full rounded-full"
           style={{
@@ -41,7 +41,7 @@ export function TokenCacheBar({ percent, catId }: TokenCacheBarProps) {
           }}
         />
       </div>
-      <span className="text-[10px] text-cafe-muted tabular-nums w-7 text-right">{percent}%</span>
+      <span className="text-micro text-cafe-muted tabular-nums w-7 text-right">{percent}%</span>
     </div>
   );
 }

@@ -28,7 +28,7 @@ function FeatureNode({ data }: NodeProps<Node<FeatureNodeData>>) {
 
   return (
     <div
-      className={`rounded-xl border-2 bg-cafe-surface px-3 py-2 shadow-sm transition-shadow hover:shadow-md ${isDone ? 'opacity-50' : ''}`}
+      className={`rounded-xl border-2 bg-[var(--console-card-bg)] px-3 py-2 shadow-sm transition-shadow hover:shadow-md ${isDone ? 'opacity-50' : ''}`}
       style={{
         borderColor: colors.border,
         backgroundColor: colors.bg,
@@ -41,9 +41,9 @@ function FeatureNode({ data }: NodeProps<Node<FeatureNodeData>>) {
       <Handle type="target" position={Position.Top} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
       <div className="flex items-center gap-1.5">
         <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colors.dot }} />
-        <span className="text-xs font-bold text-[var(--cafe-accent)]">{data.featureId}</span>
+        <span className="text-xs font-bold text-cafe-secondary">{data.featureId}</span>
       </div>
-      <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-cafe-secondary">{data.name}</p>
+      <p className="mt-1 line-clamp-2 text-xs leading-snug text-cafe-secondary">{data.name}</p>
       <Handle type="source" position={Position.Bottom} className="!h-1.5 !w-1.5 !border-0 !bg-transparent" />
     </div>
   );
@@ -101,7 +101,10 @@ export function DependencyGraphTab({ items }: DependencyGraphTabProps) {
 
   if (allRecords.length === 0) {
     return (
-      <div className="flex items-center justify-center py-12 text-sm text-cafe-muted" data-testid="mc-dep-graph-empty">
+      <div
+        className="flex items-center justify-center py-12 text-sm text-cafe-secondary"
+        data-testid="mc-dep-graph-empty"
+      >
         暂无 Feature 依赖数据
       </div>
     );
@@ -110,17 +113,17 @@ export function DependencyGraphTab({ items }: DependencyGraphTabProps) {
   return (
     <div data-testid="mc-dep-graph">
       {/* Toolbar: scope filter + stats */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] px-3 py-2">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)] px-3 py-2">
         <div className="flex items-center gap-2">
           {(Object.keys(SCOPE_LABELS) as DagScope[]).map((s) => (
             <button
               key={s}
               type="button"
               onClick={() => setScope(s)}
-              className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                 scope === s
-                  ? 'bg-[var(--cafe-accent)] text-[var(--cafe-surface)]'
-                  : 'bg-[var(--console-pill-bg)] text-cafe-muted hover:bg-[var(--console-pill-bg)]'
+                  ? 'bg-[var(--console-active-bg)] font-semibold text-cafe'
+                  : 'bg-[var(--console-hover-bg)] text-cafe-secondary hover:bg-[var(--console-active-bg)]'
               }`}
               data-testid={`mc-dep-scope-${s}`}
             >
@@ -128,18 +131,18 @@ export function DependencyGraphTab({ items }: DependencyGraphTabProps) {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-cafe-muted" data-testid="mc-dep-stats">
+        <span className="text-xs text-cafe-secondary" data-testid="mc-dep-stats">
           {filtered.length} 个 Feature / {layouted.edges.length} 条依赖
         </span>
       </div>
 
       {/* Legend */}
-      <div className="mb-3 flex flex-wrap items-center gap-4 rounded-xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] px-3 py-2">
-        <LegendDot color="#E4A853" label="待审批" />
-        <LegendDot color="#5B9BD5" label="执行中" />
-        <LegendDot color="#7CB87C" label="已完成" />
-        <LegendDot color="#C4B5A0" label="待建议" />
-        <span className="text-[11px] text-cafe-muted">
+      <div className="mb-3 flex flex-wrap items-center gap-4 rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)] px-3 py-2">
+        <LegendDot color="var(--mc-status-suggested-dot)" label="待审批" />
+        <LegendDot color="var(--mc-status-dispatched-dot)" label="执行中" />
+        <LegendDot color="var(--mc-status-done-dot)" label="已完成" />
+        <LegendDot color="var(--mc-status-open-dot)" label="待建议" />
+        <span className="text-xs text-cafe-secondary">
           <span style={{ color: EDGE_STYLES.evolved.stroke }}>── 演化</span>
           {' · '}
           <span style={{ color: EDGE_STYLES.blocked.stroke }}>- - 阻塞</span>
@@ -150,11 +153,11 @@ export function DependencyGraphTab({ items }: DependencyGraphTabProps) {
 
       {/* DAG graph or empty state */}
       {filtered.length === 0 ? (
-        <div className="flex items-center justify-center rounded-xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] py-16 text-sm text-cafe-muted">
+        <div className="flex items-center justify-center rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)] py-16 text-sm text-cafe-secondary">
           当前筛选无有依赖关系的 Feature — 尝试切换到「全部」或刷新依赖数据
         </div>
       ) : (
-        <div className="h-[500px] w-full rounded-xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
+        <div className="h-[500px] w-full rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -185,41 +188,41 @@ function NodeDetailPanel({ data, onClose }: { data: FeatureNodeData; onClose: ()
   const colors = STATUS_COLORS[data.status];
   return (
     <div
-      className="mt-3 rounded-xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] p-4"
+      className="mt-3 rounded-xl bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)] p-4"
       data-testid="mc-dep-node-detail"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="h-3 w-3 rounded-full" style={{ backgroundColor: colors.dot }} />
-          <span className="text-sm font-bold text-[var(--cafe-accent)]">{data.featureId}</span>
+          <span className="text-sm font-bold text-cafe-secondary">{data.featureId}</span>
           <span
-            className="rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+            className="rounded-md px-1.5 py-0.5 text-micro font-medium"
             style={{ backgroundColor: colors.bg, color: colors.border }}
           >
             {STATUS_LABEL[data.status]}
           </span>
         </div>
-        <button type="button" onClick={onClose} className="text-xs text-cafe-muted hover:text-cafe-secondary">
+        <button type="button" onClick={onClose} className="text-xs text-cafe-secondary hover:text-cafe-secondary">
           ✕
         </button>
       </div>
       <p className="mt-1 text-xs text-cafe-secondary">{data.name}</p>
       {data.evolvedFrom.length > 0 && (
         <div className="mt-2">
-          <span className="text-[10px] font-medium text-cafe-muted">演化自：</span>
-          <span className="text-[11px] text-[var(--color-cafe-accent)]">{data.evolvedFrom.join(', ')}</span>
+          <span className="text-micro font-medium text-cafe-secondary">演化自：</span>
+          <span className="text-xs text-[var(--semantic-info)]">{data.evolvedFrom.join(', ')}</span>
         </div>
       )}
       {data.blockedBy.length > 0 && (
         <div className="mt-1">
-          <span className="text-[10px] font-medium text-cafe-muted">被阻塞：</span>
-          <span className="text-[11px] text-conn-red-text">{data.blockedBy.join(', ')}</span>
+          <span className="text-micro font-medium text-cafe-secondary">被阻塞：</span>
+          <span className="text-xs text-conn-red-text">{data.blockedBy.join(', ')}</span>
         </div>
       )}
       {data.related.length > 0 && (
         <div className="mt-1">
-          <span className="text-[10px] font-medium text-cafe-muted">关联：</span>
-          <span className="text-[11px] text-cafe-secondary">{data.related.join(', ')}</span>
+          <span className="text-micro font-medium text-cafe-secondary">关联：</span>
+          <span className="text-xs text-cafe-secondary">{data.related.join(', ')}</span>
         </div>
       )}
     </div>
@@ -230,7 +233,7 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   return (
     <span className="flex items-center gap-1">
       <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-      <span className="text-[11px] text-cafe-muted">{label}</span>
+      <span className="text-xs text-cafe-secondary">{label}</span>
     </span>
   );
 }

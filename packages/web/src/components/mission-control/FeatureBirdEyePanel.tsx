@@ -27,11 +27,11 @@ const STATUS_LABELS: Record<BacklogStatus, string> = {
 };
 
 const STATUS_COLORS: Record<BacklogStatus, string> = {
-  open: 'bg-[var(--console-pill-bg)] text-cafe-secondary',
-  suggested: 'bg-conn-amber-bg text-conn-amber-text',
-  approved: 'bg-conn-blue-bg text-conn-blue-text',
-  dispatched: 'bg-conn-amber-bg text-conn-amber-text',
-  done: 'bg-conn-emerald-bg text-conn-emerald-text',
+  open: 'bg-[var(--mc-status-open-bg)] text-cafe-secondary',
+  suggested: 'bg-[var(--mc-status-suggested-bg)] text-[var(--mc-status-suggested-text)]',
+  approved: 'bg-[var(--mc-status-dispatched-bg)] text-[var(--mc-status-dispatched-text)]',
+  dispatched: 'bg-[var(--mc-status-suggested-bg)] text-[var(--mc-status-suggested-text)]',
+  done: 'bg-[var(--mc-status-done-bg)] text-[var(--mc-status-done-text)]',
 };
 
 /** Extract feature ID from tags. Supports `feature:f058` (import format) and bare `F058`. */
@@ -91,7 +91,7 @@ export function FeatureBirdEyePanel({ items, threadsByBacklogId, threadCountByFe
 
   return (
     <section
-      className="rounded-2xl bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] p-3"
+      className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
       data-testid="mc-feature-bird-eye"
     >
       <h2 className="mb-2 text-sm font-semibold text-cafe">Feature 鸟瞰</h2>
@@ -111,12 +111,12 @@ export function FeatureBirdEyePanel({ items, threadsByBacklogId, threadCountByFe
           <button
             type="button"
             onClick={() => setDoneExpanded(!doneExpanded)}
-            className="flex w-full items-center justify-between rounded-lg border border-dashed border-conn-emerald-ring bg-conn-emerald-bg px-2 py-1.5 text-left"
+            className="flex w-full items-center justify-between rounded-lg border border-dashed border-[var(--mc-status-done-dot)] bg-[var(--mc-status-done-bg)] px-2 py-1.5 text-left"
           >
-            <span className="text-[11px] font-medium text-conn-emerald-text">
+            <span className="text-xs font-medium text-[var(--mc-status-done-text)]">
               已完成 · {doneGroups.length} 个 Feature
             </span>
-            <span className="text-[11px] text-conn-emerald-text">{doneExpanded ? '收起 ▲' : '展开 ▼'}</span>
+            <span className="text-xs text-[var(--mc-status-done-text)]">{doneExpanded ? '收起 ▲' : '展开 ▼'}</span>
           </button>
           {doneExpanded && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -149,25 +149,28 @@ function FeatureCard({
   const totalThreads = Math.max(activeThreadCount, titleThreadCount ?? 0);
 
   return (
-    <article className="rounded-xl bg-[var(--console-field-bg)] px-3 py-2" data-testid={`mc-bird-eye-feature-${tag}`}>
+    <article
+      className="rounded-xl bg-[var(--console-card-bg)] px-3 py-2 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+      data-testid={`mc-bird-eye-feature-${tag}`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-xs font-semibold text-cafe shrink-0">{tag}</span>
-          {featureName && <span className="text-[11px] text-cafe-muted truncate">{featureName}</span>}
+          {featureName && <span className="text-xs text-cafe-secondary truncate">{featureName}</span>}
         </div>
-        <span className="text-[11px] text-cafe-muted shrink-0 ml-2">{featureItems.length} 项</span>
+        <span className="text-xs text-cafe-secondary shrink-0 ml-2">{featureItems.length} 项</span>
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1">
         {(Object.entries(counts) as [BacklogStatus, number][]).map(([status, count]) => (
           <span
             key={status}
-            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${STATUS_COLORS[status]}`}
+            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-micro font-medium ${STATUS_COLORS[status]}`}
           >
             {STATUS_LABELS[status]} {count}
           </span>
         ))}
       </div>
-      {totalThreads > 0 && <p className="mt-1 text-[11px] text-cafe-secondary">{totalThreads} 个线程关联</p>}
+      {totalThreads > 0 && <p className="mt-1 text-xs text-cafe-secondary">{totalThreads} 个线程关联</p>}
     </article>
   );
 }
@@ -177,11 +180,11 @@ function DoneFeatureChip({ tag, featureItems }: { tag: string; featureItems: Bac
   const featureName = extractFeatureName(featureItems);
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full bg-conn-emerald-bg px-2 py-0.5 text-[10px] text-conn-emerald-text"
+      className="inline-flex items-center gap-1 rounded-full bg-[var(--mc-status-done-bg)] px-2 py-0.5 text-micro text-[var(--mc-status-done-text)]"
       data-testid={`mc-bird-eye-done-chip-${tag}`}
     >
       <span className="font-medium">{tag}</span>
-      {featureName && <span className="text-conn-emerald-text max-w-[120px] truncate">{featureName}</span>}
+      {featureName && <span className="text-[var(--mc-status-done-text)] max-w-[120px] truncate">{featureName}</span>}
       <svg
         viewBox="0 0 24 24"
         fill="none"

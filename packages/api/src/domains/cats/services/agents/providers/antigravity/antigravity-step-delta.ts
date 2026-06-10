@@ -1,4 +1,5 @@
 import type { TrajectoryStep } from './AntigravityBridge.js';
+import { normalizeAntigravityToolCall } from './antigravity-tool-call-normalizer.js';
 
 function getPlannerText(step: TrajectoryStep): string | null {
   const planner = step.plannerResponse;
@@ -79,12 +80,7 @@ function fingerprintStep(step: TrajectoryStep): string {
           modelErrorMessage: step.errorMessage.error.modelErrorMessage,
         }
       : undefined,
-    toolCall: step.toolCall
-      ? {
-          toolName: step.toolCall.toolName,
-          input: step.toolCall.input,
-        }
-      : undefined,
+    toolCall: normalizeAntigravityToolCall(step),
     toolResult: step.toolResult
       ? {
           toolName: step.toolResult.toolName,
@@ -119,6 +115,7 @@ export function diffDeliveredSteps(
   deliveredCount: number,
   previousFingerprints: string[],
   previousPlannerTexts: string[],
+  replayStartIndex = 0,
 ): {
   replaySteps: TrajectoryStep[];
   nextFingerprints: string[];
@@ -132,6 +129,7 @@ export function diffDeliveredSteps(
 
   for (let index = 0; index < Math.min(deliveredCount, allSteps.length); index += 1) {
     if (previousFingerprints[index] === nextFingerprints[index]) continue;
+    if (index < replayStartIndex) continue;
     hadMutation = true;
     const replayStep = toReplayStep(allSteps[index], previousPlannerTexts[index] ?? '');
     if (replayStep) replaySteps.push(replayStep);

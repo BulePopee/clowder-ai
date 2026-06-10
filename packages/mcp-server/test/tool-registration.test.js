@@ -18,6 +18,8 @@ const EXPECTED_TOOLS = [
   'cat_cafe_get_pending_mentions',
   'cat_cafe_ack_mentions',
   'cat_cafe_get_thread_context',
+  // #699: Message lookup by ID
+  'cat_cafe_get_message',
   'cat_cafe_get_thread_cats',
   'cat_cafe_list_threads',
   'cat_cafe_feat_index',
@@ -28,12 +30,22 @@ const EXPECTED_TOOLS = [
   'cat_cafe_create_task',
   'cat_cafe_create_rich_block',
   'cat_cafe_generate_document',
+  'cat_cafe_workspace_navigate',
+  'cat_cafe_preview_open',
+  // F227: generic teleport to a thread message
+  'cat_cafe_teleport',
+  // F227 Task 7: Event Memory timeline read + corpus backfill
+  'cat_cafe_list_events',
+  'cat_cafe_backfill_events',
   'cat_cafe_get_rich_block_rules',
   'cat_cafe_register_pr_tracking',
-  // Guide tools
+  'cat_cafe_register_issue_tracking',
+  'cat_cafe_unregister_tracking',
+  // F211 Phase B: IDE-direct external runtime session registration
+  'cat_cafe_register_external_runtime_session',
+  // Guide tools (cat_cafe_guide_resolve legacy alias removed in F193 Phase D AC-D2)
   'cat_cafe_update_guide_state',
   'cat_cafe_get_available_guides',
-  'cat_cafe_guide_resolve',
   'cat_cafe_start_guide',
   'cat_cafe_guide_control',
   // Workflow SOP tools (F073 P1)
@@ -48,11 +60,27 @@ const EXPECTED_TOOLS = [
   // Bootcamp tools (F087)
   'cat_cafe_update_bootcamp_state',
   'cat_cafe_bootcamp_env_check',
+  // F128: Cat-initiated thread proposal
+  'cat_cafe_propose_thread',
+  // F225: Cat-initiated session handoff proposal
+  'cat_cafe_propose_session_handoff',
   // Callback-scoped memory tools
   'cat_cafe_retain_memory_callback',
-  // Direct evidence/reflect tools
+  // Direct evidence tools (cat_cafe_reflect removed in F193 Phase D AC-D1)
   'cat_cafe_search_evidence',
-  'cat_cafe_reflect',
+  'cat_cafe_run_perspective',
+  'cat_cafe_read_file_slice',
+  // F188 Phase F AC-F1: agent-facing graph navigation
+  'cat_cafe_graph_resolve',
+  // F188 Phase F AC-F2: time-based browse for cold-start
+  'cat_cafe_list_recent',
+  // F188 Phase I AC-I4: library lifecycle MCP tools
+  'cat_cafe_library_list',
+  'cat_cafe_library_dry_run',
+  'cat_cafe_library_create',
+  'cat_cafe_library_rebuild',
+  'cat_cafe_library_archive',
+  'cat_cafe_library_verify',
   // F152 Phase C: Distillation tools
   'cat_cafe_mark_generalizable',
   'cat_cafe_nominate_for_global',
@@ -75,6 +103,8 @@ const EXPECTED_TOOLS = [
   'cat_cafe_read_session_events',
   'cat_cafe_read_session_digest',
   'cat_cafe_read_invocation_detail',
+  'cat_cafe_list_external_runtime_sessions',
+  'cat_cafe_read_external_runtime_session',
   // Limb tools
   'limb_list_available',
   'limb_invoke',
@@ -88,8 +118,23 @@ const EXPECTED_TOOLS = [
   'cat_cafe_register_scheduled_task',
   'cat_cafe_remove_scheduled_task',
   'cat_cafe_hold_ball',
+  'cat_cafe_list_labels',
   // F061 Bug-F workaround: MCP shell exec for read-only commands
   'cat_cafe_shell_exec',
+  // F195 Phase B: Audio capture + transcription tools
+  'cat_cafe_audio_list_sources',
+  'cat_cafe_audio_capture_start',
+  'cat_cafe_audio_capture_stop',
+  'cat_cafe_audio_capture_status',
+  'cat_cafe_audio_read_transcript',
+  'cat_cafe_audio_enroll_speakers',
+  // F195 Phase C3: Advisory mode tools
+  'cat_cafe_audio_set_advisory_mode',
+  'cat_cafe_audio_set_talking_points',
+  // F207 Phase B0: finance fact layer
+  'cat_cafe_finance_query',
+  // F192 Phase H AC-H4: verdict publishing pipeline (eval cat → MCP → handler)
+  'cat_cafe_publish_verdict',
 ];
 
 const EXPECTED_COLLAB_TOOLS = [
@@ -97,6 +142,8 @@ const EXPECTED_COLLAB_TOOLS = [
   'cat_cafe_get_pending_mentions',
   'cat_cafe_ack_mentions',
   'cat_cafe_get_thread_context',
+  // #699: Message lookup by ID
+  'cat_cafe_get_message',
   'cat_cafe_get_thread_cats',
   'cat_cafe_list_threads',
   'cat_cafe_feat_index',
@@ -106,13 +153,26 @@ const EXPECTED_COLLAB_TOOLS = [
   'cat_cafe_create_task',
   'cat_cafe_create_rich_block',
   'cat_cafe_generate_document',
+  'cat_cafe_workspace_navigate',
+  'cat_cafe_preview_open',
+  // F227: generic teleport to a thread message
+  'cat_cafe_teleport',
+  // F227 Task 7: Event Memory timeline read + corpus backfill
+  'cat_cafe_list_events',
+  'cat_cafe_backfill_events',
   'cat_cafe_get_rich_block_rules',
   'cat_cafe_request_permission',
   'cat_cafe_check_permission_status',
   'cat_cafe_register_pr_tracking',
+  'cat_cafe_register_issue_tracking',
+  'cat_cafe_unregister_tracking',
+  // F211 Phase B: IDE-direct external runtime session registration
+  'cat_cafe_register_external_runtime_session',
+  // F192 Phase H AC-H4: cat_cafe_publish_verdict registered in collab toolset
+  'cat_cafe_publish_verdict',
+  // cat_cafe_guide_resolve legacy alias removed in F193 Phase D AC-D2
   'cat_cafe_update_guide_state',
   'cat_cafe_get_available_guides',
-  'cat_cafe_guide_resolve',
   'cat_cafe_start_guide',
   'cat_cafe_guide_control',
   'cat_cafe_update_workflow',
@@ -120,6 +180,10 @@ const EXPECTED_COLLAB_TOOLS = [
   'cat_cafe_start_vote',
   'cat_cafe_update_bootcamp_state',
   'cat_cafe_bootcamp_env_check',
+  // F128: Cat-initiated thread proposal
+  'cat_cafe_propose_thread',
+  // F225: Cat-initiated session handoff proposal
+  'cat_cafe_propose_session_handoff',
   'cat_cafe_submit_game_action',
   // F139 Phase 3A: Schedule tools
   'cat_cafe_list_schedule_templates',
@@ -127,6 +191,7 @@ const EXPECTED_COLLAB_TOOLS = [
   'cat_cafe_register_scheduled_task',
   'cat_cafe_remove_scheduled_task',
   'cat_cafe_hold_ball',
+  'cat_cafe_list_labels',
   // F061 Bug-F workaround: MCP shell exec for read-only commands
   'cat_cafe_shell_exec',
 ];
@@ -137,11 +202,23 @@ const EXPECTED_MEMORY_TOOLS = [
   'cat_cafe_nominate_for_global',
   'cat_cafe_review_distillation',
   'cat_cafe_search_evidence',
-  'cat_cafe_reflect',
+  'cat_cafe_run_perspective',
+  'cat_cafe_read_file_slice',
+  'cat_cafe_graph_resolve', // F188 Phase F AC-F1
+  'cat_cafe_library_list', // F188 Phase I AC-I4
+  'cat_cafe_library_dry_run', // F188 Phase I AC-I4
+  'cat_cafe_library_create', // F188 Phase I AC-I4
+  'cat_cafe_library_rebuild', // F188 Phase I AC-I4
+  'cat_cafe_library_archive', // F188 Phase I AC-I4
+  'cat_cafe_library_verify', // F188 Phase J AC-J7
+  'cat_cafe_list_recent', // F188 Phase F AC-F2
+  // cat_cafe_reflect removed in F193 Phase D AC-D1
   'cat_cafe_list_session_chain',
   'cat_cafe_read_session_events',
   'cat_cafe_read_session_digest',
   'cat_cafe_read_invocation_detail',
+  'cat_cafe_list_external_runtime_sessions',
+  'cat_cafe_read_external_runtime_session',
 ];
 
 const EXPECTED_SIGNAL_TOOLS = [
@@ -159,6 +236,12 @@ const EXPECTED_SIGNAL_TOOLS = [
   'signal_link_thread',
 ];
 
+// F193 Phase C: limb tools (布偶猫专属能力 namespace) get their own server.
+const EXPECTED_LIMB_TOOLS = ['limb_list_available', 'limb_invoke', 'limb_pair_list', 'limb_pair_approve'];
+
+// F207 Phase B0: finance fact tools get their own read-only data-plane server.
+const EXPECTED_FINANCE_TOOLS = ['cat_cafe_finance_query'];
+
 function assertUnique(values, label) {
   assert.equal(new Set(values).size, values.length, `${label} must not contain duplicate tool names`);
 }
@@ -169,6 +252,8 @@ describe('MCP Server Tool Registration', () => {
     assertUnique(EXPECTED_COLLAB_TOOLS, 'EXPECTED_COLLAB_TOOLS');
     assertUnique(EXPECTED_MEMORY_TOOLS, 'EXPECTED_MEMORY_TOOLS');
     assertUnique(EXPECTED_SIGNAL_TOOLS, 'EXPECTED_SIGNAL_TOOLS');
+    assertUnique(EXPECTED_LIMB_TOOLS, 'EXPECTED_LIMB_TOOLS');
+    assertUnique(EXPECTED_FINANCE_TOOLS, 'EXPECTED_FINANCE_TOOLS');
   });
 
   test('all expected tools are registered via createServer()', async () => {
@@ -265,6 +350,20 @@ describe('MCP Server Tool Registration', () => {
     assert.ok(listTool.inputSchema._def.shape().agentKeyCatId.isOptional());
   });
 
+  test('Hub action tools expose agentKeyCatId for shared persistent MCP identity', async () => {
+    const { createServer } = await import('../dist/index.js');
+    const server = createServer();
+
+    const workspaceTool = server._registeredTools.cat_cafe_workspace_navigate;
+    const previewTool = server._registeredTools.cat_cafe_preview_open;
+    assert.ok(workspaceTool, 'workspace_navigate tool should exist');
+    assert.ok(previewTool, 'preview_open tool should exist');
+    assert.ok(Object.keys(workspaceTool.inputSchema.shape).includes('agentKeyCatId'));
+    assert.ok(workspaceTool.inputSchema._def.shape().agentKeyCatId.isOptional());
+    assert.ok(Object.keys(previewTool.inputSchema.shape).includes('agentKeyCatId'));
+    assert.ok(previewTool.inputSchema._def.shape().agentKeyCatId.isOptional());
+  });
+
   test('deprecated file tools are not registered', async () => {
     const { createServer } = await import('../dist/index.js');
     const server = createServer();
@@ -305,6 +404,22 @@ describe('MCP Server Tool Registration', () => {
 
     assert.deepEqual([...registered].sort(), [...EXPECTED_SIGNAL_TOOLS].sort());
   });
+
+  test('F193 AC-C1: createLimbServer registers only limb tool surface', async () => {
+    const { createLimbServer } = await import('../dist/limb.js');
+    const server = createLimbServer();
+    const registered = Object.keys(server._registeredTools);
+
+    assert.deepEqual([...registered].sort(), [...EXPECTED_LIMB_TOOLS].sort());
+  });
+
+  test('F207 AC-B5: createFinanceServer registers only finance fact tool surface', async () => {
+    const { createFinanceServer } = await import('../dist/finance.js');
+    const server = createFinanceServer();
+    const registered = Object.keys(server._registeredTools);
+
+    assert.deepEqual([...registered].sort(), [...EXPECTED_FINANCE_TOOLS].sort());
+  });
 });
 
 // --- F061 Phase 2: READONLY_ALLOWED_TOOLS whitelist ---
@@ -318,14 +433,23 @@ const KNOWN_WRITE_TOOLS = [
   'cat_cafe_create_task',
   'cat_cafe_create_rich_block',
   'cat_cafe_generate_document',
+  'cat_cafe_workspace_navigate',
+  'cat_cafe_preview_open',
+  // F227: generic teleport (write — agent-key gated, not in readonly)
+  'cat_cafe_teleport',
+  // F227 Task 7: backfill is a write (agent-key gated, not in readonly)
+  'cat_cafe_backfill_events',
   'cat_cafe_request_permission',
   'cat_cafe_register_pr_tracking',
+  'cat_cafe_register_issue_tracking',
+  'cat_cafe_unregister_tracking',
+  'cat_cafe_register_external_runtime_session',
   'cat_cafe_update_workflow',
   'cat_cafe_start_vote',
   'cat_cafe_update_bootcamp_state',
   'cat_cafe_bootcamp_env_check', // writes bootcampState.envCheck via callbackPost
+  // cat_cafe_guide_resolve legacy alias removed in F193 Phase D AC-D2
   'cat_cafe_update_guide_state',
-  'cat_cafe_guide_resolve',
   'cat_cafe_start_guide',
   'cat_cafe_guide_control',
   'cat_cafe_retain_memory_callback',
@@ -336,6 +460,8 @@ const KNOWN_WRITE_TOOLS = [
   'cat_cafe_register_scheduled_task',
   'cat_cafe_remove_scheduled_task',
   'cat_cafe_hold_ball', // callbackPost → writes scheduled task
+  // F192 Phase H AC-H4: publish verdict creates branch + commit + PR (write)
+  'cat_cafe_publish_verdict',
   'cat_cafe_feat_index', // requires callback credentials unavailable in readonly
   'signal_mark_read',
   'signal_summarize',
@@ -351,18 +477,26 @@ const KNOWN_WRITE_TOOLS = [
 
 const EXPECTED_READONLY_TOOLS = [
   'cat_cafe_search_evidence',
-  'cat_cafe_reflect',
+  'cat_cafe_run_perspective',
+  'cat_cafe_read_file_slice',
+  'cat_cafe_graph_resolve', // F188 Phase F AC-F1
+  'cat_cafe_list_recent', // F188 Phase F AC-F2
+  // cat_cafe_reflect removed in F193 Phase D AC-D1
   'cat_cafe_get_rich_block_rules',
   'cat_cafe_list_session_chain',
   'cat_cafe_read_session_events',
   'cat_cafe_read_session_digest',
   'cat_cafe_read_invocation_detail',
+  'cat_cafe_list_external_runtime_sessions',
+  'cat_cafe_read_external_runtime_session',
   'signal_list_inbox',
   'signal_get_article',
   'signal_search',
   'signal_list_studies',
   // F061 Bug-F workaround: read-only shell exec whitelist enforced at handler level
   'cat_cafe_shell_exec',
+  // F207 Phase B0: read-only finance fact layer wrapper
+  'cat_cafe_finance_query',
 ];
 
 describe('F061 READONLY_ALLOWED_TOOLS whitelist', () => {
@@ -403,7 +537,17 @@ describe('F061 READONLY_ALLOWED_TOOLS whitelist', () => {
       const { createServer } = await import(${JSON.stringify(distIndexUrl)});
       const server = createServer();
       const names = Object.keys(server._registeredTools);
-      if (!names.includes('cat_cafe_post_message') || !names.includes('cat_cafe_get_thread_context')) {
+      if (
+        !names.includes('cat_cafe_post_message') ||
+        !names.includes('cat_cafe_get_thread_context') ||
+        !names.includes('cat_cafe_workspace_navigate') ||
+        !names.includes('cat_cafe_preview_open') ||
+        // F227: teleport is agent-key gated — must be visible in readonly+agent-key
+        !names.includes('cat_cafe_teleport') ||
+        !names.includes('cat_cafe_create_rich_block') ||
+        // 砚砚 R9 P1: shared-MCP cats must see publish-verdict
+        !names.includes('cat_cafe_publish_verdict')
+      ) {
         console.error(JSON.stringify(names.sort()));
         process.exit(1);
       }

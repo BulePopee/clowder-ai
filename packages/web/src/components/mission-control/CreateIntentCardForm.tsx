@@ -81,7 +81,7 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
   };
 
   return (
-    <div className="space-y-3 rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
+    <div className="space-y-3 rounded-xl bg-[var(--console-card-bg)] p-4 shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
       <h3 className="text-sm font-bold text-cafe">新建 Intent Card</h3>
 
       {/* Original text */}
@@ -92,7 +92,7 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
           onChange={(e) => setOriginalText(e.target.value)}
           rows={3}
           placeholder="粘贴 PRD 原文片段..."
-          className="console-form-input mt-1 w-full text-xs"
+          className="mt-1 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-3 py-2 text-xs text-cafe focus:outline-none focus:ring-1 focus:ring-cafe-accent"
         />
       </label>
 
@@ -107,13 +107,13 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
           { label: 'Non-goal', value: nonGoal, set: setNonGoal, ph: '明确不做的' },
         ].map((f) => (
           <label key={f.label} className="block">
-            <span className="text-[10px] font-medium text-cafe-muted">{f.label}</span>
+            <span className="text-micro font-medium text-cafe-secondary">{f.label}</span>
             <input
               type="text"
               value={f.value}
               onChange={(e) => f.set(e.target.value)}
               placeholder={f.ph}
-              className="console-form-input mt-0.5 w-full text-xs"
+              className="mt-0.5 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cafe-accent"
             />
           </label>
         ))}
@@ -122,11 +122,11 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
       {/* Source tag + metadata */}
       <div className="flex gap-2">
         <label className="block flex-1">
-          <span className="text-[10px] font-medium text-cafe-muted">Source Tag</span>
+          <span className="text-micro font-medium text-cafe-secondary">Source Tag</span>
           <select
             value={sourceTag}
             onChange={(e) => setSourceTag(e.target.value as SourceTag)}
-            className="console-form-input mt-0.5 w-full text-xs"
+            className="mt-0.5 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs"
           >
             <option value="Q">Q — 客户口述</option>
             <option value="O">O — 现场观察</option>
@@ -136,11 +136,11 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
           </select>
         </label>
         <label className="block flex-1">
-          <span className="text-[10px] font-medium text-cafe-muted">Confidence</span>
+          <span className="text-micro font-medium text-cafe-secondary">Confidence</span>
           <select
             value={confidence}
             onChange={(e) => setConfidence(Number(e.target.value))}
-            className="console-form-input mt-0.5 w-full text-xs"
+            className="mt-0.5 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs"
           >
             <option value={1}>1 — 低</option>
             <option value={2}>2 — 中</option>
@@ -152,40 +152,40 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
       {/* Source detail + Decision owner */}
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="text-[10px] font-medium text-cafe-muted">Source Detail</span>
+          <span className="text-micro font-medium text-cafe-secondary">Source Detail</span>
           <input
             type="text"
             value={sourceDetail}
             onChange={(e) => setSourceDetail(e.target.value)}
             placeholder="PRD section 3.2"
-            className="console-form-input mt-0.5 w-full text-xs"
+            className="mt-0.5 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cafe-accent"
           />
         </label>
         <label className="block">
-          <span className="text-[10px] font-medium text-cafe-muted">Decision Owner</span>
+          <span className="text-micro font-medium text-cafe-secondary">Decision Owner</span>
           <input
             type="text"
             value={decisionOwner}
             onChange={(e) => setDecisionOwner(e.target.value)}
             placeholder="Product Owner"
-            className="console-form-input mt-0.5 w-full text-xs"
+            className="mt-0.5 w-full rounded-[10px] border-transparent bg-[var(--console-field-bg,var(--console-card-bg))] px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cafe-accent"
           />
         </label>
       </div>
 
       {/* Risk signals */}
       <div>
-        <span className="text-[10px] font-medium text-cafe-muted">Risk Signals</span>
+        <span className="text-micro font-medium text-cafe-secondary">Risk Signals</span>
         <div className="mt-1 flex flex-wrap gap-1">
           {RISK_SIGNALS.map((s) => (
             <button
               key={s.value}
               type="button"
               onClick={() => toggleRisk(s.value)}
-              className={`rounded-full px-2 py-0.5 text-[10px] ${
+              className={`rounded-full px-2 py-0.5 text-micro ${
                 riskSignals.includes(s.value)
                   ? 'bg-conn-red-bg text-conn-red-text'
-                  : 'bg-[var(--console-pill-bg)] text-cafe-secondary'
+                  : 'bg-[var(--console-hover-bg)] text-cafe-secondary'
               }`}
             >
               {s.label}
@@ -201,14 +201,18 @@ export function CreateIntentCardForm({ projectId, onCreated, onCancel }: CreateI
       )}
 
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="console-button-secondary">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg bg-[var(--console-shell-bg)] px-4 py-1.5 text-xs font-medium text-cafe-secondary hover:bg-[var(--console-hover-bg)]"
+        >
           取消
         </button>
         <button
           type="button"
           onClick={() => void handleSubmit()}
           disabled={submitting}
-          className="console-button-primary disabled:opacity-40"
+          className="rounded-lg bg-[var(--mc-accent)] px-4 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)] disabled:opacity-40"
         >
           {submitting ? '创建中...' : '创建'}
         </button>

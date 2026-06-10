@@ -16,6 +16,14 @@ function createMockProcess(exitCode = 0) {
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   const emitter = new EventEmitter();
+  const originalEmit = emitter.emit.bind(emitter);
+  emitter.emit = (event, ...args) => {
+    const emitted = originalEmit(event, ...args);
+    if (event === 'exit') {
+      process.nextTick(() => originalEmit('close', ...args));
+    }
+    return emitted;
+  };
   const proc = {
     stdout,
     stderr,
@@ -278,6 +286,116 @@ describe('OpenCodeAgentService', () => {
     }
   });
 
+  // F203 Phase I: instructions-only config preserves native auth
+  test('F203-I: OPENCODE_CONFIG + OC_INSTRUCTIONS_ONLY preserves ANTHROPIC_API_KEY', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({
+      catId: 'opencode',
+      spawnFn,
+      model: 'claude-haiku-4-5',
+      apiKey: 'sk-native-key',
+    });
+    const promise = collect(
+      service.invoke('Test', {
+        callbackEnv: {
+          OPENCODE_CONFIG: '/tmp/instructions-only.json',
+          CAT_CAFE_OC_INSTRUCTIONS_ONLY: '1',
+          CAT_CAFE_ANTHROPIC_API_KEY: 'sk-native-key',
+        },
+      }),
+    );
+    emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+    await promise;
+
+    const opts = spawnFn.mock.calls[0].arguments[2];
+    // With OC_INSTRUCTIONS_ONLY_ENV=1, buildEnv must NOT clear auth.
+    // ANTHROPIC_API_KEY should survive (from apiKey constructor arg or callbackEnv).
+    assert.strictEqual(
+      opts.env.ANTHROPIC_API_KEY,
+      'sk-native-key',
+      'instructions-only config must preserve ANTHROPIC_API_KEY',
+    );
+    assert.strictEqual(
+      opts.env.OPENCODE_CONFIG,
+      '/tmp/instructions-only.json',
+      'OPENCODE_CONFIG must be passed through',
+    );
+  });
+
+  // F203 Phase I: full custom-provider config STILL clears native auth (regression guard)
+  test('F203-I: OPENCODE_CONFIG without OC_INSTRUCTIONS_ONLY still clears auth', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-parent-should-clear';
+
+    const service = new OpenCodeAgentService({
+      catId: 'opencode',
+      spawnFn,
+      model: 'claude-haiku-4-5',
+    });
+    try {
+      const promise = collect(
+        service.invoke('Test', {
+          callbackEnv: {
+            OPENCODE_CONFIG: '/tmp/full-provider-config.json',
+            // NO OC_INSTRUCTIONS_ONLY — this is a full custom provider config
+          },
+        }),
+      );
+      emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+      await promise;
+
+      const opts = spawnFn.mock.calls[0].arguments[2];
+      // Full custom-provider config: auth MUST be cleared (clowder-ai#223 behavior preserved)
+      assert.strictEqual(opts.env.ANTHROPIC_API_KEY, undefined, 'full provider config must clear ANTHROPIC_API_KEY');
+    } finally {
+      if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
+    }
+  });
+
+  // F203 Phase I: subscription + instructions-only → subscription clears auth (priority)
+  test('F203-I: subscription + OC_INSTRUCTIONS_ONLY → subscription still clears inherited auth', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const previousAnthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-inherited-should-clear';
+
+    const service = new OpenCodeAgentService({
+      catId: 'opencode',
+      spawnFn,
+      model: 'claude-haiku-4-5',
+    });
+    try {
+      const promise = collect(
+        service.invoke('Test', {
+          callbackEnv: {
+            OPENCODE_CONFIG: '/tmp/instructions-only.json',
+            CAT_CAFE_OC_INSTRUCTIONS_ONLY: '1',
+            CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'subscription',
+          },
+        }),
+      );
+      emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+      await promise;
+
+      const opts = spawnFn.mock.calls[0].arguments[2];
+      // Instructions-only skips the OPENCODE_CONFIG auth clear block,
+      // but subscription mode still independently clears inherited auth.
+      assert.strictEqual(
+        opts.env.ANTHROPIC_API_KEY,
+        undefined,
+        'subscription must clear inherited ANTHROPIC_API_KEY even with instructions-only',
+      );
+      assert.strictEqual(opts.env.OPENCODE_CONFIG, '/tmp/instructions-only.json', 'OPENCODE_CONFIG must survive');
+    } finally {
+      if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
+    }
+  });
+
   test('baseUrl passed via ANTHROPIC_BASE_URL env', async () => {
     const proc = createMockProcess();
     const spawnFn = mock.fn(() => proc);
@@ -507,5 +625,175 @@ describe('OpenCodeAgentService', () => {
     const opts = spawnFn.mock.calls[0].arguments[2];
     assert.strictEqual(opts.env.ANTHROPIC_API_KEY, 'sk-normal-key');
     assert.strictEqual(opts.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com/v1');
+  });
+
+  // F212 Phase A (砚砚 review BLOCKED P1-2 fix): cliDiagnostics must flow from
+  // spawnCli __cliError → provider yield error.metadata.cliDiagnostics
+  // so frontend folded panel (Phase B) can render reasonCode / safeExcerpt / publicHint.
+  test('F212: forwards cliDiagnostics on metadata when CLI errors (issue #777 reproducer)', async () => {
+    const proc = createMockProcess(1);
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'deepseek-v-4' });
+
+    const promise = collect(service.invoke('Test'));
+    // Real-world issue #777 case: opencode emits a NDJSON error event for DeepSeek 400 model_not_found
+    proc.stdout.write(
+      `${JSON.stringify({
+        type: 'error',
+        error: {
+          name: 'APIError',
+          data: {
+            message:
+              'The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed deepseek-v-4.',
+            statusCode: 400,
+          },
+        },
+      })}\n`,
+    );
+    proc.stdout.end();
+    emitProcessExit(proc, 1, null);
+    const messages = await promise;
+
+    // Two error messages may be yielded: (1) stream error event (transform-time, cli still running),
+    // (2) cli-spawn __cliError (after exit 1). Both should carry cliDiagnostics; pick any.
+    const errorsWithCD = messages.filter((m) => m.type === 'error' && m.metadata?.cliDiagnostics);
+    assert.ok(
+      errorsWithCD.length >= 1,
+      `at least one error message must carry cliDiagnostics. all messages=${JSON.stringify(messages.map((m) => ({ type: m.type, hasCD: !!m.metadata?.cliDiagnostics })))}`,
+    );
+    // All cliDiagnostics-bearing errors must classify correctly (same rawText source)
+    for (const e of errorsWithCD) {
+      assert.strictEqual(e.metadata.cliDiagnostics.reasonCode, 'model_not_found');
+      assert.ok(
+        e.metadata.cliDiagnostics.safeExcerpt?.includes('deepseek-v4-pro'),
+        `safeExcerpt should include matched line: ${e.metadata.cliDiagnostics.safeExcerpt}`,
+      );
+      assert.match(e.metadata.cliDiagnostics.publicSummary, /模型/);
+      assert.ok(e.metadata.cliDiagnostics.publicHint.length > 0);
+      assert.ok(e.metadata.cliDiagnostics.debugRef, 'debugRef must be present');
+      // command may be 'opencode' (stream error path) OR a resolved absolute path (cli-spawn __cliError path)
+      assert.ok(
+        e.metadata.cliDiagnostics.debugRef.command.includes('opencode'),
+        `debugRef.command should reference opencode: ${e.metadata.cliDiagnostics.debugRef.command}`,
+      );
+    }
+  });
+
+  // F212 Phase G (AC-G3, clowder-ai#875): silent-stdout case where OpenCode produces
+  // only step_start events and no text. Reporter's direct OpenCode CLI checks proved
+  // this is upstream behavior (fresh CLI reproduces), so Cat Cafe responsibility is
+  // surfacing the diagnostic instead of swallowing it into generic message.
+  test('AC-G3: step_start-only NDJSON → yields system_info notice with silent_completion cliDiagnostics', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({
+      catId: 'opencode',
+      spawnFn,
+      model: 'deepseek-chat',
+    });
+    const promise = collect(service.invoke('Test silent', { invocationId: 'inv-silent-clowder-875' }));
+    proc.stderr.write('Warning: upstream stderr without text output\n');
+    // Emit only step_start — exactly the clowder-ai#875 reporter's NDJSON
+    emitOpenCodeEvents(proc, [STEP_START]);
+    const messages = await promise;
+
+    // Find the user-visible system notice carrying the silent_completion diagnostic.
+    const silentNotice = messages.find(
+      (m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+    );
+    assert.ok(
+      silentNotice,
+      `expected system_info notice with silent_completion reasonCode; got types: ${messages.map((m) => m.type).join(',')}`,
+    );
+    assert.equal(JSON.parse(silentNotice.content).type, 'silent_completion');
+    assert.ok(
+      !messages.some((m) => m.type === 'error' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion'),
+      'silent_completion is observability-only and MUST NOT travel as provider error',
+    );
+    assert.equal(silentNotice.metadata.cliDiagnostics.debugRef.invocationId, 'inv-silent-clowder-875');
+    assert.equal(
+      silentNotice.metadata.cliDiagnostics.debugRef.exitCode,
+      0,
+      'silent_completion preserves clean exit code',
+    );
+
+    const evidence = JSON.parse(silentNotice.metadata.cliDiagnostics.safeExcerpt);
+    assert.ok(
+      evidence.eventTypes.includes('step_start'),
+      `eventTypes should include step_start: ${JSON.stringify(evidence.eventTypes)}`,
+    );
+    assert.ok(evidence.eventCount >= 1, 'eventCount should be > 0');
+    assert.equal(evidence.model, 'deepseek-chat', 'model captured');
+    assert.equal(evidence.stderrPresent, true, 'successful-exit stderr presence is preserved');
+    assert.match(
+      evidence.stderrExcerpt,
+      /upstream stderr without text output/,
+      'successful-exit stderr excerpt is preserved for diagnostics',
+    );
+    // sessionId comes through session_init, then truncated to first 8 chars
+    if (evidence.sessionIdPrefix) {
+      assert.equal(
+        evidence.sessionIdPrefix.length,
+        8,
+        'sessionIdPrefix MUST be exactly 8 chars (no full session leak)',
+      );
+    }
+    // Done event still yielded so caller can complete
+    assert.ok(
+      messages.some((m) => m.type === 'done'),
+      'done event still yielded after diagnostic',
+    );
+  });
+
+  test('AC-G3: text event present → does NOT yield silent_completion (no false positive)', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-haiku-4-5' });
+    const promise = collect(service.invoke('Say hello'));
+    emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+    const messages = await promise;
+
+    const silentError = messages.find(
+      (m) => m.type === 'error' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+    );
+    assert.ok(!silentError, 'silent_completion MUST NOT fire when text event present');
+    const silentNotice = messages.find(
+      (m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+    );
+    assert.ok(!silentNotice, 'silent_completion system_info MUST NOT fire when text event present');
+  });
+
+  // F212 Phase G R1 P1 (cloud codex catch on 1d519e7f2): tool-only turns are legitimate
+  // task completions per F215 AC-B3. Tool events that complete the user's request without
+  // a text response MUST NOT be flagged as silent_completion.
+  test('AC-G3 R1 P1: tool_use event without text → does NOT yield silent_completion', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-haiku-4-5' });
+    const promise = collect(service.invoke('Use tools'));
+    // step_start + tool_use only — no TEXT_RESPONSE. Per F215 AC-B3 this is a valid
+    // tool-only completion path. silent_completion would mislabel it as a provider error.
+    emitOpenCodeEvents(proc, [STEP_START, TOOL_USE, STEP_FINISH]);
+    const messages = await promise;
+
+    const silentError = messages.find(
+      (m) => m.type === 'error' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+    );
+    assert.ok(
+      !silentError,
+      `silent_completion MUST NOT fire when tool_use event present (R1 P1 guard): types=${messages.map((m) => m.type).join(',')}`,
+    );
+    const silentNotice = messages.find(
+      (m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+    );
+    assert.ok(
+      !silentNotice,
+      `silent_completion system_info MUST NOT fire when tool_use event present (R1 P1 guard): types=${messages.map((m) => m.type).join(',')}`,
+    );
+    // Verify the tool_use was actually yielded (sanity check on fixture)
+    assert.ok(
+      messages.some((m) => m.type === 'tool_use'),
+      'tool_use yield confirms event reached transformer',
+    );
   });
 });

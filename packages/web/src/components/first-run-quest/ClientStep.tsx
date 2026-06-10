@@ -73,11 +73,11 @@ export function ClientStep({ onSelect }: ClientStepProps) {
               }}
               className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
                 selected === c.client
-                  ? 'border-conn-amber-ring bg-conn-amber-bg shadow-sm'
-                  : 'border-[var(--console-border-soft)] bg-cafe-surface hover:border-conn-amber-ring'
+                  ? 'border-[var(--semantic-warning)] bg-conn-amber-bg shadow-sm'
+                  : 'border-[var(--console-border-soft)] bg-cafe-surface-canvas hover:border-conn-amber-ring'
               }`}
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-conn-emerald-bg text-conn-emerald-text">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-conn-green-bg text-conn-green-text">
                 ✓
               </div>
               <div>

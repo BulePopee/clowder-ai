@@ -83,8 +83,8 @@ describe('Evidence Panel dark theme (F098-B1)', () => {
     });
 
     const html = container.innerHTML;
-    // High confidence should use semantic emerald tokens (F170)
-    expect(html).toContain('bg-conn-emerald-bg');
-    expect(html).toContain('text-conn-emerald-text');
+    // High confidence should use semantic emerald tokens
+    expect(html).toContain('bg-semantic-success-surface');
+    expect(html).toContain('text-semantic-success');
   });
 });

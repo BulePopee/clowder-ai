@@ -234,17 +234,17 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Sub-header */}
-      <div className="flex items-center justify-between border-b border-[var(--console-border-soft)] bg-[var(--console-card-bg)] px-6 py-2">
+      <div className="flex items-center justify-between console-divider-b bg-[var(--console-card-bg)] px-6 py-2">
         <div className="flex gap-1">
           {SUB_TABS.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setSubTab(t.id)}
-              className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                 subTab === t.id
-                  ? 'bg-[var(--cafe-accent)] text-[var(--cafe-surface)]'
-                  : 'bg-[var(--console-pill-bg)] text-cafe-secondary hover:bg-[var(--console-pill-bg)]'
+                  ? 'bg-[var(--mc-accent)] text-[var(--cafe-surface)]'
+                  : 'bg-[var(--console-hover-bg)] text-cafe-secondary hover:bg-[var(--console-border-soft)]'
               }`}
             >
               {t.label}
@@ -252,12 +252,12 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {importStatus && <span className="text-[10px] text-cafe-muted">{importStatus}</span>}
+          {importStatus && <span className="text-micro text-cafe-secondary">{importStatus}</span>}
           <button
             type="button"
             onClick={() => void handleImportBacklog()}
             disabled={isStale}
-            className="console-button-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg bg-[var(--console-shell-bg)] px-3 py-1.5 text-xs font-medium text-cafe-secondary hover:bg-[var(--console-hover-bg)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             导入 Backlog
           </button>
@@ -266,7 +266,7 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
 
       {/* Stale barrier: show refreshing indicator and block interactions until fresh data arrives */}
       {isStale && (
-        <div className="px-6 py-1 text-center text-[10px] text-cafe-muted animate-pulse">
+        <div className="px-6 py-1 text-center text-micro text-cafe-secondary animate-pulse">
           Refreshing project data...
         </div>
       )}
@@ -278,9 +278,9 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
           <div className="space-y-4">
             {/* Stage 0 Frame prompt */}
             {!auditFrame && subTab === 'audit' && (
-              <div className="rounded-lg border-2 border-dashed border-[var(--console-border-soft)] bg-[var(--console-card-bg)] p-4 text-center">
+              <div className="rounded-lg bg-[var(--console-shell-bg)] p-4 text-center">
                 <div className="text-sm font-medium text-cafe-secondary">Stage 0: Frame 尚未完成</div>
-                <div className="mt-1 text-xs text-cafe-muted">建议先完成六问定位，再开始需求翻译</div>
+                <div className="mt-1 text-xs text-cafe-secondary">建议先完成六问定位，再开始需求翻译</div>
               </div>
             )}
 
@@ -332,7 +332,7 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
 
             {subTab === 'features' &&
               (projectItems.length === 0 ? (
-                <div className="rounded-lg bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] p-8 text-center text-sm text-cafe-muted">
+                <div className="rounded-lg bg-[var(--console-shell-bg)] p-8 text-center text-sm text-cafe-secondary">
                   暂无功能 — 使用上方「导入 Backlog」按钮从项目导入
                 </div>
               ) : (
@@ -340,21 +340,21 @@ export function ExternalProjectTab({ project }: ExternalProjectTabProps) {
                   {projectItems.map((item) => (
                     <div
                       key={item.id}
-                      className="flex items-center justify-between rounded-lg bg-[var(--console-card-bg)] shadow-[0_12px_30px_rgba(43,33,26,0.08)] px-4 py-3"
+                      className="flex items-center justify-between rounded-xl bg-[var(--console-card-bg)] px-4 py-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
                     >
                       <div className="flex items-center gap-3">
-                        <span className="rounded bg-[var(--console-pill-bg)] px-2 py-0.5 text-[10px] font-bold text-[var(--cafe-accent)]">
+                        <span className="rounded bg-[var(--console-hover-bg)] px-2 py-0.5 text-micro font-bold text-cafe-secondary">
                           {item.tags[0] ?? '—'}
                         </span>
                         <span className="text-sm font-medium text-cafe">{item.title}</span>
                       </div>
                       <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        className={`rounded-full px-2 py-0.5 text-micro font-medium ${
                           item.status === 'done'
-                            ? 'bg-conn-emerald-bg text-conn-emerald-text'
+                            ? 'bg-conn-green-bg text-conn-emerald-text'
                             : item.status === 'dispatched'
-                              ? 'bg-[var(--color-cafe-accent)]/10 text-[var(--color-cafe-accent)]'
-                              : 'bg-[var(--console-pill-bg)] text-[var(--cafe-accent)]'
+                              ? 'bg-[var(--semantic-info-surface)] text-conn-blue-text'
+                              : 'bg-[var(--console-hover-bg)] text-cafe-secondary'
                         }`}
                       >
                         {item.status}

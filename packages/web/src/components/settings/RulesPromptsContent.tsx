@@ -1,32 +1,33 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiFetch } from '@/utils/api-client';
-
-interface RuleFile {
-  path: string;
-  content: string;
-  exists: boolean;
-}
-
-interface ProviderGuide extends RuleFile {
-  provider: string;
-}
+import { SettingsBadge, SettingsSection, SettingsText } from './primitives';
+import {
+  ConsumptionLegend,
+  FILE_LABELS,
+  type L0PromptsBlock,
+  L0PromptsSection,
+  type ProviderGuide,
+  type RuleFile,
+  RuleFileCard,
+  shouldShowL0Section,
+} from './RulesPromptsParts';
 
 interface RulesData {
   sharedRules: RuleFile[];
   providerGuides: ProviderGuide[];
+  l0Prompts?: L0PromptsBlock;
 }
+
+export type { L0PromptsBlock, PromptConsumptionInfo, RuleFile } from './RulesPromptsParts';
+export { ConsumptionLegend, L0PromptsSection, RuleFileCard, shouldShowL0Section } from './RulesPromptsParts';
 
 const PROVIDER_LABELS: Record<string, string> = {
   claude: '布偶猫 (Claude)',
   codex: '缅因猫 (Codex)',
   gemini: '暹罗猫 (Gemini)',
-};
-
-const FILE_LABELS: Record<string, string> = {
-  'cat-cafe-skills/refs/shared-rules.md': '家规（三猫共用协作规则）',
-  'docs/SOP.md': '运维 SOP',
 };
 
 export function RulesPromptsContent() {
@@ -56,43 +57,59 @@ export function RulesPromptsContent() {
 
   if (error) {
     return (
-      <div className="console-status-chip" data-status="error">
+      <SettingsText as="p" variant="sm" tone="red">
         {error}
-      </div>
+      </SettingsText>
     );
   }
-  if (!data) return <p className="text-sm text-cafe-muted">加载中...</p>;
+  if (!data)
+    return (
+      <SettingsText as="p" variant="sm" tone="muted">
+        加载中...
+      </SettingsText>
+    );
+
+  const visibleL0Prompts = data.l0Prompts && shouldShowL0Section(data.l0Prompts) ? data.l0Prompts : undefined;
 
   return (
     <div className="space-y-6">
-      <Section
+      <ConsumptionLegend />
+      <SettingsSection
         title="共享规则"
-        description="全部成员遵循的协作规则和流程规范（shared-rules.md 摘要注入系统提示词，SOP.md 为参考文档）"
-        badge={`${data.sharedRules.length} files`}
+        description="显示规则文件的真实消费方式：shared-rules.md 会编译进 governance L0；SOP.md 是参考文档。"
+        badge={<SettingsBadge tone="slate">{data.sharedRules.length} files</SettingsBadge>}
       >
-        {data.sharedRules.map((file) => (
-          <RuleFileCard
-            key={file.path}
-            file={file}
-            onClick={() => setPreviewFile({ file, label: FILE_LABELS[file.path] ?? file.path })}
-          />
-        ))}
-      </Section>
+        <div className="space-y-3">
+          {data.sharedRules.map((file) => (
+            <RuleFileCard
+              key={file.path}
+              file={file}
+              onClick={() => setPreviewFile({ file, label: FILE_LABELS[file.path] ?? file.path })}
+            />
+          ))}
+        </div>
+      </SettingsSection>
 
-      <Section
+      <SettingsSection
         title="模型指南"
         description="每只猫的角色定义和模型特定约束"
-        badge={`${data.providerGuides.length} guides`}
+        badge={<SettingsBadge tone="slate">{data.providerGuides.length} guides</SettingsBadge>}
       >
-        {data.providerGuides.map((guide) => (
-          <RuleFileCard
-            key={guide.path}
-            file={guide}
-            label={PROVIDER_LABELS[guide.provider]}
-            onClick={() => setPreviewFile({ file: guide, label: PROVIDER_LABELS[guide.provider] ?? guide.path })}
-          />
-        ))}
-      </Section>
+        <div className="space-y-3">
+          {data.providerGuides.map((guide) => (
+            <RuleFileCard
+              key={guide.path}
+              file={guide}
+              label={PROVIDER_LABELS[guide.provider]}
+              onClick={() => setPreviewFile({ file: guide, label: PROVIDER_LABELS[guide.provider] ?? guide.path })}
+            />
+          ))}
+        </div>
+      </SettingsSection>
+
+      {visibleL0Prompts && (
+        <L0PromptsSection l0Prompts={visibleL0Prompts} onPreview={(file, label) => setPreviewFile({ file, label })} />
+      )}
 
       {previewFile && (
         <RulePreviewModal label={previewFile.label} file={previewFile.file} onClose={() => setPreviewFile(null)} />
@@ -101,89 +118,7 @@ export function RulesPromptsContent() {
   );
 }
 
-function Section({
-  title,
-  description,
-  badge,
-  children,
-}: {
-  title: string;
-  description: string;
-  badge: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="console-list-card rounded-2xl p-5 md:p-6 shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1.5">
-          <h3 className="text-lg font-semibold tracking-[-0.03em] text-cafe">{title}</h3>
-          <p className="max-w-2xl text-sm leading-6 text-cafe-secondary">{description}</p>
-        </div>
-        <span className="console-pill inline-flex items-center rounded-full px-3 py-1 text-[11px] font-semibold text-cafe-secondary">
-          {badge}
-        </span>
-      </div>
-      <div className="mt-4 space-y-3">{children}</div>
-    </section>
-  );
-}
-
-function RuleFileCard({ file, label, onClick }: { file: RuleFile; label?: string; onClick: () => void }) {
-  const displayLabel = label ?? FILE_LABELS[file.path] ?? file.path;
-
-  if (!file.exists) {
-    return (
-      <div className="console-list-card rounded-2xl px-4 py-4 shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-medium text-cafe">{displayLabel}</p>
-          <span className="console-status-chip" data-status="error">
-            文件不存在
-          </span>
-        </div>
-        <p className="mt-2 text-xs text-cafe-muted">{file.path}</p>
-      </div>
-    );
-  }
-
-  const lineCount = file.content.split('\n').length;
-
-  return (
-    <button
-      onClick={onClick}
-      className="console-list-card flex w-full items-center justify-between gap-3 rounded-2xl px-4 py-4 text-left shadow-[0_12px_30px_rgba(43,33,26,0.08)] transition-colors hover:bg-[var(--console-hover-bg)]"
-    >
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-sm font-medium text-cafe">{displayLabel}</p>
-          <span className="console-status-chip" data-status="info">
-            可预览
-          </span>
-        </div>
-        <p className="mt-1 text-xs text-cafe-muted">
-          {file.path} · {lineCount} 行
-        </p>
-      </div>
-      <span className="console-pill flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-cafe-secondary">
-        <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-          <path
-            fillRule="evenodd"
-            d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </span>
-    </button>
-  );
-}
-
 function RulePreviewModal({ label, file, onClose }: { label: string; file: RuleFile; onClose: () => void }) {
-  const handleBackdrop = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
-    },
-    [onClose],
-  );
-
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -194,43 +129,77 @@ function RulePreviewModal({ label, file, onClose }: { label: string; file: RuleF
 
   const lineCount = file.content.split('\n').length;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--console-overlay-backdrop)] p-4 backdrop-blur-sm"
-      onClick={handleBackdrop}
+      className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm"
+      style={{ backgroundColor: 'var(--console-overlay-backdrop)', padding: '1rem' }}
     >
+      <button type="button" aria-label="关闭预览" className="absolute inset-0 cursor-default" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
-        className="relative flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-hidden rounded-[24px] bg-[var(--console-card-bg)] p-[26px] shadow-[0_20px_48px_rgba(43,33,26,0.14)]"
-        onClick={(e) => e.stopPropagation()}
+        className="relative z-10 flex max-h-[calc(100vh-32px)] w-full max-w-[620px] flex-col overflow-hidden"
+        style={{
+          borderRadius: '1rem',
+          backgroundColor: 'var(--console-card-bg)',
+          padding: '26px',
+          boxShadow: '0 20px 48px rgba(43,33,26,0.14)',
+        }}
       >
         <div className="flex shrink-0 items-center gap-[14px]">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] bg-[var(--console-active-bg)] text-[18px] font-bold text-[var(--console-modal-title)]">
+          <div
+            className="flex h-11 w-11 shrink-0 items-center justify-center font-bold"
+            style={{
+              borderRadius: '0.75rem',
+              backgroundColor: 'var(--console-active-bg)',
+              fontSize: 'var(--console-font-lg)',
+              color: 'var(--console-modal-title)',
+            }}
+          >
             📜
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-[20px] font-extrabold text-cafe">{label}</h2>
-            <p className="text-xs text-cafe-muted">
+            <SettingsText
+              as="h2"
+              variant="base"
+              tone="default"
+              className="font-bold"
+              style={{ fontSize: 'var(--console-font-xl)' }}
+            >
+              {label}
+            </SettingsText>
+            <SettingsText as="p" tone="muted">
               {file.path} · {lineCount} 行
-            </p>
+            </SettingsText>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="关闭"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] text-[16px] text-cafe-muted transition hover:bg-[var(--console-modal-close-bg)] hover:text-[var(--console-modal-close-fg)]"
+            className="flex h-8 w-8 shrink-0 items-center justify-center transition"
+            style={{
+              borderRadius: '0.75rem',
+              fontSize: 'var(--console-font-base)',
+              color: 'var(--cafe-text-muted)',
+            }}
           >
             ✕
           </button>
         </div>
 
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto rounded-[16px] bg-[var(--console-panel-bg)] p-4">
-          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-cafe-secondary">
+        <div
+          className="mt-4 min-h-0 flex-1 overflow-y-auto"
+          style={{ borderRadius: '1rem', backgroundColor: 'var(--console-panel-bg)', padding: '1rem' }}
+        >
+          <pre
+            className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words font-mono leading-6"
+            style={{ fontSize: 'var(--console-font-xs)', color: 'var(--cafe-text-secondary)' }}
+          >
             {file.content}
           </pre>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

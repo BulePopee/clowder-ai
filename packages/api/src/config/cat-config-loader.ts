@@ -24,6 +24,7 @@ import { type ClientId, catRegistry, createCatId, normalizeCliEffortForProvider 
 import { z } from 'zod';
 import { createModuleLogger } from '../infrastructure/logger.js';
 import { bootstrapCatCatalog, readCatCatalogRaw, resolveCatCatalogPath } from './cat-catalog-store.js';
+import { isValidTimeZone } from './time-zone.js';
 
 const log = createModuleLogger('cat-config');
 
@@ -52,10 +53,27 @@ const contextBudgetSchema = z.object({
   maxContentLengthPerMsg: z.number().positive(),
 });
 
+const agyProfileSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    profileId: z.string().min(1).optional(),
+    homeRoot: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    autoApprove: z.boolean().optional(),
+    trustedWorkspaces: z.array(z.string().min(1)).optional(),
+  })
+  .optional();
+
 /** F32-b: mentionPatterns must start with @ */
 const mentionPatternSchema = z.string().min(2).regex(/^@/, 'mentionPattern must start with @');
 
 const colorSchema = z.object({ primary: z.string(), secondary: z.string() });
+
+const timeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isValidTimeZone, { message: 'timeZone must be a valid IANA timezone' });
 
 const catVariantSchema = z.object({
   id: z.string().min(1),
@@ -70,6 +88,7 @@ const catVariantSchema = z.object({
   defaultModel: z.string(), // OAuth/subscription CLIs have built-in defaults; api_key validated at route level
   mcpSupport: z.boolean(),
   cli: cliConfigSchema.optional(),
+  agyProfile: agyProfileSchema,
   commandArgs: z.array(z.string().min(1)).optional(), // F127: explicit bridge args (e.g. Antigravity)
   cliConfigArgs: z.array(z.string().min(1)).optional(), // F127: extra CLI args per member
   /** clowder-ai#340 P5: Model provider name (renamed from ocProviderName). */
@@ -192,6 +211,7 @@ const coCreatorConfigSchema = z.object({
   name: z.string().min(1),
   aliases: z.array(z.string().min(1)),
   mentionPatterns: z.array(mentionPatternSchema).min(1),
+  timeZone: timeZoneSchema.optional(),
   avatar: z.string().min(1).optional(),
   color: colorSchema.optional(),
 });
@@ -225,7 +245,7 @@ const catCafeConfigSchemaV2 = z
 /** Union of all versions — loader handles migration */
 const catCafeConfigSchema = z.union([catCafeConfigSchemaV1, catCafeConfigSchemaV2]);
 
-/** clowder-ai#340: Read cat-template.json directly — cat-catalog.json is no longer a runtime source. */
+/** clowder-ai#340: Read cat-template.json directly — cat-config.json is no longer a runtime source. */
 function readTemplate(templatePath: string): string {
   try {
     return readFileSync(templatePath, 'utf-8');
@@ -241,7 +261,7 @@ function readTemplate(templatePath: string): string {
  * across provider switches (e.g. template cli.defaultArgs surviving into a
  * catalog variant that switched to a different client).
  */
-const ATOMIC_OBJECT_KEYS = new Set(['cli', 'color', 'contextBudget', 'voiceConfig']);
+const ATOMIC_OBJECT_KEYS = new Set(['cli', 'agyProfile', 'color', 'contextBudget', 'voiceConfig']);
 
 /**
  * Deep merge two plain objects. `overlay` fields override `base` fields.
@@ -298,6 +318,66 @@ function mergeById(base: HasId[], overlay: HasId[]): HasId[] {
   return result;
 }
 
+type BreedWithResolvedCatIds = HasId & {
+  catId?: string;
+  variants?: Array<{
+    catId?: string;
+  }>;
+};
+
+function collectResolvedCatIds(breeds: BreedWithResolvedCatIds[]): Set<string> {
+  const catIds = new Set<string>();
+  for (const breed of breeds) {
+    if (breed.catId) catIds.add(breed.catId);
+    for (const variant of Array.isArray(breed.variants) ? breed.variants : []) {
+      const resolvedCatId = variant.catId ?? breed.catId;
+      if (resolvedCatId) catIds.add(resolvedCatId);
+    }
+  }
+  return catIds;
+}
+
+/**
+ * Merge template + catalog with #772 template-only breed filter applied.
+ * Shared by loadCatConfig() and getAcpConfig() to avoid duplicate merge paths.
+ */
+function mergeTemplateWithCatalog(templatePath: string): string | null {
+  const projectRoot = dirname(templatePath);
+  const catalogRaw = readCatCatalogRaw(projectRoot);
+  if (catalogRaw === null) return null;
+
+  const baseRaw = readTemplate(templatePath);
+  const baseJson = JSON.parse(baseRaw) as Record<string, unknown>;
+  const catalogJson = JSON.parse(catalogRaw) as Record<string, unknown>;
+  const merged = deepMergeConfig(baseJson, catalogJson);
+
+  // #772: Template-only breeds must not leak into runtime.
+  // When a catalog exists, only catalog breeds are runtime members.
+  // breeds: [] (bootstrap state) means "no breeds" — all template breeds are menu data only.
+  const catalogBreeds = Array.isArray(catalogJson.breeds) ? (catalogJson.breeds as BreedWithResolvedCatIds[]) : [];
+  const catalogBreedIds = new Set(catalogBreeds.map((breed) => breed.id));
+  if (Array.isArray(merged.breeds)) {
+    merged.breeds = (merged.breeds as BreedWithResolvedCatIds[]).filter((breed) => catalogBreedIds.has(breed.id));
+  }
+  const runtimeCatIds = Array.isArray(merged.breeds)
+    ? collectResolvedCatIds(merged.breeds as BreedWithResolvedCatIds[])
+    : new Set<string>();
+
+  // Prune roster entries for template-only breeds — preserve variant, owner,
+  // and other catalog-added entries. Runs even when catalogBreeds is empty
+  // (bootstrap writes breeds:[] + owner roster; template roster must not leak).
+  const baseBreeds = Array.isArray(baseJson.breeds) ? (baseJson.breeds as BreedWithResolvedCatIds[]) : [];
+  const templateOnlyCatIds = collectResolvedCatIds(baseBreeds.filter((breed) => !catalogBreedIds.has(breed.id)));
+  for (const runtimeCatId of runtimeCatIds) templateOnlyCatIds.delete(runtimeCatId);
+  if (templateOnlyCatIds.size > 0 && merged.roster && typeof merged.roster === 'object') {
+    for (const key of Object.keys(merged.roster as Record<string, unknown>)) {
+      if (templateOnlyCatIds.has(key)) delete (merged.roster as Record<string, unknown>)[key];
+    }
+  }
+
+  return JSON.stringify(merged);
+}
+
 /**
  * Load and validate the resolved cat config source.
  * Explicit filePath reads that file directly.
@@ -316,15 +396,10 @@ export function loadCatConfig(filePath?: string): CatCafeConfig {
     }
   } else {
     const templatePath = process.env.CAT_TEMPLATE_PATH ?? DEFAULT_CAT_TEMPLATE_PATH;
-    const projectRoot = dirname(templatePath);
-    const catalogRaw = readCatCatalogRaw(projectRoot);
-    if (catalogRaw !== null) {
-      // Catalog exists — use template as base, catalog as overlay
-      const baseRaw = readTemplate(templatePath);
-      const baseJson = JSON.parse(baseRaw) as Record<string, unknown>;
-      const catalogJson = JSON.parse(catalogRaw) as Record<string, unknown>;
-      raw = JSON.stringify(deepMergeConfig(baseJson, catalogJson));
-      resolvedPath = resolveCatCatalogPath(projectRoot);
+    const merged = mergeTemplateWithCatalog(templatePath);
+    if (merged !== null) {
+      raw = merged;
+      resolvedPath = resolveCatCatalogPath(dirname(templatePath));
     } else {
       raw = readTemplate(templatePath);
       resolvedPath = templatePath;
@@ -434,6 +509,7 @@ export function toAllCatConfigs(config: CatCafeConfig): Record<string, CatConfig
         clientId: variant.clientId as ClientId, // #252: Zod now accepts any string; downstream switch/case has default branches
         defaultModel: variant.defaultModel,
         mcpSupport: variant.mcpSupport,
+        ...(variant.agyProfile != null ? { agyProfile: variant.agyProfile } : {}),
         ...(projectedCommandArgs != null ? { commandArgs: projectedCommandArgs } : {}),
         ...(variant.cliConfigArgs != null && variant.cliConfigArgs.length > 0
           ? { cliConfigArgs: [...variant.cliConfigArgs] }
@@ -441,6 +517,7 @@ export function toAllCatConfigs(config: CatCafeConfig): Record<string, CatConfig
         ...(variant.cli != null ? { cli: variant.cli } : {}),
         ...(variant.provider != null ? { provider: variant.provider } : {}),
         ...(variant.contextBudget != null ? { contextBudget: variant.contextBudget } : {}),
+        ...(variant.voiceConfig != null ? { voiceConfig: variant.voiceConfig } : {}),
         roleDescription: variant.roleDescription ?? breed.roleDescription,
         personality: variant.personality ?? defaultVariant?.personality ?? '',
         breedId: breed.id,
@@ -811,17 +888,7 @@ export interface AcpVariantConfig {
 export function getAcpConfig(catId: string): AcpVariantConfig | undefined {
   try {
     const templatePath = process.env.CAT_TEMPLATE_PATH ?? DEFAULT_CAT_TEMPLATE_PATH;
-    const projectRoot = dirname(templatePath);
-    const catalogRaw = readCatCatalogRaw(projectRoot);
-    let raw: string;
-    if (catalogRaw !== null) {
-      const baseRaw = readTemplate(templatePath);
-      const baseJson = JSON.parse(baseRaw) as Record<string, unknown>;
-      const catalogJson = JSON.parse(catalogRaw) as Record<string, unknown>;
-      raw = JSON.stringify(deepMergeConfig(baseJson, catalogJson));
-    } else {
-      raw = readTemplate(templatePath);
-    }
+    const raw = mergeTemplateWithCatalog(templatePath) ?? readTemplate(templatePath);
     const json = JSON.parse(raw) as {
       breeds?: Array<{ catId?: string; variants?: Array<{ catId?: string; acp?: AcpVariantConfig }> }>;
     };

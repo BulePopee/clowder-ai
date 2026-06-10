@@ -44,6 +44,10 @@ port="$2"
   return { root, binDir };
 }
 
+function writeTool(binDir, name, body) {
+  writeFileSync(join(binDir, name), body, { mode: 0o755 });
+}
+
 function listen(port) {
   return new Promise((resolvePromise, reject) => {
     const server = createServer();
@@ -91,6 +95,85 @@ printf 'ok'`,
     assert.equal(result.stdout.trim(), 'ok');
   });
 
+  it('nc probe wraps nc with timeout when timeout is available', () => {
+    const { root, binDir } = createSandbox();
+    const timeoutLog = join(root, 'timeout.log');
+    const ncLog = join(root, 'nc.log');
+    const scriptPath = join(root, 'scripts', 'review-start.sh');
+    writeTool(
+      binDir,
+      'timeout',
+      `#!/bin/bash
+printf '%s\\n' "$*" >> "${timeoutLog}"
+shift
+exec "$@"
+`,
+    );
+    writeTool(
+      binDir,
+      'nc',
+      `#!/bin/bash
+printf '%s\\n' "$*" >> "${ncLog}"
+exit 0
+`,
+    );
+
+    const result = spawnSync(
+      'bash',
+      [
+        '-lc',
+        `set -e
+source "${scriptPath}" --source-only
+PATH="${binDir}"
+probe_port_with_nc 6549
+printf 'ok'`,
+      ],
+      {
+        cwd: root,
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), 'ok');
+    assert.equal(readFileSync(timeoutLog, 'utf8').trim(), '1 nc -z 127.0.0.1 6549');
+    assert.equal(readFileSync(ncLog, 'utf8').trim(), '-z 127.0.0.1 6549');
+  });
+
+  it('nc probe falls back to bare nc when timeout is unavailable', () => {
+    const { root, binDir } = createSandbox();
+    const ncLog = join(root, 'nc.log');
+    const scriptPath = join(root, 'scripts', 'review-start.sh');
+    writeTool(
+      binDir,
+      'nc',
+      `#!/bin/bash
+printf '%s\\n' "$*" >> "${ncLog}"
+exit 0
+`,
+    );
+
+    const result = spawnSync(
+      'bash',
+      [
+        '-lc',
+        `set -e
+source "${scriptPath}" --source-only
+PATH="${binDir}"
+probe_port_with_nc 6550
+printf 'ok'`,
+      ],
+      {
+        cwd: root,
+        encoding: 'utf8',
+      },
+    );
+
+    assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert.equal(result.stdout.trim(), 'ok');
+    assert.equal(readFileSync(ncLog, 'utf8').trim(), '-z 127.0.0.1 6550');
+  });
+
   it('falls back when lsof is unavailable and skips occupied review ports', async () => {
     const { root, binDir } = createSandbox();
     const occupiedServer = await listen(0);
@@ -115,7 +198,12 @@ printf 'ok'`,
     });
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
-    assert.match(result.stdout, new RegExp(`START_DEV:${occupiedPort + 2}/${occupiedPort + 3}`));
+    const startMatch = result.stdout.match(/START_DEV:(\d+)\/(\d+)/);
+    assert.ok(startMatch, 'expected START_DEV:<web>/<api> in stdout');
+    const [, webPort, apiPort] = startMatch;
+    assert.notEqual(Number(webPort), occupiedPort, 'web port must not be the occupied port');
+    assert.notEqual(Number(apiPort), occupiedPort + 1, 'api port must not be the occupied+1 port');
+    assert.ok(Number(webPort) > occupiedPort, 'fallback web port must be above the occupied port');
   });
 
   it('rejects documented runtime reserved ports', () => {

@@ -51,7 +51,7 @@ pnpm start
 #   pnpm start:direct
 ```
 
-To enable local semantic rerank for the memory system, set `EMBED_MODE=on` (or `shadow`) in `.env`. `pnpm start` / `pnpm start:direct` will auto-launch the platform launcher (`scripts/embed-server.sh` on Unix, `scripts/embed-server.ps1` on Windows). Apple Silicon uses MLX by default; other platforms fall back to `sentence-transformers`.
+To enable local semantic rerank for the memory system, install the **Embedding** service from Console settings — the installer creates `~/.cat-cafe/embed-venv` with the right backend for your platform (MLX on Apple Silicon, fastembed/ONNX or sentence-transformers elsewhere). On Windows, `pnpm start` / `pnpm start:direct` then auto-launches `scripts/services/embed-server.ps1` when Console reports the service as installed + enabled. Uninstalling or disabling via Console will skip the autostart.
 
 `pnpm start` uses the **runtime worktree** architecture: it creates an isolated `../cat-cafe-runtime` worktree (on first run), syncs it to `origin/main`, builds, starts Redis, and launches Frontend (port 3003) + API (port 3004). This keeps your development checkout clean.
 
@@ -598,6 +598,17 @@ CORS_ALLOW_PRIVATE_NETWORK=true
 ```
 
 This opt-in trusts browsers from RFC 1918 private networks (`10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`) and Tailscale IPs (`100.x.x.x`). If you use a reverse proxy or a fixed `FRONTEND_URL`, you usually do not need the extra flag.
+
+### Owner Identity for LAN/Remote Mode
+
+When the API is accessible from non-localhost addresses (`API_SERVER_HOST=0.0.0.0`), most privileged write operations (sensitive env vars, connector credentials, skill sync, default cat) require `DEFAULT_OWNER_USER_ID` to be set. Without it, these writes are rejected with 403 to prevent unauthorized LAN access. Plugin/capability config writes remain direct-localhost-only regardless of this setting.
+
+```bash
+# Required for LAN/Tailscale/remote deployments that need privileged writes
+DEFAULT_OWNER_USER_ID=your-user-id
+```
+
+Local (localhost) deployments do **not** need this — all privileged writes work without it in single-user mode.
 
 ## Troubleshooting
 

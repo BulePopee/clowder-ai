@@ -157,6 +157,7 @@ export type {
 } from './capability.js';
 // Cat types
 export type {
+  AgyProfileConfig,
   CatColor,
   CatConfig,
   /** @deprecated clowder-ai#340: Use ClientId instead. */
@@ -189,6 +190,8 @@ export type {
 } from './cat-breed.js';
 // F182: Cat routing error types
 export type { CatAlternative, CatRoutingError } from './cat-routing.js';
+// F212: CLI error diagnostics (cross-package data contract; classifier/sanitizer impl stays in api)
+export type { CliDiagnostics, CliErrorReasonCode } from './cli-diagnostics.js';
 export type { BuiltinAccountClient } from './client-routing.js';
 export {
   builtinAccountFamilyForClient,
@@ -229,8 +232,8 @@ export {
 // Connector types (F97 外部信息源抽象)
 export type {
   ConnectorDefinition,
+  ConnectorIconSpec,
   ConnectorSource,
-  ConnectorTailwindTheme,
   ConnectorThreadBinding,
   OutboundDeliveryTarget,
   ReplyPreview,
@@ -251,11 +254,38 @@ export type {
   DeliberateSession,
   DeliberateTransition,
 } from './deliberate.js';
+// F227: Event Memory types (cognitive-transition event index)
+export {
+  COGNITIVE_TRANSITIONS,
+  type CognitiveTransition,
+  EVENT_CONFIDENCES,
+  EVENT_TRIGGERS,
+  type EventConfidence,
+  type EventMemoryId,
+  type EventMemoryRecord,
+  type EventTrigger,
+  generateEventId,
+  isEventMemoryRecord,
+  isValidOwnerUserId,
+  type StoredEventMemory,
+} from './event-memory.js';
 // External project types (F076 跨项目作战面板)
 export type {
   CreateExternalProjectInput,
   ExternalProject,
 } from './external-project.js';
+// F222: Frustration Auto-Issue types
+export type {
+  CreateFrustrationIssueInput,
+  FrustrationContextMessage,
+  FrustrationContextToolCall,
+  FrustrationIssue,
+  FrustrationIssueContext,
+  FrustrationIssueId,
+  FrustrationIssueStatus,
+  FrustrationSignalType,
+} from './frustration-issue.js';
+export { createFrustrationIssue, generateFrustrationIssueId } from './frustration-issue.js';
 // Game engine types (F101)
 export type {
   ActionDefinition,
@@ -289,6 +319,7 @@ export {
 export type {
   CatId,
   MessageId,
+  ProposalId,
   SessionId,
   ThreadId,
   UserId,
@@ -296,11 +327,13 @@ export type {
 export {
   createCatId,
   createMessageId,
+  createProposalId,
   createSessionId,
   createThreadId,
   createUserId,
   generateId,
   generateMessageId,
+  generateProposalId,
   generateSessionId,
   generateThreadId,
 } from './ids.js';
@@ -365,6 +398,24 @@ export {
   MARKETPLACE_ECOSYSTEMS,
   TRUST_LEVELS,
 } from './marketplace.js';
+// Meeting types (F195 Phase C — Meeting Copilot)
+export type {
+  MeetingParticipant,
+  MeetingSession,
+  MeetingStatus,
+  ParticipantRole,
+} from './meeting.js';
+export {
+  createMeetingSession,
+  transitionMeetingStatus,
+  validateParticipant,
+} from './meeting.js';
+// Meeting context block (F195 Phase C — untrusted transcript isolation)
+export type {
+  MeetingContextBlock,
+  MeetingContextProvenance,
+} from './meeting-context-block.js';
+export { createMeetingContextBlock } from './meeting-context-block.js';
 // Memory types (F3-lite 显式记忆)
 export type {
   MemoryEntry,
@@ -425,6 +476,23 @@ export type {
   ResolverType,
   WorkflowAction,
 } from './pack.js';
+// Plugin Framework types (F202 声明式插件注册)
+export type {
+  PluginConfigField,
+  PluginHealthCheck,
+  PluginInfo,
+  PluginManifest,
+  PluginResourceDef,
+  PluginResourceStatus,
+  PluginStatus,
+} from './plugin.js';
+// Proposal types (F128 Cat Thread Proposal)
+export type {
+  ProposalApproveOverrides,
+  ProposalStatus,
+  ReportingMode,
+  ThreadProposal,
+} from './proposal.js';
 // Reflux types (F076 Phase 2 — 回流)
 export type {
   CreateRefluxPatternInput,
@@ -454,11 +522,12 @@ export type {
   RichMediaGalleryBlock,
   RichMessageExtra,
 } from './rich.js';
-export { normalizeRichBlock } from './rich.js';
+export { isValidRichBlock, normalizeRichBlock } from './rich.js';
 // Session chain types (F24 Session Chain + Context Health)
 export type {
   ContextHealth,
   ContextHealthConfig,
+  ContextManagementHint,
   SealReason,
   SealResult,
   SessionRecord,
@@ -468,6 +537,12 @@ export type {
   SessionUsageSnapshot,
   StrategyAction,
 } from './session.js';
+// Session handoff proposal types (F225 Cat-Initiated Session Handoff)
+export type {
+  CatHandoffNote,
+  HandoffProposalStatus,
+  SessionHandoffProposal,
+} from './session-handoff-proposal.js';
 // Signals types (F21 Signal Hunter)
 export type {
   SignalArticle,
@@ -501,6 +576,22 @@ export type {
   SliceType,
   UpdateSliceInput,
 } from './slice.js';
+// SOP definition generated truth source (#748)
+export {
+  DEVELOPMENT_SOP_DEFINITION,
+  DEVELOPMENT_SOP_STAGE_IDS,
+  type DevelopmentSopStageId,
+  getSopDefinition,
+  isSopDefinitionId,
+  normalizeSopDefinitionId,
+  type ResolvedWorkflowSopSkill,
+  type RuntimeSopStageId,
+  resolveWorkflowSopSkill,
+  SOP_DEFINITION_IDS,
+  SOP_DEFINITIONS,
+  type SopDefinition,
+  type SopDefinitionId,
+} from './sop-definition.generated.js';
 // STT types (F088 Phase 6 — Speech-to-Text)
 export type { ISttProvider, SttTranscribeRequest, SttTranscribeResult } from './stt.js';
 // Study types (F091 Signal Study Mode)
@@ -522,12 +613,22 @@ export type {
   CiAutomationState,
   ConflictAutomationState,
   CreateTaskInput,
+  DispatchGateState,
+  IssueAutomationState,
   ReviewAutomationState,
+  SuggestedCrossPostAction,
+  SuggestedCrossPostActionSource,
   TaskItem,
   TaskKind,
   TaskStatus,
   UpdateTaskInput,
 } from './task.js';
+export { extractFeatureIds, isTrackingKind } from './task.js';
+// F193 Phase E: SuggestedCrossPostAction + DispatchGateState re-exported via task.ts
+// (canonical source: cross-thread-affordance.ts; E2/E4 consumers can also import directly)
+export type { CancelReasonValue, PermissionCancelEvent } from './task-outcome.js';
+// Task Outcome types (F192 Phase G)
+export { CANCEL_REASON_OPTIONS } from './task-outcome.js';
 // TTS types (F34 TTS Provider)
 export type {
   ITtsProvider,

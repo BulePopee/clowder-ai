@@ -3,10 +3,12 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import typographyTokens from '@/styles/typography-tokens.json';
 import { API_URL, apiFetch } from '@/utils/api-client';
 
 import { AgentPaneList } from './AgentPaneList';
 import { AgentPaneViewer } from './AgentPaneViewer';
+import { TERMINAL_THEME } from './terminal-theme';
 
 interface TerminalTabProps {
   worktreeId: string;
@@ -46,13 +48,9 @@ export function TerminalTab({ worktreeId }: TerminalTabProps) {
       // Init xterm.js
       const term = new Terminal({
         cursorBlink: true,
-        fontSize: 13,
+        fontSize: typographyTokens.fontSizePx.compact,
         fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
-        theme: {
-          background: '#1a1b26',
-          foreground: '#a9b1d6',
-          cursor: '#c0caf5',
-        },
+        theme: TERMINAL_THEME,
       });
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
@@ -151,9 +149,9 @@ export function TerminalTab({ worktreeId }: TerminalTabProps) {
           alignItems: 'center',
           gap: 8,
           padding: '4px 8px',
-          fontSize: 12,
+          fontSize: typographyTokens.fontSizePx.xs,
           color: 'var(--terminal-text-muted)',
-          borderBottom: '1px solid var(--terminal-selected-bg)',
+          borderBottom: '1px solid var(--terminal-chrome)',
         }}
       >
         <span
@@ -163,10 +161,10 @@ export function TerminalTab({ worktreeId }: TerminalTabProps) {
             borderRadius: '50%',
             background:
               status === 'connected'
-                ? 'var(--terminal-text-success)'
+                ? 'var(--terminal-status-ok)'
                 : status === 'connecting'
-                  ? 'var(--terminal-text-warn)'
-                  : 'var(--terminal-text-error)',
+                  ? 'var(--terminal-status-warn)'
+                  : 'var(--terminal-status-error)',
           }}
         />
         <span>
@@ -178,12 +176,12 @@ export function TerminalTab({ worktreeId }: TerminalTabProps) {
             type="button"
             style={{
               background: 'none',
-              border: '1px solid var(--terminal-button-border)',
-              color: 'var(--terminal-button-text)',
+              border: '1px solid var(--terminal-btn-border)',
+              color: 'var(--terminal-text)',
               padding: '2px 8px',
               borderRadius: 4,
               cursor: 'pointer',
-              fontSize: 11,
+              fontSize: typographyTokens.fontSizePx.label,
             }}
           >
             Reconnect
@@ -195,12 +193,12 @@ export function TerminalTab({ worktreeId }: TerminalTabProps) {
             type="button"
             style={{
               background: 'none',
-              border: '1px solid var(--terminal-error-border)',
-              color: 'var(--terminal-text-error)',
+              border: '1px solid var(--terminal-btn-danger-border)',
+              color: 'var(--terminal-status-error)',
               padding: '2px 8px',
               borderRadius: 4,
               cursor: 'pointer',
-              fontSize: 11,
+              fontSize: typographyTokens.fontSizePx.label,
               marginLeft: 'auto',
             }}
           >

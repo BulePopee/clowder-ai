@@ -1,6 +1,13 @@
 'use client';
 
-import type { CheckStatus, SopStage, WorkflowSop } from '@cat-cafe/shared';
+import {
+  type CheckStatus,
+  DEVELOPMENT_SOP_DEFINITION,
+  DEVELOPMENT_SOP_STAGE_IDS,
+  resolveWorkflowSopSkill,
+  type SopStage,
+  type WorkflowSop,
+} from '@cat-cafe/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
 
@@ -8,16 +15,11 @@ interface WorkflowSopPanelProps {
   backlogItemId: string | null;
 }
 
-const STAGE_LABELS: Record<SopStage, string> = {
-  kickoff: '立项',
-  impl: '实现',
-  quality_gate: '自检',
-  review: 'Review',
-  merge: '合入',
-  completion: '完成',
-};
+const STAGE_LABELS = Object.fromEntries(
+  DEVELOPMENT_SOP_DEFINITION.stages.map((stage) => [stage.id, stage.label]),
+) as Record<SopStage, string>;
 
-const STAGE_ORDER: SopStage[] = ['kickoff', 'impl', 'quality_gate', 'review', 'merge', 'completion'];
+const STAGE_ORDER = [...DEVELOPMENT_SOP_STAGE_IDS] as SopStage[];
 
 const CHECK_LABELS: Record<keyof WorkflowSop['checks'], string> = {
   remoteMainSynced: 'Main 同步',
@@ -29,20 +31,20 @@ const CHECK_LABELS: Record<keyof WorkflowSop['checks'], string> = {
 function CheckBadge({ status }: { status: CheckStatus }) {
   if (status === 'verified') {
     return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-conn-emerald-bg px-1.5 py-0.5 text-[10px] font-medium text-conn-emerald-text">
+      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--mc-status-done-bg)] px-1.5 py-0.5 text-micro font-medium text-[var(--mc-status-done-text)]">
         verified
       </span>
     );
   }
   if (status === 'attested') {
     return (
-      <span className="inline-flex items-center gap-0.5 rounded-full bg-conn-amber-bg px-1.5 py-0.5 text-[10px] font-medium text-conn-amber-text">
+      <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--mc-status-suggested-bg)] px-1.5 py-0.5 text-micro font-medium text-[var(--mc-status-suggested-text)]">
         attested
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--console-pill-bg)] px-1.5 py-0.5 text-[10px] font-medium text-cafe-muted">
+    <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--console-hover-bg)] px-1.5 py-0.5 text-micro font-medium text-cafe-secondary">
       unknown
     </span>
   );
@@ -55,13 +57,13 @@ function StagePills({ current }: { current: SopStage }) {
       {STAGE_ORDER.map((stage, idx) => {
         const isCurrent = stage === current;
         const isPast = idx < currentIdx;
-        let className = 'rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors';
+        let className = 'rounded-full px-2 py-0.5 text-micro font-medium transition-colors';
         if (isCurrent) {
-          className += ' bg-[var(--cafe-accent)] text-[var(--cafe-surface)]';
+          className += ' bg-[var(--mc-accent)] text-white';
         } else if (isPast) {
-          className += ' bg-[var(--console-pill-bg)] text-cafe-secondary';
+          className += ' bg-[var(--console-border-soft)] text-cafe-secondary';
         } else {
-          className += ' bg-[var(--console-pill-bg)] text-cafe-muted';
+          className += ' bg-[var(--console-hover-bg)] text-cafe-muted';
         }
         return (
           <span key={stage} className={className} data-testid={`sop-stage-${stage}`}>
@@ -71,6 +73,14 @@ function StagePills({ current }: { current: SopStage }) {
       })}
     </div>
   );
+}
+
+function tryResolveWorkflowSopSkill(sop: WorkflowSop) {
+  try {
+    return resolveWorkflowSopSkill(sop);
+  } catch {
+    return null;
+  }
 }
 
 export function WorkflowSopPanel({ backlogItemId }: WorkflowSopPanelProps) {
@@ -116,32 +126,44 @@ export function WorkflowSopPanel({ backlogItemId }: WorkflowSopPanelProps) {
 
   if (!backlogItemId) {
     return (
-      <section className="p-3" data-testid="mc-workflow-sop">
-        <p className="text-[11px] text-cafe-muted">选择一个 backlog 项查看 SOP 状态</p>
+      <section
+        className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="mc-workflow-sop"
+      >
+        <p className="text-xs text-cafe-secondary">选择一个 backlog 项查看 SOP 状态</p>
       </section>
     );
   }
 
   if (loading) {
     return (
-      <section className="p-3" data-testid="mc-workflow-sop">
-        <p className="text-[11px] text-cafe-muted">加载 SOP 告示牌中...</p>
+      <section
+        className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="mc-workflow-sop"
+      >
+        <p className="text-xs text-cafe-secondary">加载 SOP 告示牌中...</p>
       </section>
     );
   }
 
   if (fetchError) {
     return (
-      <section className="p-3" data-testid="mc-workflow-sop">
-        <p className="text-[11px] text-conn-red-text">{fetchError}</p>
+      <section
+        className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="mc-workflow-sop"
+      >
+        <p className="text-xs text-conn-red-text">{fetchError}</p>
       </section>
     );
   }
 
   if (!sop) {
     return (
-      <section className="p-3" data-testid="mc-workflow-sop">
-        <p className="rounded-lg bg-[var(--console-field-bg)] px-2 py-2 text-[11px] text-cafe-muted">
+      <section
+        className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="mc-workflow-sop"
+      >
+        <p className="rounded-lg bg-[var(--console-shell-bg)] px-2 py-2 text-xs text-cafe-secondary">
           暂无 SOP 告示牌数据
         </p>
       </section>
@@ -149,13 +171,34 @@ export function WorkflowSopPanel({ backlogItemId }: WorkflowSopPanelProps) {
   }
 
   const checkEntries = Object.entries(sop.checks) as [keyof WorkflowSop['checks'], CheckStatus][];
+  const resolvedSkill = tryResolveWorkflowSopSkill(sop);
+
+  if (!resolvedSkill) {
+    return (
+      <section
+        className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="mc-workflow-sop"
+      >
+        <div className="mb-2">
+          <h2 className="text-sm font-semibold text-cafe">SOP 告示牌</h2>
+          <p className="text-micro text-cafe-secondary">{sop.featureId}</p>
+        </div>
+        <p className="rounded-lg bg-[var(--console-shell-bg)] px-2 py-2 text-xs text-cafe-secondary">
+          SOP 告示牌数据需要更新
+        </p>
+      </section>
+    );
+  }
 
   return (
-    <section className="p-3" data-testid="mc-workflow-sop">
+    <section
+      className="rounded-2xl bg-[var(--console-card-bg)] p-3 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+      data-testid="mc-workflow-sop"
+    >
       {/* Header */}
       <div className="mb-2">
         <h2 className="text-sm font-semibold text-cafe">SOP 告示牌</h2>
-        <p className="text-[10px] text-cafe-secondary">{sop.featureId}</p>
+        <p className="text-micro text-cafe-secondary">{sop.featureId}</p>
       </div>
 
       {/* Stage pills */}
@@ -164,40 +207,42 @@ export function WorkflowSopPanel({ backlogItemId }: WorkflowSopPanelProps) {
       </div>
 
       {/* Baton holder + next skill */}
-      <div className="mb-3 rounded-xl bg-[var(--console-field-bg)] px-2.5 py-2">
-        <p className="text-[11px] text-cafe-secondary">
+      <div className="mb-3 rounded-xl bg-[var(--console-card-bg)] px-2.5 py-2 shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
+        <p className="text-xs text-cafe-secondary">
           接力棒：
           <span className="font-semibold text-cafe" data-testid="sop-baton-holder">
             {sop.batonHolder}
           </span>
         </p>
-        {sop.nextSkill && (
-          <p className="text-[11px] text-cafe-secondary">
-            下一步 Skill：<span className="font-medium text-[var(--cafe-accent)]">{sop.nextSkill}</span>
-          </p>
-        )}
+        <p className="text-xs text-cafe-secondary" data-testid="sop-next-skill">
+          {resolvedSkill.source === 'override' ? '手动 override：' : '定义建议：'}
+          <span className="font-medium text-cafe-secondary">{resolvedSkill.skill}</span>
+        </p>
       </div>
 
       {/* Resume capsule */}
-      <div className="mb-3 rounded-xl bg-[var(--console-field-bg)] px-2.5 py-2" data-testid="sop-resume-capsule">
-        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-cafe-muted">Resume Capsule</p>
-        <p className="text-[11px] text-cafe">
+      <div
+        className="mb-3 rounded-xl bg-[var(--console-card-bg)] px-2.5 py-2 shadow-[0_8px_22px_rgba(43,33,26,0.04)]"
+        data-testid="sop-resume-capsule"
+      >
+        <p className="mb-1 text-micro font-semibold uppercase tracking-wide text-cafe-secondary">Resume Capsule</p>
+        <p className="text-xs text-cafe">
           <span className="font-medium text-cafe-secondary">Goal：</span>
           {sop.resumeCapsule.goal}
         </p>
         {sop.resumeCapsule.done.length > 0 && (
           <div className="mt-1">
-            <span className="text-[10px] font-medium text-cafe-secondary">Done：</span>
+            <span className="text-micro font-medium text-cafe-secondary">Done：</span>
             <ul className="ml-3 list-disc">
               {sop.resumeCapsule.done.map((item, i) => (
-                <li key={i} className="text-[11px] text-cafe">
+                <li key={i} className="text-xs text-cafe">
                   {item}
                 </li>
               ))}
             </ul>
           </div>
         )}
-        <p className="mt-1 text-[11px] text-cafe">
+        <p className="mt-1 text-xs text-cafe">
           <span className="font-medium text-cafe-secondary">Focus：</span>
           {sop.resumeCapsule.currentFocus}
         </p>
@@ -205,18 +250,18 @@ export function WorkflowSopPanel({ backlogItemId }: WorkflowSopPanelProps) {
 
       {/* Checks */}
       <div className="mb-2 space-y-1" data-testid="sop-checks">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-cafe-muted">Checks</p>
+        <p className="text-micro font-semibold uppercase tracking-wide text-cafe-secondary">Checks</p>
         {checkEntries.map(([key, status]) => (
           <div key={key} className="flex items-center justify-between">
-            <span className="text-[11px] text-cafe-secondary">{CHECK_LABELS[key]}</span>
+            <span className="text-xs text-cafe-secondary">{CHECK_LABELS[key]}</span>
             <CheckBadge status={status} />
           </div>
         ))}
       </div>
 
       {/* Footer */}
-      <div className="border-t border-[var(--console-border-soft)] pt-1.5">
-        <p className="text-[10px] text-cafe-muted">
+      <div className="console-divider-t pt-1.5">
+        <p className="text-micro text-cafe-muted">
           更新于{' '}
           {new Date(sop.updatedAt).toLocaleString('zh-CN', {
             month: '2-digit',

@@ -49,7 +49,7 @@ export function TagPillList({
               type="button"
               aria-label={`移除 ${tag}`}
               onClick={() => onRemove(tag)}
-              className="rounded-full px-1 text-[10px] leading-none opacity-70 transition hover:opacity-100"
+              className="rounded-full px-1 text-micro leading-none opacity-70 transition hover:opacity-100"
             >
               ×
             </button>

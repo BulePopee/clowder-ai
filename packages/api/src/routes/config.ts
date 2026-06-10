@@ -16,7 +16,6 @@ import { configStore } from '../config/ConfigStore.js';
 import {
   clearRuntimeDefaultCatId,
   getDefaultCatId,
-  getOwnerUserId,
   hasRuntimeDefaultCatOverride,
   isCatAvailable,
   setRuntimeDefaultCatId,
@@ -31,8 +30,16 @@ import {
   isEditableEnvVarName,
 } from '../config/env-registry.js';
 import { updateRuntimeCoCreator } from '../config/runtime-cat-catalog.js';
+import { isValidTimeZone } from '../config/time-zone.js';
 import { AuditEventTypes, getEventAuditLog } from '../domains/cats/services/orchestration/EventAuditLog.js';
+// F212 Phase F (cloud codex R4 P2-#2 on fc69597675): import logger's captured LOG_DIR
+// so env-summary returns the path the active pino destination is actually writing to.
+// Reading process.env.LOG_DIR here would diverge from logger after a runtime
+// `PATCH /api/config/env` LOG_DIR edit — env-summary would lie about effective path.
+import { LOG_DIR_PATH } from '../infrastructure/logger.js';
 import { resolveActiveProjectRoot } from '../utils/active-project-root.js';
+import { isDirectLoopbackRequest } from '../utils/loopback-request.js';
+import { resolveOwnerGate } from '../utils/owner-gate.js';
 import { resolveHeaderUserId } from '../utils/request-identity.js';
 import { getDefaultUploadDir } from '../utils/upload-paths.js';
 import { configCatOrderRoutes } from './config-cat-order.js';
@@ -46,10 +53,17 @@ const envPatchSchema = z.object({
   updates: z.array(z.object({ name: z.string().min(1), value: z.string().nullable() })).min(1),
 });
 
+const timeZonePatchSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isValidTimeZone, { message: 'timeZone must be a valid IANA timezone' });
+
 const coCreatorPatchSchema = z.object({
   name: z.string().trim().min(1),
   aliases: z.array(z.string().trim().min(1)),
   mentionPatterns: z.array(z.string().trim().min(1)).min(1),
+  timeZone: timeZonePatchSchema.optional(),
   avatar: z.string().trim().nullable().optional(),
   color: z
     .object({
@@ -215,6 +229,7 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
         name: parsed.data.name,
         aliases: parsed.data.aliases,
         mentionPatterns: parsed.data.mentionPatterns,
+        ...(parsed.data.timeZone !== undefined ? { timeZone: parsed.data.timeZone } : {}),
         ...(parsed.data.avatar !== undefined ? { avatar: parsed.data.avatar } : {}),
         ...(parsed.data.color !== undefined ? { color: parsed.data.color } : {}),
       });
@@ -232,6 +247,7 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
           operator,
           name: next.coCreator.name,
           mentionPatterns: next.coCreator.mentionPatterns,
+          timeZone: next.coCreator.timeZone,
         },
       });
     } catch (err) {
@@ -260,7 +276,13 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
         homeDir: home,
         dataDirs: {
           auditLogs: resolve(apiCwd, process.env.AUDIT_LOG_DIR ?? './data/audit-logs'),
-          runtimeLogs: resolve(apiCwd, './data/logs/api'),
+          // F212 Phase F (cloud codex R3 P2 on 3083d7c5f + R4 P2-#2 on fc69597675): use
+          // the path the pino destination CAPTURED at logger import. Reading process.env.
+          // LOG_DIR directly would let runtime `PATCH /api/config/env` edits change what
+          // env-summary returns while pino keeps writing to the import-time value — the
+          // AC-F5 hint would then point users to a directory that has no current logs.
+          // Single source of truth = LOG_DIR_PATH.
+          runtimeLogs: LOG_DIR_PATH,
           cliArchive: resolve(apiCwd, process.env.CLI_RAW_ARCHIVE_DIR ?? './data/cli-raw-archive'),
           redisDevSandbox: resolve(home, '.cat-cafe/redis-dev-sandbox'),
           uploads: getDefaultUploadDir(process.env.UPLOAD_DIR),
@@ -280,6 +302,8 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
       reply.status(400);
       return { error: 'Identity required (X-Cat-Cafe-User header)' };
     }
+    const sessionUserId = (request as FastifyRequest & { sessionUserId?: string }).sessionUserId;
+    const sessionOperator = typeof sessionUserId === 'string' && sessionUserId.trim() ? sessionUserId.trim() : null;
 
     const updates = new Map<string, string | null>();
     for (const update of parsed.data.updates) {
@@ -290,17 +314,30 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
       updates.set(update.name, update.value);
     }
 
-    // Owner gate: sensitive-editable vars require EXPLICIT owner config (F136 trust anchor)
+    // Sensitive env writes require session-auth (not forgeable header identity)
+    // + loopback guard: non-localhost requests without a configured owner are
+    // rejected to prevent LAN/Tailscale write-through in single-user mode.
     const touchesSensitive = hasSensitiveEditableVars(updates.keys());
     if (touchesSensitive) {
-      const ownerId = process.env.DEFAULT_OWNER_USER_ID?.trim();
-      if (!ownerId) {
-        reply.status(403);
-        return { error: 'Sensitive env write requires DEFAULT_OWNER_USER_ID to be configured' };
+      if (!sessionOperator) {
+        reply.status(401);
+        return { error: 'Sensitive env writes require session authentication' };
       }
-      if (operator !== ownerId) {
+      // Network guard: when DEFAULT_OWNER_USER_ID is unset, only direct
+      // loopback requests (no proxy) are trusted. Proxied or remote requests
+      // must have a configured owner. Same pattern as connector guards.
+      if (!isDirectLoopbackRequest(request) && !process.env.DEFAULT_OWNER_USER_ID?.trim()) {
         reply.status(403);
-        return { error: 'Sensitive env vars can only be modified by the owner' };
+        return {
+          error: 'Sensitive env writes from non-localhost require DEFAULT_OWNER_USER_ID to be configured',
+        };
+      }
+      const gateResult = resolveOwnerGate(sessionOperator, {
+        errorMessage: 'Sensitive env vars can only be modified by the owner',
+      });
+      if (gateResult) {
+        reply.status(gateResult.status);
+        return { error: gateResult.error };
       }
     }
 
@@ -333,22 +370,22 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
       });
     }
 
+    const auditOperator = touchesSensitive ? sessionOperator! : (sessionOperator ?? operator);
     try {
       await auditLog.append({
         type: AuditEventTypes.CONFIG_UPDATED,
         data: {
           target: '.env',
           keys: [...updates.keys()],
-          operator,
+          operator: auditOperator,
         },
       });
-      // Separate audit trail for sensitive env writes (sensitive keys only, no values)
       if (touchesSensitive) {
         await auditLog.append({
           type: AuditEventTypes.ENV_SENSITIVE_WRITE,
           data: {
             keys: filterSensitiveEditableKeys(updates.keys()),
-            operator,
+            operator: auditOperator,
           },
         });
       }
@@ -386,9 +423,21 @@ export async function configRoutes(app: FastifyInstance, opts: ConfigRoutesOptio
       return { error: 'Identity required (X-Cat-Cafe-User header)' };
     }
 
-    if (operator !== getOwnerUserId()) {
+    // Network guard: default-cat writes persist to .env — when
+    // DEFAULT_OWNER_USER_ID is unset, restrict to direct loopback to
+    // prevent LAN/proxied clients from changing the default cat via
+    // forgeable X-Cat-Cafe-User header (#794 P2).
+    if (!isDirectLoopbackRequest(request) && !process.env.DEFAULT_OWNER_USER_ID?.trim()) {
       reply.status(403);
-      return { error: 'Only the owner can change the default cat' };
+      return { error: 'Default cat changes from non-localhost require DEFAULT_OWNER_USER_ID to be configured' };
+    }
+
+    const gateResult = resolveOwnerGate(operator, {
+      errorMessage: 'Only the owner can change the default cat',
+    });
+    if (gateResult) {
+      reply.status(gateResult.status);
+      return { error: gateResult.error };
     }
 
     const parsed = defaultCatPutSchema.safeParse(request.body);

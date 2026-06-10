@@ -3,6 +3,7 @@
 import type { RankedCat, StreakCat } from '@cat-cafe/shared';
 import { type ReactNode } from 'react';
 import { useCatData } from '@/hooks/useCatData';
+import typographyTokens from '@/styles/typography-tokens.json';
 import { CatAvatar } from './CatAvatar';
 
 const MEDAL = ['🥇', '🥈', '🥉'];
@@ -16,7 +17,7 @@ function CatTag({ catId }: { catId: string }) {
 
   return (
     <span
-      className="text-[11px] font-medium"
+      className="text-label font-medium"
       style={{ color: 'var(--cafe-text-muted)', fontFamily: 'Plus Jakarta Sans, sans-serif' }}
     >
       {label}
@@ -27,12 +28,11 @@ function CatTag({ catId }: { catId: string }) {
 export function CatHeroCard({ cat, unit }: { cat: RankedCat; unit: string }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-xl p-5" style={{ background: 'var(--console-pill-bg)' }}>
-      <span className="text-[28px]">{MEDAL[cat.rank - 1] ?? `#${cat.rank}`}</span>
+      <span style={{ fontSize: typographyTokens.fontSizePx.leaderboardMedal }}>
+        {MEDAL[cat.rank - 1] ?? `#${cat.rank}`}
+      </span>
       <CatAvatar catId={cat.catId} size={72} />
-      <span
-        className="text-lg font-medium"
-        style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text-primary)' }}
-      >
+      <span className="text-lg font-medium" style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text)' }}>
         {cat.displayName}
       </span>
       <CatTag catId={cat.catId} />
@@ -42,7 +42,7 @@ export function CatHeroCard({ cat, unit }: { cat: RankedCat; unit: string }) {
       >
         {cat.count}
       </span>
-      <span className="text-[11px] font-medium" style={{ color: 'var(--cafe-text-muted)' }}>
+      <span className="text-label font-medium" style={{ color: 'var(--cafe-text-muted)' }}>
         {unit}
       </span>
     </div>
@@ -54,7 +54,7 @@ export function WorkMetric({ cat, label }: { cat: RankedCat | undefined; label: 
     <div className="flex flex-col gap-1.5 rounded-xl p-5" style={{ background: 'var(--console-pill-bg)' }}>
       <span
         className="text-4xl font-medium tracking-tight"
-        style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text-primary)' }}
+        style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text)' }}
       >
         {cat?.count ?? 0}
       </span>
@@ -66,9 +66,9 @@ export function WorkMetric({ cat, label }: { cat: RankedCat | undefined; label: 
       </span>
       {cat && (
         <span
-          className="inline-flex self-start rounded-md px-2.5 py-1 text-[11px] font-semibold"
+          className="inline-flex self-start rounded-md px-2.5 py-1 text-label font-semibold"
           style={{
-            background: 'rgba(139,111,71,0.08)',
+            background: 'color-mix(in srgb, var(--cafe-accent) 8%, transparent)',
             color: 'var(--cafe-accent)',
             fontFamily: 'Plus Jakarta Sans, sans-serif',
           }}
@@ -93,10 +93,10 @@ export function MiniRanked({ items, unit }: { items: RankedCat[]; unit: string }
         <li key={cat.catId} className="flex items-center gap-2">
           <span className="text-sm">{MEDAL[cat.rank - 1] ?? `#${cat.rank}`}</span>
           <CatAvatar catId={cat.catId} size={24} />
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--cafe-text-primary)' }}>
+          <span className="text-compact font-semibold" style={{ color: 'var(--cafe-text)' }}>
             {cat.displayName}
           </span>
-          <span className="text-[11px] ml-auto" style={{ color: 'var(--cafe-text-muted)' }}>
+          <span className="text-label ml-auto" style={{ color: 'var(--cafe-text-muted)' }}>
             {cat.count} {unit}
           </span>
         </li>
@@ -117,10 +117,10 @@ export function StreakRanked({ items }: { items: StreakCat[] }) {
       {items.slice(0, 5).map((cat) => (
         <li key={cat.catId} className="flex items-center gap-2">
           <span className="text-sm">{MEDAL[cat.rank - 1] ?? `#${cat.rank}`}</span>
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--cafe-text-primary)' }}>
+          <span className="text-compact font-semibold" style={{ color: 'var(--cafe-text)' }}>
             {cat.displayName}
           </span>
-          <span className="text-[11px] ml-auto" style={{ color: 'var(--cafe-text-muted)' }}>
+          <span className="text-label ml-auto" style={{ color: 'var(--cafe-text-muted)' }}>
             连续 {cat.currentStreak} 天 (最长 {cat.maxStreak})
           </span>
         </li>
@@ -132,7 +132,7 @@ export function StreakRanked({ items }: { items: StreakCat[] }) {
 export function SectionCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="rounded-2xl p-6 flex flex-col gap-4" style={{ background: 'var(--console-card-bg)' }}>
-      <h3 className="text-xl font-medium" style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text-primary)' }}>
+      <h3 className="text-xl font-medium" style={{ fontFamily: 'Fraunces, serif', color: 'var(--cafe-text)' }}>
         {title}
       </h3>
       {children}

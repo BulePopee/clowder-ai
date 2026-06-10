@@ -113,6 +113,74 @@ export const lineStartDetected = lazy(() =>
   }),
 );
 
+export const geminiContextFallback = lazy(() =>
+  meter().createCounter('cat_cafe.gemini.context_fill_fallback', {
+    description: 'Gemini cumulative-only context signal observed without per-turn token data',
+  }),
+);
+
+export const l1StreakWarnCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.l1.streak_warn_count', {
+    description: 'L1 ping-pong streak warning threshold reached',
+  }),
+);
+
+export const l1StreakBreakCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.l1.streak_break_count', {
+    description: 'L1 ping-pong circuit-break triggered',
+  }),
+);
+
+export const c1ZombieHoldCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c1.zombie_hold_count', {
+    description: 'Hold registered but previous hold for same (thread, cat) was unreleased',
+  }),
+);
+
+export const c1HoldCancelCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c1.hold_cancel_count', {
+    description: 'Pending hold cancelled by user message',
+  }),
+);
+
+export const c2VerdictHintEmitted = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c2.verdict_hint_emitted', {
+    description: 'C2 exit-check verdict-no-pass hint emitted (split from mixed hint_emitted)',
+  }),
+);
+
+export const c2VoidHoldHintEmitted = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c2.void_hold_hint_emitted', {
+    description: 'C2 exit-check void-hold hint emitted (split from mixed hint_emitted)',
+  }),
+);
+
+export const c2VerdictWithoutPassCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c2.verdict_without_pass_count', {
+    description: 'C2 forced-pass trigger count (verdict issued without explicit pass)',
+  }),
+);
+
+// Denominator for C2 friction ratios. Incremented every time the verdict-without-pass
+// exit-check actually evaluates a turn, so attribution can compute a real
+// `verdict_without_pass_count / c2.checked` ratio instead of fabricating 100% when no
+// denominator exists (F167 eval:a2a 2026-05-29 over-escalation root cause).
+export const c2ExitChecked = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c2.exit_checked', {
+    description: 'C2 exit-check evaluations performed (denominator for verdict_without_pass ratio)',
+  }),
+);
+
+// Separate denominator for the void-hold check, which runs as its own guard later in
+// the route (not the verdict-without-pass exit check). Grading void_hold_hint_emitted
+// against c2.exit_checked would divide by the wrong count and suppress real void-hold
+// signals (cloud review PR #1941 P2).
+export const c2VoidHoldChecked = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.c2.void_hold_checked', {
+    description: 'C2 void-hold check evaluations performed (denominator for void_hold_hint ratio)',
+  }),
+);
+
 export const antigravityStreamErrorBuffered = lazy(() =>
   meter().createCounter('cat_cafe.antigravity.stream_error.buffered_total', {
     description: 'Buffered Antigravity stream_error after partial text while waiting for a recovery tail',
@@ -160,6 +228,21 @@ export const catResponseDuration = lazy(() =>
   meter().createHistogram('cat_cafe.cat.response.duration', {
     description: 'End-to-end cat response duration from message receipt to final reply',
     unit: 's',
+  }),
+);
+
+// --- F153 Phase I: Step Summary counters ---
+
+/**
+ * Counter: A2A mention_dispatch span occurrences.
+ * Increments at every `cat_cafe.mention_dispatch` span creation (in-process or callback path).
+ * Attributes (allowlist-filtered): only `agent.id` (mentioner cat) — never invocationId/threadId
+ * (metric-allowlist forbids high-cardinality). Omit `agent.id` when source cat is unknown
+ * (e.g. callback path without sourceCatId).
+ */
+export const a2aDispatchCount = lazy(() =>
+  meter().createCounter('cat_cafe.a2a.dispatch.count', {
+    description: 'A2A mention_dispatch span occurrences (F153 Phase I)',
   }),
 );
 
@@ -224,4 +307,18 @@ export function registerLivenessProbe(invocationId: string, catId: string, getSt
 /** Unregister a liveness probe when invocation ends. */
 export function unregisterLivenessProbe(invocationId: string): void {
   activeProbes.delete(invocationId);
+}
+
+// Pre-touch counters that may never fire in normal operation so they
+// appear in Prometheus output (eval can distinguish 0 from absent).
+export function warmupCounters(): void {
+  l1StreakWarnCount.add(0);
+  l1StreakBreakCount.add(0);
+  c1ZombieHoldCount.add(0);
+  c1HoldCancelCount.add(0);
+  c2VerdictHintEmitted.add(0);
+  c2VoidHoldHintEmitted.add(0);
+  c2VerdictWithoutPassCount.add(0);
+  c2ExitChecked.add(0);
+  c2VoidHoldChecked.add(0);
 }

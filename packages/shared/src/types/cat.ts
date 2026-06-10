@@ -5,6 +5,7 @@
 
 import type { CliConfig, ContextBudget } from './cat-breed.js';
 import type { CatId, SessionId } from './ids.js';
+import { createCatId } from './ids.js';
 import type { VoiceConfig } from './tts.js';
 
 /**
@@ -39,6 +40,19 @@ export interface CatColor {
 }
 
 /**
+ * F210 Phase G: Isolated Antigravity CLI profile binding.
+ * The API runtime uses this to create a per-cat HOME sandbox before invoking `agy`.
+ */
+export interface AgyProfileConfig {
+  readonly enabled?: boolean;
+  readonly profileId?: string;
+  readonly homeRoot?: string;
+  readonly model?: string;
+  readonly autoApprove?: boolean;
+  readonly trustedWorkspaces?: readonly string[];
+}
+
+/**
  * Cat configuration (immutable)
  */
 export interface CatConfig {
@@ -56,6 +70,7 @@ export interface CatConfig {
   readonly defaultModel: string;
   readonly mcpSupport: boolean;
   readonly cli?: CliConfig;
+  readonly agyProfile?: AgyProfileConfig;
   readonly commandArgs?: readonly string[];
   readonly contextBudget?: ContextBudget;
   readonly roleDescription: string;
@@ -81,12 +96,13 @@ export interface CatConfig {
   readonly strengths?: readonly string[];
   /** F127 Screen 3: whether session chain is enabled for this member */
   readonly sessionChain?: boolean;
+  /** F103/F190: Per-cat TTS voice configuration, including optional refAudio. */
+  readonly voiceConfig?: VoiceConfig;
   /** F127: Extra CLI --config key=value pairs passed to the client at invocation time. */
   readonly cliConfigArgs?: readonly string[];
   /** clowder-ai#340 P5: Model provider name for api_key routing (renamed from `ocProviderName`).
    *  e.g. "openrouter", "maas", "deepseek". Runtime assembles provider/model for the -m flag. */
   readonly provider?: string;
-  readonly voiceConfig?: VoiceConfig;
 }
 
 /**

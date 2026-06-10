@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useCallback, useState } from 'react';
+import { ExternalRuntimeSessionsPanel } from '../runtime-sessions/ExternalRuntimeSessionsPanel';
 import { settingsResourceCardClass } from '../SettingsResourceCard';
 import { AuditEventsTab } from './AuditEventsTab';
 import { SessionEventsViewer } from './SessionEventsViewer';
 import { SessionSearchTab } from './SessionSearchTab';
 
-type AuditTab = 'events' | 'session' | 'search';
+type AuditTab = 'events' | 'session' | 'runtime' | 'search';
 
 export interface AuditExplorerPanelProps {
   threadId: string;
@@ -20,6 +21,7 @@ export interface AuditExplorerPanelProps {
 const TAB_LABELS: Record<AuditTab, string> = {
   events: '审计事件',
   session: 'Session',
+  runtime: 'Runtime',
   search: '搜索',
 };
 
@@ -60,31 +62,23 @@ export function AuditExplorerPanel({
         type="button"
         data-testid="audit-explorer-header"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between text-[11px] font-bold text-cafe hover:text-cafe-secondary"
+        className="w-full flex items-center justify-between text-xs font-semibold text-cafe-secondary hover:text-cafe"
       >
         <span>审计 & Session</span>
-        <svg
-          className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
+        <span className="text-micro text-cafe-muted">{expanded ? '▲' : '▼'}</span>
       </button>
 
       {expanded && (
-        <div className="p-2.5">
+        <div className="mt-2">
           {/* Tab bar */}
-          <div className="mb-2 flex border-b border-[var(--console-border-soft)]">
-            {(['events', 'session', 'search'] as const).map((t) => (
+          <div className="flex console-divider-b mb-2">
+            {(['events', 'session', 'runtime', 'search'] as const).map((t) => (
               <button
                 type="button"
                 key={t}
                 onClick={() => setTab(t)}
-                className={`flex-1 py-1 text-[10px] font-semibold transition-colors
-                  ${tab === t ? 'border-b-2 border-cafe-accent text-cafe-accent' : 'text-cafe-muted hover:text-cafe-secondary'}`}
+                className={`flex-1 py-1 text-micro font-semibold transition-colors
+                  ${tab === t ? 'text-[var(--semantic-info)] border-b-2 border-[var(--semantic-info)]' : 'text-cafe-muted hover:text-cafe-secondary'}`}
               >
                 {TAB_LABELS[t]}
               </button>
@@ -106,6 +100,8 @@ export function AuditExplorerPanel({
                 点击左侧 Session Chain 中的封存会话，或通过搜索找到 session
               </div>
             ))}
+
+          {tab === 'runtime' && <ExternalRuntimeSessionsPanel onViewSession={handleViewSession} />}
 
           {tab === 'search' && <SessionSearchTab threadId={threadId} onViewSession={handleViewSession} />}
         </div>

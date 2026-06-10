@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import typographyTokens from '@/styles/typography-tokens.json';
 import { apiFetch } from '@/utils/api-client';
 
 interface AgentPane {
@@ -38,15 +39,22 @@ export function AgentPaneList({ worktreeId, onSelectPane, selectedPaneId }: Agen
 
   const statusColor = (s: AgentPane['status']) =>
     s === 'running'
-      ? 'var(--terminal-text-success)'
+      ? 'var(--terminal-status-ok)'
       : s === 'crashed'
-        ? 'var(--terminal-text-error)'
+        ? 'var(--terminal-status-error)'
         : 'var(--terminal-text-muted)';
   const statusLabel = (s: AgentPane['status']) => (s === 'running' ? 'Running' : s === 'crashed' ? 'Crashed' : 'Done');
 
   return (
-    <div style={{ borderBottom: '1px solid var(--terminal-selected-bg)', padding: '4px 0' }}>
-      <div style={{ padding: '2px 8px', fontSize: 11, color: 'var(--terminal-text-dim)', fontWeight: 600 }}>
+    <div style={{ borderBottom: '1px solid var(--terminal-chrome)', padding: '4px 0' }}>
+      <div
+        style={{
+          padding: '2px 8px',
+          fontSize: typographyTokens.fontSizePx.label,
+          color: 'var(--terminal-text-dim)',
+          fontWeight: 600,
+        }}
+      >
         Agent Panes
       </div>
       {panes.map((p) => (
@@ -60,10 +68,10 @@ export function AgentPaneList({ worktreeId, onSelectPane, selectedPaneId }: Agen
             gap: 6,
             width: '100%',
             padding: '4px 8px',
-            fontSize: 12,
-            background: selectedPaneId === p.paneId ? 'var(--terminal-selected-bg)' : 'transparent',
+            fontSize: typographyTokens.fontSizePx.xs,
+            background: selectedPaneId === p.paneId ? 'var(--terminal-chrome)' : 'transparent',
             border: 'none',
-            color: 'var(--terminal-text)',
+            color: 'var(--terminal-fg)',
             cursor: 'pointer',
             textAlign: 'left',
           }}
@@ -87,7 +95,9 @@ export function AgentPaneList({ worktreeId, onSelectPane, selectedPaneId }: Agen
           >
             {p.invocationId.slice(0, 8)}
           </span>
-          <span style={{ fontSize: 10, color: 'var(--terminal-text-dim)' }}>{statusLabel(p.status)}</span>
+          <span style={{ fontSize: typographyTokens.fontSizePx.micro, color: 'var(--terminal-text-dim)' }}>
+            {statusLabel(p.status)}
+          </span>
         </button>
       ))}
     </div>

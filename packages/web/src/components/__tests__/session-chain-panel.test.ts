@@ -94,6 +94,16 @@ function mockSessionsResponse(sessions: unknown[]) {
   });
 }
 
+/** Sealed section is default-collapsed; click the toggle to expand it. */
+function expandSealed() {
+  const toggle = container.querySelector('[data-testid="sealed-toggle"]') as HTMLElement | null;
+  if (toggle) {
+    act(() => {
+      toggle.click();
+    });
+  }
+}
+
 describe('F24: SessionChainPanel', () => {
   it('renders panel with bind section even when API returns empty sessions (F33)', async () => {
     mockSessionsResponse([]);
@@ -102,7 +112,7 @@ describe('F24: SessionChainPanel', () => {
     // Panel should render (F33: always visible for external session binding)
     expect(container.querySelector('section')).not.toBeNull();
     // No session cards, but bind section available
-    expect(container.textContent).toContain('0 sessions');
+    expect(container.textContent).toContain('0 total');
     expect(container.textContent).toContain('绑定外部 Session');
   });
 
@@ -121,7 +131,138 @@ describe('F24: SessionChainPanel', () => {
     ]);
     renderPanel('thread-1');
     await flushFetch();
-    expect(container.textContent).toContain('2 sessions');
+    expect(container.textContent).toContain('1 active');
+    expect(container.textContent).toContain('2 total');
+  });
+
+  it('collapses repeated 0-msg tool_conflict retry corpses into one summary (F201-churn)', async () => {
+    const corpse = (seq: number) => ({
+      id: `corpse-${seq}`,
+      catId: 'antig-opus',
+      seq,
+      status: 'sealed',
+      messageCount: 0,
+      createdAt: Date.now() - (10 - seq) * 1000,
+      sealedAt: Date.now() - (10 - seq) * 1000,
+      sealReason: 'tool_conflict',
+    });
+    mockSessionsResponse([
+      {
+        id: 'real-sealed',
+        catId: 'antig-opus',
+        seq: 9,
+        status: 'sealed',
+        messageCount: 12,
+        createdAt: Date.now() - 5000,
+        sealedAt: Date.now() - 4000,
+        sealReason: 'runtime_disconnected',
+      },
+      corpse(1),
+      corpse(2),
+      corpse(3),
+      corpse(4),
+    ]);
+    renderPanel('thread-1');
+    await flushFetch();
+    expandSealed();
+    // F201-churn: 4 empty (0-msg) tool_conflict retry corpses collapse into ONE summary,
+    // leaving only the real sealed session as a full card. Transparency preserved via the
+    // summary's visible count; the UI no longer litters one corpse card per F201 retry.
+    const sealedCards = container.querySelectorAll('[data-testid="session-card-sealed"]');
+    expect(sealedCards.length).toBe(1);
+    const summary = container.querySelector('[data-testid="session-card-retry-collapsed"]');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toContain('4');
+    expect(summary?.textContent).toContain('重试残骸');
+  });
+
+  it('collapses repeated runtime-tagged retry fragments without relying on sealReason heuristics', async () => {
+    const fragment = (seq: number) => ({
+      id: `fragment-${seq}`,
+      catId: 'antig-opus',
+      seq,
+      status: 'sealed',
+      messageCount: 0,
+      createdAt: Date.now() - (10 - seq) * 1000,
+      sealedAt: Date.now() - (10 - seq) * 1000,
+      sealReason: 'model_capacity',
+      runtimeSession: {
+        runtime: 'antigravity-desktop',
+        runtimeSessionId: `cascade-fragment-${seq}`,
+        lifecycleState: 'sealed',
+        lastObservedAt: Date.now() - (10 - seq) * 1000,
+        retryFragment: {
+          kind: 'retry',
+          retryReason: 'model_capacity',
+          nextRuntimeSessionId: `cascade-next-${seq}`,
+          detectedAt: Date.now() - (10 - seq) * 1000,
+        },
+      },
+    });
+    mockSessionsResponse([fragment(1), fragment(2), fragment(3)]);
+    renderPanel('thread-1');
+    await flushFetch();
+    expandSealed();
+    expect(container.querySelectorAll('[data-testid="session-card-sealed"]').length).toBe(0);
+    const summary = container.querySelector('[data-testid="session-card-retry-collapsed"]');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toContain('3');
+    expect(summary?.textContent).toContain('重试片段');
+  });
+
+  it('collapses a single runtime-tagged retry fragment', async () => {
+    mockSessionsResponse([
+      {
+        id: 'fragment-single',
+        catId: 'antig-opus',
+        seq: 1,
+        status: 'sealed',
+        messageCount: 0,
+        createdAt: Date.now() - 5000,
+        sealedAt: Date.now() - 4000,
+        sealReason: 'model_capacity',
+        runtimeSession: {
+          runtime: 'antigravity-desktop',
+          runtimeSessionId: 'cascade-fragment-single',
+          lifecycleState: 'sealed',
+          lastObservedAt: Date.now() - 4000,
+          retryFragment: {
+            kind: 'retry',
+            retryReason: 'model_capacity',
+            nextRuntimeSessionId: 'cascade-next-single',
+            detectedAt: Date.now() - 4000,
+          },
+        },
+      },
+    ]);
+    renderPanel('thread-1');
+    await flushFetch();
+    expandSealed();
+    expect(container.querySelectorAll('[data-testid="session-card-sealed"]').length).toBe(0);
+    const summary = container.querySelector('[data-testid="session-card-retry-collapsed"]');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toContain('1');
+    expect(summary?.textContent).toContain('重试片段');
+  });
+
+  it('does NOT collapse in-flight sealing 0-msg tool_conflict records (砚砚 review P2)', async () => {
+    // requestSeal() writes sealReason while status is still 'sealing' (async-finalizes to 'sealed'
+    // later) — a sealing record must keep its own card (live status + 查看/解封), NOT be folded.
+    const sealingCorpseLike = (seq: number) => ({
+      id: `sealing-${seq}`,
+      catId: 'antig-opus',
+      seq,
+      status: 'sealing',
+      messageCount: 0,
+      createdAt: Date.now() - (10 - seq) * 1000,
+      sealReason: 'tool_conflict',
+    });
+    mockSessionsResponse([sealingCorpseLike(1), sealingCorpseLike(2)]);
+    renderPanel('thread-1');
+    await flushFetch();
+    expandSealed();
+    expect(container.querySelector('[data-testid="session-card-retry-collapsed"]')).toBeNull();
+    expect(container.querySelectorAll('[data-testid="session-card-sealed"]').length).toBe(2);
   });
 
   it('renders active session with seq number, cat badge, and clickable session ID', async () => {
@@ -131,13 +272,50 @@ describe('F24: SessionChainPanel', () => {
     renderPanel('thread-1');
     await flushFetch();
     expect(container.textContent).toContain('Session #3');
-    expect(container.textContent).toContain('opus');
+    expect(container.textContent).toContain('布偶猫');
     expect(container.textContent).toContain('Active');
     expect(container.textContent).toContain('8 msgs');
     // Session ID should be visible (truncated) with copy title
     const idBtn = container.querySelector('button[title*="ses_abc12345xyz"]');
     expect(idBtn).not.toBeNull();
     expect(idBtn?.textContent).toContain('ses_abc123');
+  });
+
+  it('renders Antigravity runtime session identity and unexpected switch diagnostics', async () => {
+    mockSessionsResponse([
+      {
+        id: 'session-new',
+        cliSessionId: 'cascade-new-unexpected',
+        catId: 'opus',
+        seq: 1,
+        status: 'active',
+        messageCount: 1,
+        createdAt: Date.now() - 5000,
+        runtimeSession: {
+          runtime: 'antigravity-desktop',
+          runtimeSessionId: 'cascade-new-unexpected',
+          lifecycleState: 'active',
+          lastObservedAt: Date.now() - 1000,
+          unexpectedRuntimeSessionSwitch: {
+            detectedAt: Date.now() - 1000,
+            previousSessionId: 'session-old',
+            previousRuntimeSessionId: 'cascade-old-unexpected',
+            currentRuntimeSessionId: 'cascade-new-unexpected',
+            reason: 'missing_previous_runtime_session_id',
+          },
+        },
+      },
+    ]);
+
+    renderPanel('thread-1');
+    await flushFetch();
+
+    expect(container.querySelector('[data-testid="runtime-session-summary"]')).not.toBeNull();
+    expect(container.textContent).toContain('runtime');
+    expect(container.textContent).toContain('antigravity-desktop');
+    expect(container.textContent).toContain('unexpected switch');
+    expect(container.querySelector('button[title*="cascade-new-unexpected"]')).not.toBeNull();
+    expect(container.querySelector('button[title*="cascade-old-unexpected"]')).not.toBeNull();
   });
 
   it('renders ContextHealthBar for active session with health data', async () => {
@@ -213,11 +391,12 @@ describe('F24: SessionChainPanel', () => {
     ]);
     renderPanel('thread-1');
     await flushFetch();
+    expect(container.textContent).toContain('Sealed');
+    expandSealed();
     expect(container.textContent).toContain('Session #1');
     expect(container.textContent).toContain('Session #2');
     expect(container.textContent).toContain('compact');
     expect(container.textContent).toContain('threshold');
-    expect(container.textContent).toContain('Sealed');
     // Both sealed sessions should have clickable ID buttons
     expect(container.querySelector('button[title*="seal_aaa111"]')).not.toBeNull();
     expect(container.querySelector('button[title*="seal_bbb222"]')).not.toBeNull();
@@ -229,6 +408,7 @@ describe('F24: SessionChainPanel', () => {
     ]);
     renderPanel('thread-1');
     await flushFetch();
+    expandSealed();
     expect(container.textContent).toContain('sealing');
   });
 
@@ -246,13 +426,13 @@ describe('F24: SessionChainPanel', () => {
     expect(card!.style.boxShadow).toMatch(/rgba?\(75,\s*85,\s*99/);
   });
 
-  it('renders catId in the active session badge (not breed displayName)', async () => {
+  it('renders cat displayName in the active session badge', async () => {
     mockSessionsResponse([
       { id: 's1', catId: 'kimi', seq: 0, status: 'active', messageCount: 2, createdAt: Date.now() },
     ]);
     renderPanel('thread-1');
     await flushFetch();
-    expect(container.textContent).toContain('kimi');
+    expect(container.textContent).toContain('梵花猫');
   });
 
   it('shows post-compact safety alert when sessionSealed is true', async () => {
@@ -427,18 +607,18 @@ describe('F24: SessionChainPanel', () => {
     renderPanel('thread-1');
     await flushFetch();
     // Should not crash; panel still renders (F33: bind section always present)
-    expect(container.textContent).toContain('0 sessions');
+    expect(container.textContent).toContain('0 total');
     expect(container.textContent).not.toContain('Session #');
   });
 
-  it('renders singular "session" for count of 1', async () => {
+  it('renders active and total counts in header', async () => {
     mockSessionsResponse([
       { id: 's1', catId: 'opus', seq: 0, status: 'active', messageCount: 1, createdAt: Date.now() },
     ]);
     renderPanel('thread-1');
     await flushFetch();
-    expect(container.textContent).toContain('1 session');
-    expect(container.textContent).not.toContain('1 sessions');
+    expect(container.textContent).toContain('1 active');
+    expect(container.textContent).toContain('1 total');
   });
 
   it('keeps stale data visible on thread switch when fetch fails (stale-while-revalidate)', async () => {
@@ -473,6 +653,7 @@ describe('F24: SessionChainPanel', () => {
     ]);
     renderPanel('thread-A');
     await flushFetch();
+    expandSealed();
     expect(container.textContent).toContain('Session #1');
 
     // Switch to thread-B, but fetch throws — stale data stays visible
@@ -499,6 +680,7 @@ describe('F24: SessionChainPanel', () => {
     ]);
     renderPanel('thread-1');
     await flushFetch();
+    expandSealed();
 
     const findUnsealBtn = () => {
       const buttons = Array.from(container.querySelectorAll('button'));
@@ -540,8 +722,8 @@ describe('F24: SessionChainPanel', () => {
     await flushFetch();
 
     // New data visible, old data gone
-    expect(container.textContent).toContain('codex');
-    expect(container.textContent).toContain('1 session');
+    expect(container.textContent).toContain('缅因猫');
+    expect(container.textContent).toContain('1 total');
   });
 
   it('reuses per-thread session cache immediately when revisiting a thread during revalidate', async () => {
@@ -572,7 +754,7 @@ describe('F24: SessionChainPanel', () => {
     renderPanel('thread-2');
     await flushFetch();
     expect(container.textContent).toContain('Session #6');
-    expect(container.textContent).toContain('codex');
+    expect(container.textContent).toContain('缅因猫');
 
     renderPanel('thread-1');
     await flushFetch();
@@ -594,7 +776,8 @@ describe('F24: SessionChainPanel', () => {
   });
 
   it('applies codex green colors from cat.color (border + badge inline style)', async () => {
-    // codex primary #5B8C5A → 91,140,90; secondary #D4E6D3 → 212,230,211
+    // codex primary #5B8C5A → 91,140,90
+    // F056: badge bg/text derived via OKLCH badgeBackground()/contrastingText()
     mockSessionsResponse([
       { id: 's1', catId: 'codex', seq: 0, status: 'active', messageCount: 3, createdAt: Date.now() },
     ]);
@@ -608,9 +791,10 @@ describe('F24: SessionChainPanel', () => {
     const badge = container.querySelector(
       '[data-testid="session-badge-active"][data-cat-id="codex"]',
     ) as HTMLElement | null;
-    expect(badge?.textContent).toContain('codex');
-    expect(badge!.style.backgroundColor).toMatch(/rgba?\(212,\s*230,\s*211/);
-    expect(badge!.style.color).toMatch(/rgba?\(91,\s*140,\s*90/);
+    expect(badge?.textContent).toContain('缅因猫');
+    // F056: badge colors are oklch-derived from primary hex (secondary removed)
+    expect(badge!.style.backgroundColor).toMatch(/oklch\(/);
+    expect(badge!.style.color).toMatch(/oklch\(/);
   });
 
   it('applies gemini colors from cat.color', async () => {
@@ -676,7 +860,7 @@ describe('F24: SessionChainPanel', () => {
   });
 
   it('falls back to neutral gray when cat is missing from cat-config (badge background)', async () => {
-    // Fallback: primary #9CA3AF → 156,163,175; secondary #E5E7EB → 229,231,235
+    // Fallback: primary #9CA3AF. F056: badge bg/text derived via OKLCH.
     mockSessionsResponse([
       { id: 's1', catId: 'unknown-cat', seq: 0, status: 'active', messageCount: 1, createdAt: Date.now() },
     ]);
@@ -687,8 +871,9 @@ describe('F24: SessionChainPanel', () => {
     ) as HTMLElement | null;
     expect(badge).not.toBeNull();
     expect(badge!.textContent).toContain('unknown-cat');
-    expect(badge!.style.backgroundColor).toMatch(/rgba?\(229,\s*231,\s*235/);
-    expect(badge!.style.color).toMatch(/rgba?\(156,\s*163,\s*175/);
+    // F056: badge colors are oklch-derived from fallback #9CA3AF (secondary removed)
+    expect(badge!.style.backgroundColor).toMatch(/oklch\(/);
+    expect(badge!.style.color).toMatch(/oklch\(/);
   });
 
   it('discards stale response when slow thread-1 fetch resolves after thread-2 (P1 race condition)', async () => {
@@ -767,7 +952,8 @@ describe('F24: SessionChainPanel', () => {
       expect(triple).toEqual([123, 31, 162]);
     });
 
-    it('opus-47 active session badge uses cat.color.secondary as background and primary as text', async () => {
+    it('opus-47 active session badge uses oklch-derived colors from cat.color.primary', async () => {
+      // F056: secondary removed — badge bg/text derived via OKLCH from primary
       mockSessionsResponse([
         { id: 's_47', catId: 'opus-47', seq: 0, status: 'active', messageCount: 1, createdAt: Date.now() },
       ]);
@@ -777,10 +963,9 @@ describe('F24: SessionChainPanel', () => {
         '[data-testid="session-badge-active"][data-cat-id="opus-47"]',
       ) as HTMLElement | null;
       expect(badge).not.toBeNull();
-      // Secondary #E1BEE7 → 225,190,231
-      expect(rgbTripleOf(badge!.style.backgroundColor)).toEqual([225, 190, 231]);
-      // Primary #7B1FA2 → 123,31,162
-      expect(rgbTripleOf(badge!.style.color)).toEqual([123, 31, 162]);
+      // F056: badge colors are oklch-derived from primary #7B1FA2 (secondary removed)
+      expect(badge!.style.backgroundColor).toMatch(/oklch\(/);
+      expect(badge!.style.color).toMatch(/oklch\(/);
     });
 
     it('sealed session for opus-47 also uses cat.color (parity with active card)', async () => {
@@ -797,6 +982,7 @@ describe('F24: SessionChainPanel', () => {
       ]);
       renderPanel('thread-1');
       await flushFetch();
+      expandSealed();
       const card = container.querySelector(
         '[data-testid="session-card-sealed"][data-cat-id="opus-47"]',
       ) as HTMLElement | null;
@@ -1023,6 +1209,80 @@ describe('F24: SessionChainPanel', () => {
       await flushFetch();
 
       expect(container.textContent).toContain('err');
+    });
+  });
+
+  describe('collapse toggle', () => {
+    it('active Session Chain: click header hides active cards, click again restores', async () => {
+      mockSessionsResponse([
+        { id: 's1', catId: 'opus', seq: 0, status: 'active', messageCount: 5, createdAt: Date.now() },
+      ]);
+      renderPanel('thread-1');
+      await flushFetch();
+
+      // Default: expanded — active card visible
+      expect(container.querySelector('[data-testid="session-card-active"]')).not.toBeNull();
+      expect(container.textContent).toContain('Session #1');
+      // Header shows counts
+      expect(container.textContent).toContain('1 active');
+
+      // Click Session Chain header to collapse
+      const chainHeader = Array.from(container.querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('Session Chain'),
+      );
+      expect(chainHeader).toBeTruthy();
+      act(() => {
+        chainHeader?.click();
+      });
+
+      // Collapsed: active card hidden, but header/count still visible
+      expect(container.querySelector('[data-testid="session-card-active"]')).toBeNull();
+      expect(container.textContent).toContain('1 active');
+      expect(container.textContent).toContain('Session Chain');
+
+      // Click again to expand
+      act(() => {
+        chainHeader?.click();
+      });
+
+      // Restored: active card visible again
+      expect(container.querySelector('[data-testid="session-card-active"]')).not.toBeNull();
+      expect(container.textContent).toContain('Session #1');
+    });
+
+    it('Sealed section: default collapsed, click expands, click collapses', async () => {
+      mockSessionsResponse([
+        {
+          id: 'seal1',
+          catId: 'opus',
+          seq: 0,
+          status: 'sealed',
+          messageCount: 10,
+          createdAt: Date.now() - 60000,
+          sealedAt: Date.now(),
+          sealReason: 'compact',
+        },
+      ]);
+      renderPanel('thread-1');
+      await flushFetch();
+
+      // Default: collapsed — sealed card hidden, but toggle visible
+      expect(container.querySelector('[data-testid="session-card-sealed"]')).toBeNull();
+      expect(container.textContent).toContain('Sealed');
+
+      // Click to expand
+      expandSealed();
+
+      // Expanded: sealed card visible
+      expect(container.querySelector('[data-testid="session-card-sealed"]')).not.toBeNull();
+      expect(container.textContent).toContain('Session #1');
+      expect(container.textContent).toContain('compact');
+
+      // Click to collapse again
+      expandSealed(); // toggles back
+
+      // Collapsed again
+      expect(container.querySelector('[data-testid="session-card-sealed"]')).toBeNull();
     });
   });
 });

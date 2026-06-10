@@ -1,6 +1,6 @@
 ---
 feature_ids: [F153]
-related_features: [F130, F008, F150]
+related_features: [F130, F008, F150, F212]
 topics: [observability, telemetry, metrics, health-check, infrastructure]
 doc_kind: spec
 created: 2026-04-09
@@ -95,11 +95,16 @@ Phase E 只回答"发生了什么"（traces、metrics、健康状态），不做
 > - P2: `/api/telemetry/health` 聚合 `/ready` 探针 + error rate → unified health verdict
 > - P2: `task.*` instruments 重命名为 `invocation.completed` / `thread.duration`（匹配实际语义）
 
-### Phase F: Trace 持久化 — 指针关联方案（设计中）
+### Phase F: Trace 持久化 — 指针关联方案 ✅
 
-> **Status**: spec | **Owner**: Ragdoll
+> **Status**: merged | **Owner**: Ragdoll
+> **Provenance**: zts212653/clowder-ai#592
+> **Implementation PR**: zts212653/clowder-ai#579 (merged 2026-04-28, commit `8cc6f9a1`)
+> **Cat-cafe intake**: zts212653/cat-cafe#1449 (commit `254c6e2fa`)
 > **Trigger**: 重启后 trace 数据全丢（LocalTraceStore 纯内存）
 > **Discussion**: 2026-04-22，三猫讨论（Ragdoll + Sonnet + GPT-5.4）
+>
+> **Scope note**: AC-F1..F7 全部 ✅。AC-F8（tool_use spans 持久化）声明 deferred — 当前 MCP tool span 是零时长点标记，待 Phase J 真实执行边界落地后再升级持久化策略（Phase J Slice J-B AC-J7/J8 直接覆盖 AC-F8 unblock）。Phase F header 状态过期至 2026-05-22 由本次 doc-sync 修正（clowder-ai#753 / cat-cafe#1839）。
 
 #### 问题
 
@@ -175,7 +180,7 @@ Phase E 实现引入了 `cat_cafe.route` 根 span（`AgentRouter` 创建），`c
 | `cat_cafe.cli_session` | 同上（共用 assistant message） | `timestamp - durationMs` |
 | `cat_cafe.llm_call` | 同上 | `timestamp - durationApiMs` |
 
-> **tool_use spans 暂不持久化**：当前 MCP 工具 span 是零时长点标记，等 Phase H 获得真实执行边界后再升级持久化策略。
+> **tool_use spans 暂不持久化**：当前 MCP 工具 span 是零时长点标记，等 Phase J 真实执行边界落地后再升级持久化策略（KD-25 → Phase J KD-39 Slice J-B）。
 
 #### extra.tracing 前置改造
 
@@ -202,7 +207,9 @@ Phase E 实现引入了 `cat_cafe.route` 根 span（`AgentRouter` 创建），`c
 
 ### Phase G: Prompt X-Ray + Cross-route A2A Trace Propagation
 
+> **Status**: merged | **Owner**: Ragdoll
 > **Provenance**: 社区 PR clowder-ai#619（Closes clowder-ai#583），原提案为独立 F181，经维护者判定归入 F153 Phase G（2026-05-08）。
+> **Implementation**: clowder-ai#619 intake (AC-G1..G8 + G9 LocalTraceStore TTL, merged 2026-05-08); Phase G-Followup native L0 closure (AC-G10 / KD-44, merged 2026-06-09 via clowder-ai#851 closing the KD-42 gap — `PromptCapture` now persists `nativeSystemPrompt` for F203 native-L0 providers + Hub X-Ray Inspector System tab shows Native L0 zone above message-system pack appendix).
 
 两个核心能力：Prompt X-Ray 调试捕获 + 跨猫 A2A 调用链因果追踪。
 
@@ -213,6 +220,7 @@ Phase E 实现引入了 `cat_cafe.route` 根 span（`AgentRouter` 创建），`c
 - **触发**：`capturePromptIfEnabled` 在 `invoke-single-cat` fire-and-forget 调用，`PROMPT_CAPTURE` env 控制开关（默认关），`PROMPT_CAPTURE_CATS` 可选白名单
 - **API**：`/api/debug/prompt-captures/{captureId}`、`?invocationId`、`?threadId`、`/status`、`/prune` — session auth + userId resource-level auth（只返回当前用户的 captures）
 - **Hub**：`HubTraceTree` 新增 X-Ray Inspector，tabs 展示 system/user/effective/meta prompt 分解
+- **Known gap（2026-05-26 / F203 interaction）**：F203 将 Codex/Claude 的 L0 identity 移入 native system channel（Codex `developer_instructions` / Claude `--system-prompt-file`）后，当前 Prompt X-Ray 仍只捕获 `invoke-single-cat` 的 user/effective prompt 与可选 pack-only `systemPrompt`；因此 `PROMPT_CAPTURE=on` 会落盘，但 Hub `System` tab 可能为空，无法代表真实 native system prompt。
 
 #### Cross-route A2A Trace Propagation
 
@@ -229,11 +237,173 @@ W3C TraceContext 对齐的跨猫调用因果链：
 
 默认 TTL 从 2h 提升到 24h，导出常量 `LOCAL_TRACE_STORE_DEFAULT_MAX_AGE_MS` 供 `local-trace-store.ts` 和 `hydrate-traces.ts` 共用。
 
-### Phase H: 后续增强
+### Phase H: 后续增强（Backlog）
 
 - Grafana 统一看板
-- MCP call spans + tool execution duration spans（真实执行边界）
+- ~~MCP call spans + tool execution duration spans（真实执行边界）~~ → promoted to **Phase J** (2026-05-22)
 - 更广的 runtime exporter 级 tracing tests（in-memory exporter 验证父子关系）
+
+### Phase I: Step Summary（Agent Loop 行为节奏度量）✅
+
+> **Status**: merged | **Owner**: Ragdoll
+> **Provenance**: zts212653/clowder-ai#721
+> **Spec PR**: clowder-labs/clowder-ai#2 (merged 2026-05-19)
+> **Implementation PR**: clowder-labs/clowder-ai#3 (merged 2026-05-19, commit `f4594cb9`)
+> **Governance split PR**: clowder-labs/clowder-ai#4 (dir-exceptions extension, merged 2026-05-19, commit `d3e60d01`)
+> **Discussion**: 2026-05-19，三方对齐（team lead + Maine Coon/Maine Coon + Ragdoll/Ragdoll）
+>
+> **Provider coverage**: Claude CLI provider 已通过 `claude-ndjson-parser.ts` 在 `message_stop` 处 emit `cat_cafe.agent_loop` marker。其余 provider（Codex / Gemini / Kimi / Antigravity / OpenCode / DARE / A2A）尚未实现 marker emit，Step Summary 会显式显示 `agent_loop_count: —`（per AC-I2/I7 non-degradation rule）。后续 phase 补齐各 provider 的 stream parser hook。
+
+#### 问题
+
+F153 Phase A-G 已经把 span/metrics 基础设施做齐，但 Hub 没有一个 first-class 视图回答"这只猫这次工作走了几步"。Trace 树形瀑布图展示了**结构**，metrics dashboard 展示了**总量**，缺一个把两者绑到"一次猫工作"上的**行为节奏**视图。
+
+#### 定义：步 = 一次 Agent Loop
+
+```
+Agent Loop 边界锚 = cat_cafe.agent_loop marker event（per-provider stream parser 识别）
+  ├─ 1 次 LLM 决策（think，必有）
+  ├─ 0~N 次 tool 调用（act，可并行）
+  └─ 0~N 次 tool result 反馈（observe）
+
+  下一次 marker → 进入下一个 loop
+```
+
+**为什么需要新引入 stream-level marker？** 现有 stream 信号都是 invocation 粒度，**不是** loop 粒度：
+
+- `done` event 是 invocation 结束信号（ClaudeAgentService.ts:476、CodexAgentService.ts:709 都在 CLI 跑完后才 yield 一次），**per-invocation 一次**
+- `cat_cafe.llm_call` span 也是 invocation 级——`msg.metadata.usage` 只在 `msg.type === 'done'` 分支里被消费（invoke-single-cat.ts:1308/1387），usage 是整个 invocation 的累计而非单次 LLM call
+
+真正的 loop 边界必须在 **provider stream parser** 层识别（Claude CLI 的 message-level events、Codex stream chunks 等），并 emit 统一的 `cat_cafe.agent_loop` marker。**首版若某 provider 暂无可识别的 boundary signal**，该 provider 显示 `—`，记为 known limitation，**不退化成 invocation count**。
+
+**纯回复也算 1 个 loop**（width=0）——决策点存在就是一步，否则会鼓励"摸鱼短回复"。
+
+**业界对齐**：LangChain `AgentExecutor`、Anthropic SDK agent loop、AutoGPT step、OpenAI Assistants run step、DeepEval `StepEfficiencyMetric` 全部以 agent loop / step 为基本单位，非 LLM call、非 tool call。命名采用行为概念（`agent_loop_count`）而非实现锚（`llm_call_count`）。
+
+#### 度量：Length × Width
+
+```
+Length (深度) = agent_loop_count     ← 主轴："步数"
+Width  (宽度) = avg tools per loop   ← 辅轴："步幅"
+```
+
+两个维度合起来才能区分"高效但密集"与"啰嗦但稀疏"——长度大且宽度窄 = 疑似绕路（但**不在 Phase I 范围**，见 KD-32）。
+
+#### 实现：数据来源映射（含新增 marker / counter）
+
+| 度量 | 数据来源 | 新增？ |
+|------|---------|--------|
+| `agent_loop_count` | route 下 `cat_cafe.agent_loop` marker count（per-provider stream parser emit）；**无 marker 的 provider 显示 `—`**，不退化成 invocation count | ✅ 新 marker 类型 + per-provider parser hook |
+| `tool_call_count` | **双轨**：child `cat_cafe.tool_use *` spans 计数（MCP/business）+ invocationSpan attribute `tool.basic_call_count`（basic tools，span-helpers.ts:81-96） | ❌ |
+| `a2a_dispatch_count`（per-route 派生） | child `cat_cafe.mention_dispatch` spans 计数 | ❌ |
+| `cat_cafe.a2a.dispatch.count`（aggregate counter） | **新增** counter，attributes 仅 `AGENT_ID`（已 allowlist）；**不带** `invocationId / threadId`（metric-allowlist.ts:8-9 禁止）；**不复用** `CALLBACK_TOOL / CALLBACK_REASON`（语义为 callback auth failure，与 dispatch 无关）；如需 `dispatch.source/status` 等专属 labels 须先扩展 allowlist | ✅ |
+| `duration_ms` | `cat_cafe.route` span duration | ❌ |
+| `token_total` | `cat_cafe.route` span attribute `ROUTE_TOTAL_TOKENS`（route-serial.ts:1900，不走 `token.usage` metric——无 route 维度） | ❌ |
+| `error_count` | span status code aggregation | ❌ |
+
+> ⚠️ **descriptive only**（KD-16）：Phase I dashboard 只展示原始计数，**不计算/不展示** "efficiency"、"quality"、任何 normative score。质量判断留给未来 eval feature。
+
+#### Live vs Restored 显示分级
+
+`hydrate-traces.ts:6-8` 明确历史数据扁平为 `cat_cafe.invocation.restored`，**不恢复**完整 route/invocation/cli_session/llm_call 层级。所以 Phase I 必须显式区分：
+
+| 数据来源 | agent_loop_count | tool_call_count | a2a_dispatch_count | duration_ms |
+|---------|-----------------|-----------------|-------------------|-------------|
+| Live span（完整层级） | 真实值 | 真实值 | 真实值 | 真实值 |
+| Restored（扁平化） | **`—`** | **`—`** | **`—`** | 真实值 |
+
+UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"全是 0 步的快速调用"，污染判断。
+
+#### Out of scope（延后到独立 feature）
+
+- **Task 级步长**：需要先建 cross-invocation task 边界 primitive（task_id 不是 invocationId）
+- **Step Efficiency / 质量评分**：descriptive plane 边界（KD-16），eval feature 独立做
+- **MCP vs basic tool call 拆分**：依赖 Phase J 真实 tool 执行边界 span（KD-25 → KD-36..41 / Slice J-A）
+- **历史 sub-count 回填**：hydrate-traces.ts 的扁平化约束，不重建完整层级
+
+### Phase J: MCP Tool Span — 真实执行边界
+
+> **Status**: implemented | **Owner**: Ragdoll
+> **Current state (2026-06-02)**: Slice J-A 已由 clowder-ai#763/#774 intake 落地；Slice J-B 已由 clowder-ai#825 / cat-cafe#2052 intake 落地。F153 顶层仍保持 `in-progress`，因为 Phase G 尚未关闭。
+> **Promoted from**: Phase H Backlog item "MCP call spans + tool execution duration spans"
+> **Discussion**: 2026-05-22，Design Gate（Ragdoll + Maine Coon/codex GPT-5.5 + gpt52/GPT-5.4 + Ragdoll/Sonnet 4.6）— Sonnet 提了 "Hybrid A+C" 替代方案（transformer 内 UUID 状态机 + 栈 fallback），与 codex/gpt52 的"明确降级"立场冲突，最终采纳 codex/gpt52 的明确降级路线（KD-41），Sonnet 提案 rejected
+> **Implementation PRs**:
+> - Spec: clowder-ai#755 (merged 2026-05-22)
+> - Slice J-A foundation (ToolSpanTracker + call site, AC-J1/J3/J4/J5/J6): clowder-ai#763 (merged 2026-05-25)
+> - Slice J-A AC-J2 (wire DARE + Codex + CatAgent native tool ids): clowder-ai#774 (merged 2026-05-28)
+> - Slice J-B (Persist + hydrate + provider matrix, AC-J7/J8/J9 + R6 toolName decoupling KD-43): clowder-ai#825 (merged 2026-06-02, commit `f06d0d00`)
+
+#### 问题
+
+`recordToolUseSpan`（`packages/api/src/infrastructure/telemetry/span-helpers.ts:101-114`）创建 span 后**立即 `end()`**，造成连锁损害：
+
+- **零时长** — Hub Trace 树里 MCP tool 是塌缩的点标记
+- **status 永远 OK** — 在 `tool_result` 返回前就设了 `SpanStatusCode.OK`，没看 `is_error`
+- **阻塞 AC-F8** — `extra.tracing` 持久化零时长 span 只是占位，无实际价值
+- **阻塞 AC-I5 width 真实性** — tool count 真实但 tool 维度 trace 视图全是假数据
+
+#### 关键设计风险（多猫共识）
+
+| 风险 | 现状证据 | 影响 |
+|------|---------|------|
+| AgentMessage 缺 `toolUseId` 字段 | `types.ts:115+` 只有 `toolName/toolInput`，无关联 ID | 无法 tool_use → tool_result 配对 |
+| AgentMessage 缺结构化 result status | `tool_result` 无 `is_error/success/exitCode` 字段，只能从 `content` 字符串猜 | span status 真实性无保证 |
+| Provider native ID 丢失 | `CatAgentService.ts:154` 有 `tool_use_id`、`dare-event-transform.ts:66` 有 `tool_call_id`，但 transformation 丢失 | 必须修复 transformer 保真 |
+| 单工具串行假设不成立 | Claude/CatAgent 一个 assistant content 可多个 tool_use block | `Map<toolName>` / 栈模型在同名/乱序时错配 |
+| `span-helpers.ts` 本地 `isMcpTool` 缺失 Codex `mcp:` 前缀识别 | 现认 `cat_cafe_` / `mcp__` / `signal_`，但漏 `mcp:`；而 `tool-usage/classify.ts` 已正确处理该格式 | Codex MCP tool 误判 basic |
+
+#### 设计原则（多猫共识 → KD-36..41）
+
+1. **必须基于 native ID 关联** — 不接受 `Map<toolName, Span>` 弱关联（KD-36）
+2. **按"可能并发/乱序"设计** — per-invocation `ToolSpanTracker`，key = `toolUseId` × invocation+cat scope（KD-37）
+3. **AgentMessage 扩展双字段** — `toolUseId?: string` + `toolResultStatus?: 'ok' | 'error' | 'unknown'`（KD-38）
+4. **同 Phase 包含 AC-F8 unblock** — Phase J 不标 ✅ 直到 J-A + J-B 两 slice 都关闭（KD-39）
+5. **复用 `tool-usage/classify.ts`** — 移除 `span-helpers.ts` 本地 `isMcpTool`（KD-40）
+6. **Provider 支持矩阵文档化** — 不允许"至少 X 其他 fallback"模糊口径（KD-41）
+
+#### 实施 slice
+
+| Slice | 内容 | AC 覆盖 |
+|-------|------|---------|
+| **J-A** | Live real-duration spans — message schema 扩展、ToolSpanTracker、provider transformer 注入、orphan 兜底、test | AC-J1..J6 |
+| **J-B** | Persist + hydrate — `StoredToolEvent` 扩展、`extra.tracing` 分离、hydrate 恢复真实 tool span、provider matrix 附录 | AC-J7..J9 |
+
+> ✅ **Slice J-A + J-B 已关闭**（KD-39 防 Phase F 时 status 漂移的二次重现）
+
+#### Out of scope
+
+- **MCP server-side instrumentation** — client-side duration 含 network/marshaling，独立 feature
+- **历史 tool span 回填** — hydrate 前的旧数据保持现状，不重建
+- **Tool input/result body 写入 span attr** — 保持低敏，只存 `tool.input.keys` / `tool.result.status`，不存正文
+
+#### Provider 支持矩阵（AC-J9）
+
+四件套 = 真实 duration span 所需的最小信号集：
+
+- **start**: 在 `tool_use` 事件能识别工具调用开始（`AgentMessage.toolUseId` 已注入）
+- **end**: 在 `tool_result` 事件能识别工具调用结束（同 `toolUseId` 配对）
+- **id**: provider 原生 ID（不是合成 UUID，可跨进程稳定）
+- **status**: 来自 execution edge 的结构化 `'ok' | 'error' | 'unknown'`（非 content 字符串猜测，KD-38）
+
+| Provider | start | end | id | status | 真实 duration span | 备注 |
+|----------|:-----:|:---:|:--:|:------:|:------------------:|------|
+| **Claude CLI** | ✅ | ❓ | ⏳ | ❓ | ⏳ deferred | `claude-ndjson-parser.ts:196` 的 `tool_use` 分支当前**不抽取** `tool_use.id`（Anthropic block schema 里有，parser 未读出来），tool_result 路径也未 verified；Phase J Slice J-B follow-up wire 后才能升级矩阵（**Maine Coon R1 P2-2 fix**：之前误标 ✅，已改 deferred 与代码现状对齐） |
+| **Codex** | ✅ | ✅ | ✅ `item.id`（lifecycle anchor，PR #755 R1 P2-2 verified — **不是 `tool_call_id`**） | ✅ `item.status` (`completed`/`failed`/`error`) | ✅ | AC-J2 wired in PR #774 |
+| **DARE** | ✅ | ✅ | ✅ `data.tool_call_id`（event payload） | ✅ `tool.result` vs `tool.error` event | ✅ | AC-J2 wired in PR #774；`tool_call_id` 从 toolInput lift 到顶层 toolUseId（release note） |
+| **CatAgent** | ✅ | ✅ | ✅ `block.id`（Anthropic native tool_use.id） | ✅ execution edge (`unknown tool` / 成功 / thrown error 三分支) | ✅ | AC-J2 wired in PR #774；status 严格从 execution edge 不从 content 猜（KD-38） |
+| **Gemini CLI** | ✅ | ❓ | ❓ | ❓ | ⏳ deferred | `gemini-event-parser.ts:53` 有 `tool_use` 但 `tool_result` 字段名待 verify；Slice J-B follow-up |
+| **Antigravity** | ✅ | ✅ | ❓ | ❓ | ⏳ deferred | provider 流形复杂（CDP 桥 + 多模型切换），字段名 follow-up |
+| **OpenCode** | ✅ | ❓ | ❓ | ❓ | ⏳ deferred | 字段名 follow-up |
+| **Kimi** | ✅ | ❌ | ❌ | ❌ | ❌ 明确降级 | `KimiAgentService.ts:319` 有 `tool_use` 但 **无 `tool_result` 事件**；明确 fallback 不开 span（KD-41） |
+| **A2A** | n/a | n/a | n/a | n/a | ❌ 不适用 | A2A 不是 LLM provider 而是 cat-to-cat 路由；不参与 tool span 度量 |
+
+**降级行为约束（KD-41 honesty）**：
+
+- 缺 id → 不开 span（不伪造合成 UUID 撑数）
+- 缺 end / status → 不开 span（不假定 `ok` 兜底）
+- 任一字段缺失的 provider，事件仍透传到 `StoredToolEvent` 用于 Hub 历史展示；hydrate 跳过 span 合成
+
+> **未来 PR 加新 provider**：必须先更新此矩阵 + provide AC-J2 wire；不允许"先 wire 后补 matrix"。
 
 ## Acceptance Criteria
 
@@ -266,7 +436,7 @@ W3C TraceContext 对齐的跨猫调用因果链：
 - [x] AC-C6: regressions 覆盖 strict/shadow 同猫跨行、same-line dual mention、code block / blockquote 排除
 
 ### Phase E（Hub 嵌入式可观测 + Snapshot Store）✅
-- [x] AC-E1: `LocalTraceStore` ring buffer 存储脱敏 TraceSpanDTO（10K cap，24h TTL — Phase G 统一）
+- [x] AC-E1: `LocalTraceStore` ring buffer 存储脱敏 TraceSpanDTO（10K cap，24h TTL）
 - [x] AC-E2: `LocalTraceExporter` 在 RedactingSpanProcessor 之后运行，只看脱敏属性
 - [x] AC-E3: `GET /api/telemetry/traces` 支持 traceId/invocationId(HMAC)/catId 过滤
 - [x] AC-E4: trace 查询端 HMAC 原始 ID 后匹配（pseudonymized store）
@@ -274,15 +444,15 @@ W3C TraceContext 对齐的跨猫调用因果链：
 - [x] AC-E6: `HubTraceTree` 按 `parentSpanId` 构建 forest，树形瀑布图展示父子层次
 - [x] AC-E7: `MetricsSnapshotStore` 30s 采样，`/metrics/history` 返回趋势数据
 
-### Phase F（Trace 持久化 — 指针关联方案）
+### Phase F（Trace 持久化 — 指针关联方案）✅
 - [x] AC-F1: 四类 span（route/invocation/cli_session/llm_call）统一携带 `invocationId` attribute（值 = outer InvocationRecord.id，键名不变）
 - [x] AC-F2: Message `extra.tracing` 写入 `{ traceId, spanId, parentSpanId }` 指针（route → user message，invocation/cli/llm → assistant message）
 - [x] AC-F3: `LocalTraceStore.hydrate()` 从消息数据合成 TraceSpanDTO 并回填 buffer，startTime 使用 `timestamp - duration` 反推（非直接用 message.timestamp）
-- [x] AC-F4: 冷启动时从最近 24h 消息自动 hydrate，Hub Traces tab 可见历史 span（Phase G 统一 TTL）
+- [x] AC-F4: 冷启动时从最近 24h 消息自动 hydrate，Hub Traces tab 可见历史 span
 - [x] AC-F5: hydrate 使用 `msg:timeline` sorted set 范围查询，不做全表扫描
 - [x] AC-F6: 每条消息 tracing 指针增量 ≤ 100 bytes，不存完整 span 快照
 - [x] AC-F7: `StoredMessage.extra` 类型扩展含 `tracing`，parser round-trip 保留，`updateExtra()` 使用 merge 语义
-- [ ] AC-F8: tool_use spans 暂不持久化（零时长点标记，待 Phase H 升级）
+- [x] AC-F8: tool_use spans 持久化 — Phase J Slice J-B AC-J7/J8 直接接续：`StoredToolEvent` 扩展 + hydrate 合成真实 duration `cat_cafe.tool_use ...` child span（不再退化为 `invocation.restored`）
 
 ### Phase D（Runtime 调试 exporter + 启动语义对齐）✅
 - [x] AC-D1: `TELEMETRY_DEBUG` 通过 `ConsoleSpanExporter` 输出 spans，且 regular OTLP pipeline 仍保持 redaction
@@ -292,16 +462,43 @@ W3C TraceContext 对齐的跨猫调用因果链：
 - [x] AC-D5: Windows `start-windows.ps1` 通过 API Start-Job 注入同样的 `NODE_ENV` 语义
 - [x] AC-D6: `telemetry-debug.test.js` + `start-dev-profile-isolation.test.mjs` + `start-dev-script.test.js` 覆盖 guardrail 与启动链回归
 
-### Phase G（Prompt X-Ray + A2A Trace Propagation）
-- [x] AC-G1: `PromptCaptureStore` file-based ring buffer（500 cap, 6h TTL, gzip payloads, NDJSON index），同步/异步写入 + 按 invocationId/threadId/recent 查询
-- [x] AC-G2: prompt capture 默认关闭（`PROMPT_CAPTURE` env 开关），可选 `PROMPT_CAPTURE_CATS` 白名单
-- [x] AC-G3: `/api/debug/prompt-captures/*` 端点要求 session auth + userId resource-level auth（只返回当前用户 captures），query limit 上限 100
-- [x] AC-G4: `CallerTraceContext` 穿透 InvocationQueue → InvocationRegistry → AgentRouter → route-serial/route-parallel，callback A2A trigger 路径同步传播
-- [x] AC-G5: `mention_dispatch` span 作为 A2A handoff 的 parent，`dispatch.target_count` + `dispatch.source` attributes
-- [x] AC-G6: `setTraceContext` best-effort（try/catch + typeof check），不阻塞 invocation hot path
-- [x] AC-G7: route span 携带 aggregate attributes（`ROUTE_TOTAL_CATS_INVOKED`、`ROUTE_TOTAL_TOKENS`、`ROUTE_HAS_A2A_HANDOFF`）
-- [x] AC-G8: Hub `HubTraceTree` 新增 X-Ray Inspector，prompt 分解 tabs（system/user/effective/meta）
-- [x] AC-G9: `LocalTraceStore` 默认 TTL 统一为 24h，导出常量 `LOCAL_TRACE_STORE_DEFAULT_MAX_AGE_MS` 消除 hydrate-traces 不一致
+### Phase G（Prompt X-Ray + Cross-route A2A Trace Propagation）
+- [x] AC-G1: `PromptCaptureStore` 文件级 ring buffer（500 条上限，6h TTL），NDJSON 索引 + gzip 载荷。Implemented in prompt-capture-store.ts via PR #619 intake.
+- [x] AC-G2: `PROMPT_CAPTURE` env gate 默认关闭，`PROMPT_CAPTURE_CATS` 可选白名单过滤。Wired in `isPromptCaptureEnabled()` via PR #619.
+- [x] AC-G3: `capturePromptIfEnabled` 在 `invoke-single-cat` fire-and-forget 调用，不阻塞 invocation hot path. Wired at invoke-single-cat.ts:1548; AC-G10 follow-up keeps the fire-and-forget invariant via async `runCapture()` wrapper inside the bridge.
+- [x] AC-G4: `/api/debug/prompt-captures/*` 路由走 session auth + userId resource-level auth. Implemented in prompt-captures.ts via PR #619.
+- [x] AC-G5: `CallerTraceContext` 类型（W3C TraceContext 对齐：traceId/spanId/traceFlags）定义在 `genai-semconv.ts`. Defined at genai-semconv.ts:47 via PR #619.
+- [x] AC-G6: `wrapWithDispatchSpan` 创建 `mention_dispatch` child span 并返回 `CallerTraceContext`. Implemented in dispatch-span.ts via PR #619.
+- [x] AC-G7: `setTraceContext` on `IAuthInvocationBackend`（Memory + Redis 实现），best-effort try/catch. Wired in IAuthInvocationBackend.ts:80, InvocationRegistry.ts:170, and RedisAuthInvocationBackend.ts:408 via PR #619.
+- [x] AC-G8: Route aggregate attributes（`ROUTE_TOTAL_CATS_INVOKED`/`ROUTE_TOTAL_TOKENS`/`ROUTE_HAS_A2A_HANDOFF`）设在 route span. Wired in route-serial / route-parallel via PR #619.
+- [x] AC-G9: `LocalTraceStore` 默认 TTL 从 2h 提升到 24h，导出 `LOCAL_TRACE_STORE_DEFAULT_MAX_AGE_MS` 常量. Done in PR #619 (Phase E follow-up bundled into Phase G intake).
+- [x] AC-G10: Prompt X-Ray 必须覆盖 F203 native L0 channel，或在 UI/API 中明确拆分 native system prompt vs user/effective prompt，避免把空 `System` tab 误读成未捕获. Closed in Phase G-Followup (2026-06-09, KD-44): `PromptCapture` schema gained `nativeSystemPrompt` / `nativeSystemPromptSource` / `nativeSystemTokenEstimate` / `totalTokenEstimate` / `captureDiagnostics`; bridge async-fetches L0 from `compileL0ViaSubprocess` for `service.injectsL0Natively()` providers (Claude/Codex); Hub X-Ray Inspector System tab now zones Native L0 (system role) above the message-system pack appendix; resume amber banner now distinguishes message-system path from native L0; token bar and Meta tab break out native L0 vs message tokens to fix silent under-count. `l0-compiler.ts` gained in-flight Promise dedup + generation guard so capture and native injection sharing a cold cache don't double-spawn, and old compiles cannot repopulate stale L0 after `clearL0Cache()`. Test coverage: `l0-compiler.test.js` 15/15 (4 new AC-G10 dedup/invalidation tests) + `prompt-capture.test.js` 20/20 (5 new AC-G10 tests: backward compat, native capture, fail-safe diagnostic, non-native passthrough).
+
+### Phase I（Step Summary — Agent Loop 行为节奏度量）✅
+- [x] AC-I1: Hub Traces tab 暴露 "Step Summary" 子视图（per `cat_cafe.route`），展示 `agent_loop_count` / `tool_call_count` / `a2a_dispatch_count` / `duration_ms` / `token_total` / `error_count`
+- [x] AC-I2: 每个 provider stream parser 在识别到一次 LLM call 边界时 emit 统一的 `cat_cafe.agent_loop` marker；`agent_loop_count` = route 下 marker 计数（Claude provider 在 `message_stop` 处 emit；其他 provider 显示 `—`，不退化为 invocation count）
+- [x] AC-I3: 新增 `cat_cafe.a2a.dispatch.count` counter，在 `cat_cafe.mention_dispatch` span 创建时 increment；attributes **仅 `AGENT_ID`**，不带高基数字段；per-route `a2a_dispatch_count` 从 span 计数派生
+- [x] AC-I4: Restored span 的 sub-step 计数显示 `—` 或 null marker，**不显示 0**；只 `duration_ms` 对 restored 有效
+- [x] AC-I5: Step Summary 面板 **不**计算或展示 "efficiency" / "quality" / 任何 normative score——只展示 raw counts（descriptive plane，遵循 KD-16）
+- [x] AC-I6: 2D Length × Width 展示——UI 同时显示 `agent_loop_count`（深度）和 `tool_call_count / agent_loop_count`（平均宽度）
+- [x] AC-I7: 单元/集成测试覆盖 counter increment、restored-vs-live 区分、AC-I5 normative 字段缺位、**live provider 无 `cat_cafe.agent_loop` marker 时 `agent_loop_count` 显式显示 `—`**（不退化成 invocation count，Phase I 最关键防退化边界）
+
+### Phase J（MCP Tool Span — 真实执行边界）
+
+#### Slice J-A: Live real-duration spans
+
+- [x] AC-J1: `AgentMessage` 类型扩展 — `toolUseId?: string` + `toolResultStatus?: 'ok' | 'error' | 'unknown'`；`tool_result` 也带 `toolName`
+- [x] AC-J2: provider transformer 按 AC-J9 矩阵保真 native id / structured status — **Codex** (`item.id` + `item.status`)、**DARE** (`data.tool_call_id` + `tool.result` / `tool.error`)、**CatAgent** (`block.id` / execution edge) 四件套已 wired；Claude CLI / Gemini CLI / Antigravity / OpenCode deferred，Kimi / A2A 明确降级不承诺 real duration span
+- [x] AC-J3: `ToolSpanTracker` per-invocation — `start(toolName, toolUseId, input)`、`end(toolUseId, status)`、`endAllOrphans(reason)`；key scope = invocation+cat 避免 provider raw id 跨 invocation 碰撞
+- [x] AC-J4: finally 块兜底 end orphan span 并标记 `orphan/aborted` attribute（PR #732 mention_dispatch abort safety 模式）
+- [x] AC-J5: tool span 通过 `tool-usage/classify.ts` 分类（移除 `span-helpers.ts` 本地 `isMcpTool`），同步覆盖 Codex `mcp:` 前缀
+- [x] AC-J6: behavioral test (InMemorySpanExporter) 覆盖 (a) 同名双 tool 并行 (b) result 乱序到达 (c) error result → span status ERROR (d) abort orphan cleanup (e) Codex `mcp:` 分类正确
+
+#### Slice J-B: Persist + hydrate
+
+- [x] AC-J7: `StoredToolEvent` 扩展 — `toolUseId`、`status`、`tracing { traceId, spanId, parentSpanId }`、`startTimeMs`、`endTimeMs`；不混用 message-level `extra.tracing`。Producer side：`ToolSpanTracker.getContext(toolUseId)` peek 接口 + `AgentMessage.toolTracing` 富化字段 + `invoke-single-cat` enrich 流程 + `toStoredToolEvent` 复制 5 个新字段。
+- [x] AC-J8: hydrate 从 `toolEvents[]` 恢复 `cat_cafe.tool_use ...` real-duration child span（不退化成 `invocation.restored`）。`synthesizeToolSpansFromEvents` 按 `toolUseId` 配对 tool_use/tool_result，用 startTimeMs/endTimeMs 算 duration，按 status 设 OTel span status code。缺字段的事件 honest 跳过（KD-41）。
+- [x] AC-J9: provider 支持矩阵附录 — F153 spec 已加表格列每个 provider 的 (start, end, id, status) 四件套支持情况（见 Phase J 章节 "Provider 支持矩阵" 子节）。**Codex / DARE / CatAgent** 四件套就位（AC-J2 wired in PR #774）；**Claude CLI / Gemini CLI / Antigravity / OpenCode** ⏳ deferred（parser 字段未 verify / wire — 见矩阵脚注）；**Kimi** 明确降级（无 `tool_result` 事件）；**A2A** n/a（非 LLM provider）。
 
 ## Dependencies
 
@@ -345,9 +542,23 @@ W3C TraceContext 对齐的跨猫调用因果链：
 | KD-22 | Phase F 纳入 `cat_cafe.route` 根 span | Phase E 实现引入 route 根 span，invocation 已变子 span；hydrate 必须覆盖 route 否则重启后层级断裂 | 2026-04-22 |
 | KD-23 | startTime 用 `timestamp - durationMs` 反推 | assistant message timestamp 是终态落盘时间 ≈ span end；Maine Coon review 发现直接当 startTime 会偏移 | 2026-04-22 |
 | KD-24 | `extra.tracing` 需要 parser + merge 前置改造 | `updateExtra()` 是整块覆盖，parser 不保留未知字段；Maine Coon review 指出需先 widen type + merge 语义 | 2026-04-22 |
-| KD-25 | tool_use spans 暂不持久化 | KD-6 原决策为 event；Phase E 升级为 MCP 工具 span 但仍是零时长；等 Phase H 真实执行边界再持久化 | 2026-04-22 |
-| KD-26 | Prompt capture 用文件 ring buffer，不用 SQLite | 调试专用，零额外依赖，gzip 压缩 + TTL 自动清理 | 2026-05-08 |
-| KD-27 | Prompt capture 默认关闭，env 门控 | privacy by default，捕获含完整 prompt 明文，不能无授权开启 | 2026-05-08 |
-| KD-28 | `setTraceContext` best-effort（try/catch + typeof） | invocation hot path 稳定性优先，trace 丢失可接受，invocation 失败不可接受 | 2026-05-08 |
-| KD-29 | LocalTraceStore TTL 从 2h 提升到 24h | 24h 覆盖日常调试窗口，导出常量消除 hydrate 不一致 | 2026-05-08 |
-| KD-30 | `CallerTraceContext` 对齐 W3C TraceContext（traceId/spanId/traceFlags） | 跨进程 interop 标准对齐，未来可对接外部 tracing backend | 2026-05-08 |
+| KD-25 | tool_use spans 暂不持久化（**superseded by KD-39 / Phase J Slice J-B**） | KD-6 原决策为 event；Phase E 升级为 MCP 工具 span 但仍是零时长；当时延后到 Phase H，2026-05-22 promoted to Phase J Slice J-B 直接落地 | 2026-04-22 |
+| KD-26 | 社区 F181 提案归入 F153 Phase G | Prompt X-Ray + A2A trace 属可观测性基础设施范畴，不单独立 feature | 2026-05-08 |
+| KD-27 | Prompt X-Ray 默认关闭，opt-in via `PROMPT_CAPTURE` env | 捕获内容含完整 prompt 明文，必须显式启用 | 2026-05-08 |
+| KD-28 | capturePromptIfEnabled fire-and-forget，不阻塞 invocation hot path | 调试工具不可影响正常调用延迟 | 2026-05-08 |
+| KD-29 | setTraceContext best-effort（try/catch + typeof check） | trace context 丢失 = 降级为独立 trace，不影响功能正确性 | 2026-05-08 |
+| KD-30 | LocalTraceStore TTL 2h → 24h | 2h 对日常调试过短，24h 覆盖典型工作日；导出常量统一引用 | 2026-05-08 |
+| KD-31 | Phase I: 步 = 一次 agent loop（边界锚 = `cat_cafe.agent_loop` stream marker，per-provider stream parser 识别 LLM call 边界并 emit） | 现有 stream 信号都是 invocation 粒度：`done` event 在 CLI 跑完后 yield 一次，`cat_cafe.llm_call` span 也走 done 路径。真正 loop 边界必须在 stream parser 里识别；无法识别的 provider 显示 `—`，不退化 | 2026-05-19 |
+| KD-32 | Phase I 仍是 descriptive plane，不计算 efficiency/quality score | 继承 KD-16；步长长可能是认真验证也可能是绕路，单凭计数无法判断质量；eval 信号留给未来 feature | 2026-05-19 |
+| KD-33 | Phase I 引入 `cat_cafe.agent_loop` stream marker，由各 provider stream parser 在 LLM call 边界 emit；无法识别的 provider 首版显示 `—`（不退化成 invocation count） | Maine Coon review 二轮：done event / `llm_call` span 都是 invocation 粒度，不是 loop；新 marker 是唯一 provider-agnostic 出口 | 2026-05-19 |
+| KD-34 | Phase I metric counter `cat_cafe.a2a.dispatch.count` 仅带 `AGENT_ID`，不带 `invocationId/threadId`，不复用 `CALLBACK_TOOL/REASON` | metric allowlist 禁止高基数；CALLBACK_TOOL/REASON 是 callback auth failure 语义，与 dispatch 无关；如需 dispatch 专属 labels 须先扩 allowlist | 2026-05-19 |
+| KD-35 | Phase I `tool_call_count` 走双轨（child `cat_cafe.tool_use *` span + invocation `tool.basic_call_count` attr）；`token_total` 走 `cat_cafe.route` span `ROUTE_TOTAL_TOKENS` attr | basic tools 设计成 attribute 计数，MCP/business 走 child span；token metrics 没 route 维度，route span 已 finally 块设置 `ROUTE_TOTAL_TOKENS` | 2026-05-19 |
+| KD-36 | Phase J: tool span correlation 必须基于 native ID（方案 A），拒绝 `Map<toolName>` / 栈模型弱关联 | 两猫共识：Claude/CatAgent 一个 assistant content 可多个 tool_use block；同名工具/result 乱序会让弱关联错配；DARE/Codex/CatAgent 源协议本来就有 call id | 2026-05-22 |
+| KD-37 | Phase J: per-invocation `ToolSpanTracker`，`Map<toolUseId, Span>` key = invocation+cat scope | Maine Coon finding：provider raw id 可能跨 invocation 碰撞；scoped key 避免 cross-invocation 串扰 + 内存泄漏 | 2026-05-22 |
+| KD-38 | Phase J: `AgentMessage` 扩展 `toolUseId` + `toolResultStatus`，不靠 content 字符串猜 status | gpt52 + Maine Coon 共同发现：当前 `tool_result` 无结构化 status，duration 真实化但 status 仍 unreliable 等于半修 | 2026-05-22 |
+| KD-39 | Phase J 同 phase 内做 AC-F8 unblock（持久化 + hydrate），不拆出去 | 两猫共识：防止 Phase F 时"live 真 / restored 假"的 status 漂移重现；Phase J 不标 ✅ 直到两 slice 闭环 | 2026-05-22 |
+| KD-40 | Phase J: 移除 `span-helpers.ts` 本地 `isMcpTool`，统一走 `tool-usage/classify.ts` | Maine Coon独有 finding：本地 `isMcpTool` 当前识别 `cat_cafe_` / `mcp__` / `signal_`，**漏 Codex `mcp:` 前缀**，导致 Codex MCP tool 误判 basic；`tool-usage/classify.ts` 已正确处理 `mcp:` 格式 | 2026-05-22 |
+| KD-41 | Phase J: provider 支持矩阵必须文档化，不允许"至少 X 其他 fallback"模糊口径 | gpt52 finding：模糊 AC 容易把 Phase J 做成局部真实；每个 provider 必须明确列 start/end/id/status 四件套支持，不支持的明确降级（不开 span 或标 fallback） | 2026-05-22 |
+| KD-42 | Prompt X-Ray 不能把 `params.systemPrompt` 等同于真实系统提示词 | F203 将 L0 identity 移到 native system channel；runtime 证明确实会 capture user/effective prompt，但 `System` tab 可为空，F153 Phase G 需要补 native channel coverage 或 UI 明示 partial | 2026-05-26 |
+| KD-43 | Phase J Slice J-B: `StoredToolEvent` 持久化 native `toolName` 数据字段，与 UI `label` 解耦；hydrate 优先用 `toolName`，label 解析仅为 legacy fallback | Maine Coon R5→R6 把"non-blocking P3 / track separately"升级为 P1：`label` 是 UI 显示文本（含 catId 前缀 + arrow + 可能本地化），把它当作 hydrate data contract 会让 label 格式或文案改动 silently degrade trace 到 `unknown` 或错的工具名。修在 J-B PR #825 内完成（3 个新 regression test 覆盖：toolName preferred / legacy label fallback / malformed last-resort） | 2026-06-02 |
+| KD-44 | Phase G AC-G10 (KD-42 closure): `PromptCapture` 持久化 `nativeSystemPrompt` data field 直接拿 `compileL0ViaSubprocess` 编译后 L0，Hub UI System tab 分区显示 Native L0 / message-system pack，token 估算分桶（msg / native L0 / total）。Capture 走 fire-and-forget async runner，L0 fetch 失败只写 `captureDiagnostics`，不阻塞 invocation hot path。`l0-compiler.ts` 加 in-flight Promise dedup + generation guard，capture + native injection 并发冷启动只发一次 subprocess，且 `clearL0Cache()` 后旧 in-flight compile 不得回写 stale L0 到 cache | Maine Coon Design Gate（2026-06-03）四立场全部 actionable：(1) 不要重复编译 → 加 in-flight dedup + capture 异步取 + fail-safe diagnostic；(2) 保留 `systemPrompt` 不 rename → 加 `nativeSystemPrompt` 双字段，避免 UI 误读 non-native provider 的 system；(3) 单 System tab 分区，Native L0 上方 + pack appendix 下方，修正 resume banner 误导（injected=false 只代表 message-system path 不影响 native L0）；(4) 保留 `tokenEstimate = effectivePrompt`，新增 `nativeSystemTokenEstimate` + `totalTokenEstimate` Hub 顶部显示 total / Meta 拆开；R1 P1 follow-up（2026-06-08）补 generation guard + clear-during-inflight regression | 2026-06-09 |

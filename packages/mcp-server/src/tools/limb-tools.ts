@@ -18,6 +18,10 @@ export const limbListAvailableInputSchema = {
       type: 'string',
       description: '按能力类别过滤（可选，如 "camera", "gpu_render"）',
     },
+    agentKeyCatId: {
+      type: 'string',
+      description: '共享 Antigravity MCP 时必填你自己的 catId（如 "antig-opus"），用于选择正确的 sidecar agent key。',
+    },
   },
 };
 
@@ -36,62 +40,89 @@ export const limbInvokeInputSchema = {
       type: 'object',
       description: '命令参数（可选）',
     },
+    agentKeyCatId: {
+      type: 'string',
+      description: '共享 Antigravity MCP 时必填你自己的 catId（如 "antig-opus"），用于选择正确的 sidecar agent key。',
+    },
   },
   required: ['nodeId', 'command'],
 };
 
 // ─── Handlers ────────────────────────────────────────────────
 
-export async function handleLimbListAvailable(args: { capability?: string }): Promise<ToolResult> {
-  const config = getCallbackConfig();
+export async function handleLimbListAvailable(args: {
+  capability?: string;
+  agentKeyCatId?: string;
+}): Promise<ToolResult> {
+  const config = getCallbackConfig({ agentKeyCatId: args.agentKeyCatId });
   if (!config) return errorResult(NO_CONFIG_ERROR);
 
   const body: Record<string, unknown> = {};
   if (args.capability) body.capability = args.capability;
 
-  return callbackPost('/api/callback/limb/list', body);
+  return callbackPost('/api/callback/limb/list', body, { agentKeyCatId: args.agentKeyCatId });
 }
 
 export async function handleLimbInvoke(args: {
   nodeId: string;
   command: string;
   params?: Record<string, unknown>;
+  agentKeyCatId?: string;
 }): Promise<ToolResult> {
-  const config = getCallbackConfig();
+  const config = getCallbackConfig({ agentKeyCatId: args.agentKeyCatId });
   if (!config) return errorResult(NO_CONFIG_ERROR);
 
-  return callbackPost('/api/callback/limb/invoke', {
-    nodeId: args.nodeId,
-    command: args.command,
-    params: args.params ?? {},
-  });
+  return callbackPost(
+    '/api/callback/limb/invoke',
+    {
+      nodeId: args.nodeId,
+      command: args.command,
+      params: args.params ?? {},
+    },
+    { agentKeyCatId: args.agentKeyCatId },
+  );
 }
 
 // ─── Phase C: Pairing Tools ──────────────────────────────────
 
 export const limbPairListInputSchema = {
   type: 'object' as const,
-  properties: {},
+  properties: {
+    agentKeyCatId: {
+      type: 'string',
+      description: '共享 Antigravity MCP 时必填你自己的 catId（如 "antig-opus"），用于选择正确的 sidecar agent key。',
+    },
+  },
 };
 
 export const limbPairApproveInputSchema = {
   type: 'object' as const,
   properties: {
     requestId: { type: 'string', description: '配对请求 ID' },
+    agentKeyCatId: {
+      type: 'string',
+      description: '共享 Antigravity MCP 时必填你自己的 catId（如 "antig-opus"），用于选择正确的 sidecar agent key。',
+    },
   },
   required: ['requestId'],
 };
 
-export async function handleLimbPairList(): Promise<ToolResult> {
-  const config = getCallbackConfig();
+export async function handleLimbPairList(args: { agentKeyCatId?: string } = {}): Promise<ToolResult> {
+  const config = getCallbackConfig({ agentKeyCatId: args.agentKeyCatId });
   if (!config) return errorResult(NO_CONFIG_ERROR);
-  return callbackPost('/api/callback/limb/pair/list', {});
+  return callbackPost('/api/callback/limb/pair/list', {}, { agentKeyCatId: args.agentKeyCatId });
 }
 
-export async function handleLimbPairApprove(args: { requestId: string }): Promise<ToolResult> {
-  const config = getCallbackConfig();
+export async function handleLimbPairApprove(args: { requestId: string; agentKeyCatId?: string }): Promise<ToolResult> {
+  const config = getCallbackConfig({ agentKeyCatId: args.agentKeyCatId });
   if (!config) return errorResult(NO_CONFIG_ERROR);
-  return callbackPost('/api/callback/limb/pair/approve', { requestId: args.requestId });
+  return callbackPost(
+    '/api/callback/limb/pair/approve',
+    { requestId: args.requestId },
+    {
+      agentKeyCatId: args.agentKeyCatId,
+    },
+  );
 }
 
 // ─── Tool Definitions ────────────────────────────────────────
@@ -101,8 +132,9 @@ export const limbTools = [
     name: 'limb_list_available',
     description:
       'List currently online limb nodes and their capabilities. Optionally filter by capability category. ' +
-      'Limbs are external devices/nodes (iPhone, Windows PC, Mac Mini, etc.) — NOT cats. ' +
-      'Use when you need to discover what physical devices are available for tasks like camera capture, GPU rendering, etc.',
+      'Limbs are external devices or plugin-backed service nodes (iPhone, Windows PC, Mac Mini, publishing services, etc.) — NOT cats. ' +
+      'Use when you need to discover available node IDs, capability categories, command names, and authorization levels before invoking a device or service capability. ' +
+      'Shared Antigravity MCP GOTCHA: pass agentKeyCatId to select the correct variant sidecar key.',
     inputSchema: limbListAvailableInputSchema,
     handler: handleLimbListAvailable,
   },
@@ -110,8 +142,9 @@ export const limbTools = [
     name: 'limb_invoke',
     description:
       'Invoke a capability on a specific limb node. Requires nodeId and command. ' +
-      'Example: limb_invoke(nodeId="iphone-1", command="camera.snap") ' +
-      'GOTCHA: Get the nodeId from limb_list_available first — do not guess node IDs.',
+      'Examples: limb_invoke(nodeId="iphone-1", command="camera.snap") or invoke a plugin service command listed by limb_list_available. ' +
+      'GOTCHA: Get the nodeId and command from limb_list_available first — do not guess node IDs or commands. ' +
+      'Shared Antigravity MCP GOTCHA: pass agentKeyCatId to select the correct variant sidecar key.',
     inputSchema: limbInvokeInputSchema,
     handler: handleLimbInvoke,
   },
@@ -119,7 +152,8 @@ export const limbTools = [
     name: 'limb_pair_list',
     description:
       'List pending limb pairing requests. Remote devices must be approved by 铲屎官 before cats can use them. ' +
-      'Use to check if any new devices are waiting for approval.',
+      'Use to check if any new devices are waiting for approval. ' +
+      'Shared Antigravity MCP GOTCHA: pass agentKeyCatId to select the correct variant sidecar key.',
     inputSchema: limbPairListInputSchema,
     handler: handleLimbPairList,
   },
@@ -128,7 +162,8 @@ export const limbTools = [
     description:
       'Approve a limb pairing request. After approval, the remote device is automatically registered in the Registry ' +
       'and becomes available for cats to invoke. ' +
-      'GOTCHA: Only 铲屎官 should initiate approval — do not auto-approve without user consent.',
+      'GOTCHA: Only 铲屎官 should initiate approval — do not auto-approve without user consent. ' +
+      'Shared Antigravity MCP GOTCHA: pass agentKeyCatId to select the correct variant sidecar key.',
     inputSchema: limbPairApproveInputSchema,
     handler: handleLimbPairApprove,
   },

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCatData } from '@/hooks/useCatData';
 import { apiFetch } from '@/utils/api-client';
 import { CatOverviewTab, type ConfigData } from '../config-viewer-tabs';
@@ -16,6 +16,7 @@ import { MarketplaceContent } from './MarketplaceContent';
 import { McpManageContent } from './McpManageContent';
 import { OpsContent } from './OpsContent';
 import { PluginsContent } from './PluginsContent';
+import { SettingsText } from './primitives';
 import { RulesPromptsContent } from './RulesPromptsContent';
 import { ServiceStatusPanel } from './ServiceStatusPanel';
 import { SettingsPageHeader } from './SettingsPageHeader';
@@ -25,9 +26,10 @@ import { SETTINGS_SECTIONS } from './settings-nav-config';
 
 interface SettingsContentProps {
   section: string;
+  initialEditCatId?: string;
 }
 
-export function SettingsContent({ section }: SettingsContentProps) {
+export function SettingsContent({ section, initialEditCatId }: SettingsContentProps) {
   const { cats, refresh } = useCatData();
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -42,20 +44,38 @@ export function SettingsContent({ section }: SettingsContentProps) {
     setFetchError(null);
     try {
       const res = await apiFetch('/api/config');
-      if (res.ok) {
-        const d = (await res.json()) as { config: ConfigData };
-        setConfig(d.config);
-      } else {
-        setFetchError('配置加载失败');
+      if (!res.ok) {
+        setFetchError(`配置加载失败 (${res.status})`);
+        return;
       }
+      const payload = (await res.json()) as { config: ConfigData };
+      setConfig(payload.config);
     } catch {
-      setFetchError('网络错误');
+      setFetchError('配置加载失败');
     }
   }, []);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const consumedDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      initialEditCatId &&
+      section === 'members' &&
+      cats.length > 0 &&
+      consumedDeepLinkRef.current !== initialEditCatId
+    ) {
+      const cat = cats.find((c) => c.id === initialEditCatId);
+      if (cat) {
+        consumedDeepLinkRef.current = initialEditCatId;
+        setCreateDraft(null);
+        setEditingCat(cat);
+        setEditorOpen(true);
+      }
+    }
+  }, [initialEditCatId, section, cats]);
 
   const handleEditorSaved = useCallback(async () => {
     await Promise.all([fetchData(), refresh()]);
@@ -111,17 +131,20 @@ export function SettingsContent({ section }: SettingsContentProps) {
     [confirm, fetchData, refresh],
   );
 
-  const meta = SETTINGS_SECTIONS.find((s) => s.id === section) ?? SETTINGS_SECTIONS[0];
-
-  if (section === 'im') return <HubConnectorConfigTab />;
-  if (section === 'skills') return <SkillsContent />;
-  if (section === 'mcp') return <McpManageContent />;
   if (section === 'marketplace') return <MarketplaceContent />;
+  if (section === 'skills') return <SkillsContent />;
 
-  const sectionContent = (() => {
-    switch (section) {
+  const meta = SETTINGS_SECTIONS.find((item) => item.id === section) ?? SETTINGS_SECTIONS[0];
+
+  const content = (() => {
+    switch (meta.id) {
       case 'members':
-        if (fetchError) return <p className="text-sm text-[var(--semantic-error-text)]">{fetchError}</p>;
+        if (fetchError)
+          return (
+            <SettingsText as="p" variant="sm" tone="red">
+              {fetchError}
+            </SettingsText>
+          );
         return config ? (
           <CatOverviewTab
             config={config}
@@ -142,40 +165,52 @@ export function SettingsContent({ section }: SettingsContentProps) {
             togglingCatId={togglingCatId}
           />
         ) : (
-          <p className="text-sm text-cafe-muted">加载中...</p>
+          <SettingsText as="p" variant="sm" tone="muted">
+            加载中...
+          </SettingsText>
         );
       case 'accounts':
         return <HubAccountsTab />;
-      case 'plugins':
-        return <PluginsContent />;
+      case 'im':
+        return <HubConnectorConfigTab />;
       case 'voice':
         return (
           <div className="space-y-6">
             <ServiceStatusPanel
-              filterFeatures={['voice-input', 'voice-output', 'voice-companion', 'voice-postprocess']}
+              filterFeatures={[
+                'voice-input',
+                'voice-output',
+                'voice-companion',
+                'voice-postprocess',
+                'meeting-copilot',
+                'live-transcript',
+              ]}
               title="语音服务"
             />
             <VoiceSettingsPanel />
           </div>
         );
       case 'system':
-        if (fetchError) return <p className="text-sm text-[var(--semantic-error-text)]">{fetchError}</p>;
         return <HubEnvFilesTab excludeCategories={['connector']} />;
-      case 'rules':
-        return <RulesPromptsContent />;
       case 'notify':
         return <PushSettingsPanel />;
       case 'ops':
         return <OpsContent />;
+      case 'rules':
+        return <RulesPromptsContent />;
+      case 'mcp':
+        return <McpManageContent />;
+      case 'plugins':
+        return <PluginsContent />;
       default:
-        return <SettingsPlaceholder section={section} description="此分区即将上线" />;
+        return <SettingsPlaceholder section={meta.label} description="此分区即将上线" />;
     }
   })();
 
   return (
     <>
       <SettingsPageHeader title={meta.label} subtitle={meta.description} />
-      {sectionContent}
+      {content}
       {editorOpen && (
         <HubCatEditor
           open

@@ -13,9 +13,9 @@ interface AuditEntry {
 }
 
 const ACTION_LABELS: Record<string, { text: string; color: string }> = {
-  install: { text: '安装', color: 'text-conn-emerald-text bg-conn-emerald-bg' },
+  install: { text: '安装', color: 'text-conn-green-text bg-conn-green-bg' },
   delete: { text: '删除', color: 'text-conn-red-text bg-conn-red-bg' },
-  update: { text: '更新', color: 'text-[var(--color-cafe-accent)] bg-[var(--color-cafe-accent)]/10' },
+  update: { text: '更新', color: 'text-[var(--semantic-info)] bg-conn-blue-bg' },
   toggle: { text: '开关', color: 'text-conn-amber-text bg-conn-amber-bg' },
 };
 
@@ -46,7 +46,7 @@ export function CapabilityAuditLog({ projectPath }: { projectPath?: string }) {
   }, [expanded, fetchAudit]);
 
   return (
-    <div className="border-t border-cafe-subtle/60 pt-3 mt-2">
+    <div className="border-t border-[var(--console-border-soft)] pt-3 mt-2">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -71,7 +71,10 @@ export function CapabilityAuditLog({ projectPath }: { projectPath?: string }) {
           {loading && <p className="text-xs text-cafe-muted">加载中...</p>}
           {!loading && entries.length === 0 && <p className="text-xs text-cafe-muted">暂无记录</p>}
           {entries.map((e, i) => {
-            const label = ACTION_LABELS[e.action] ?? { text: e.action, color: 'text-cafe-muted bg-conn-slate-bg' };
+            const label = ACTION_LABELS[e.action] ?? {
+              text: e.action,
+              color: 'text-cafe-muted bg-cafe-surface-elevated',
+            };
             return (
               <div key={`${e.timestamp}-${i}`} className="flex items-center gap-2 py-1 text-xs">
                 <span className="text-cafe-muted w-28 shrink-0 tabular-nums">
@@ -82,7 +85,7 @@ export function CapabilityAuditLog({ projectPath }: { projectPath?: string }) {
                     minute: '2-digit',
                   })}
                 </span>
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${label.color}`}>{label.text}</span>
+                <span className={`px-1.5 py-0.5 rounded text-micro font-medium ${label.color}`}>{label.text}</span>
                 <span className="text-cafe-secondary font-medium truncate">{e.capabilityId}</span>
                 <span className="text-cafe-muted truncate">{e.userId}</span>
               </div>

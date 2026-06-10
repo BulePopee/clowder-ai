@@ -37,9 +37,9 @@ const STATUS_STYLES: Record<TaskStatus, { text: string; border: string; pillBg: 
     pillBg: 'bg-cafe-surface-elevated text-cafe-muted',
   },
   done: {
-    text: 'text-conn-emerald-text',
-    border: 'border-l-green-600',
-    pillBg: 'bg-conn-emerald-bg text-conn-emerald-text',
+    text: 'text-conn-green-text',
+    border: 'border-l-conn-green-text',
+    pillBg: 'bg-conn-green-bg text-conn-green-text dark:bg-green-950/20',
   },
 };
 
@@ -67,7 +67,7 @@ export function TaskCard({
 
   return (
     <div
-      className={`border-l-4 ${style.border} bg-cafe-surface-elevated border border-[var(--console-border-soft)] rounded-xl p-3 mx-3 mb-1.5 hover:-translate-y-0.5 transition-transform ease-out`}
+      className={`border-l-4 ${style.border} bg-cafe-surface-elevated border border-cafe rounded-xl p-3 mx-3 mb-1.5 hover:-translate-y-0.5 transition-transform ease-out`}
     >
       <div className="flex items-center gap-2">
         {/* Title */}
@@ -86,7 +86,7 @@ export function TaskCard({
         <button
           type="button"
           onClick={() => onStatusChange(task.id, STATUS_CYCLE[status])}
-          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${style.pillBg} transition-colors hover:opacity-80`}
+          className={`text-micro font-semibold px-2 py-0.5 rounded-full ${style.pillBg} transition-colors hover:opacity-80`}
         >
           {STATUS_LABELS[status]}
         </button>
@@ -94,9 +94,9 @@ export function TaskCard({
 
       {/* Expanded details */}
       {expanded && (
-        <div className="mt-2 pt-2 border-t border-[var(--console-border-soft)]">
+        <div className="mt-2 pt-2 border-t border-cafe">
           {task.why && <p className="text-xs text-cafe-muted leading-relaxed">{task.why}</p>}
-          <p className="text-[10px] text-cafe-muted mt-1">
+          <p className="text-micro text-cafe-muted mt-1">
             {formatRelativeTime(task.createdAt)} · {task.createdBy === 'user' ? '铲屎官' : task.createdBy}
           </p>
         </div>

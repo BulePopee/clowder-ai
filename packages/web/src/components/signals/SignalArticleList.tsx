@@ -1,11 +1,25 @@
 import type { SignalArticle, SignalArticleStatus } from '@cat-cafe/shared';
 import { SignalTierBadge } from './SignalTierBadge';
 
+const statusLabelMap: Record<SignalArticleStatus, string> = {
+  inbox: '收件箱',
+  read: '已读',
+  archived: '归档',
+  starred: '收藏',
+};
+
+const statusClassMap: Record<SignalArticleStatus, string> = {
+  inbox: 'text-cafe-black bg-[var(--console-field-bg)]',
+  read: 'text-cafe-secondary bg-[var(--console-field-bg)]',
+  archived: 'text-cafe-secondary bg-[var(--console-field-bg)]',
+  starred: 'text-conn-amber-text bg-conn-amber-bg',
+};
+
 interface SignalArticleListProps {
   readonly items: readonly SignalArticle[];
   readonly selectedArticleId: string | null;
   readonly onSelect: (article: SignalArticle) => void;
-  readonly onStatusChange?: (articleId: string, status: SignalArticleStatus) => void;
+  readonly onStatusChange: (articleId: string, status: SignalArticleStatus) => Promise<void>;
   readonly selectedIds?: ReadonlySet<string>;
   readonly onToggleSelect?: (articleId: string) => void;
 }
@@ -35,6 +49,7 @@ export function SignalArticleList({
     return (
       <div className="flex flex-col items-center justify-center rounded-2xl bg-[var(--console-card-bg)] px-8 py-16 text-center">
         <svg
+          aria-hidden="true"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -48,7 +63,7 @@ export function SignalArticleList({
           />
           <line x1="4" y1="22" x2="4" y2="15" strokeLinecap="round" />
         </svg>
-        <p className="text-[14px] font-semibold text-cafe">当前筛选条件下没有文章</p>
+        <p className="text-sm font-semibold text-cafe">当前筛选条件下没有文章</p>
         <p className="mt-1 text-xs text-cafe-muted">尝试调整筛选条件或等待新信号</p>
       </div>
     );
@@ -75,8 +90,8 @@ export function SignalArticleList({
               className={[
                 'flex items-center gap-3 rounded-[14px] px-3 py-2.5 cursor-pointer transition-all',
                 selected
-                  ? 'bg-[var(--console-card-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.04)]'
-                  : 'hover:bg-[var(--console-card-bg)]/60',
+                  ? 'bg-[var(--console-active-bg)] shadow-[0_8px_22px_rgba(43,33,26,0.10)]'
+                  : 'hover:bg-[var(--console-hover-bg)]',
               ].join(' ')}
               style={{ minHeight: 76 }}
             >
@@ -96,37 +111,57 @@ export function SignalArticleList({
                 {initial}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="line-clamp-2 text-[13px] font-semibold leading-[1.35] text-cafe">{article.title}</p>
-                <p className="mt-1 text-[11px] text-cafe-secondary">
-                  {article.source} · {formatDate(article.fetchedAt)}
+                <p className="line-clamp-2 text-sm font-semibold leading-[1.35] text-cafe">{article.title}</p>
+                <p className="mt-1 flex items-center gap-1.5 text-xs text-cafe-secondary">
+                  <span>{article.source}</span>
+                  <span>·</span>
+                  <span>{formatDate(article.fetchedAt)}</span>
+                  {article.note && (
+                    <span
+                      title={article.note.length > 80 ? `${article.note.slice(0, 80)}...` : article.note}
+                      className="cursor-help text-opus-dark"
+                    >
+                      ✎
+                    </span>
+                  )}
+                  {(article.studyCount ?? 0) > 0 && (
+                    <span
+                      title={`学习 ${article.studyCount} 次`}
+                      className="rounded bg-opus-bg px-1 text-micro text-opus-dark"
+                    >
+                      学{article.studyCount}
+                    </span>
+                  )}
+                  <span
+                    data-testid="signal-status-badge"
+                    className={`rounded px-1 text-micro font-medium ${statusClassMap[article.status]}`}
+                  >
+                    {statusLabelMap[article.status]}
+                  </span>
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <SignalTierBadge tier={article.tier} />
-                {onStatusChange && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onStatusChange(article.id, 'read');
-                      }}
-                      className="rounded-md bg-[var(--console-card-bg)] px-2 py-1 text-[10px] font-semibold text-cafe-secondary shadow-[0_1px_3px_rgba(43,33,26,0.06)] transition hover:text-cafe"
-                    >
-                      已读
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void onStatusChange(article.id, 'starred');
-                      }}
-                      className="rounded-md bg-conn-amber-bg px-2 py-1 text-[10px] font-semibold text-conn-amber-text transition hover:opacity-80"
-                    >
-                      收藏
-                    </button>
-                  </>
-                )}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onStatusChange(article.id, 'read');
+                  }}
+                  className="rounded-md bg-[var(--console-card-bg)] px-2 py-1 text-micro font-semibold text-cafe-secondary shadow-[0_1px_3px_rgba(43,33,26,0.06)] transition hover:text-cafe"
+                >
+                  已读
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onStatusChange(article.id, 'starred');
+                  }}
+                  className="rounded-md bg-conn-amber-bg px-2 py-1 text-micro font-semibold text-conn-amber-text transition hover:opacity-80"
+                >
+                  收藏
+                </button>
               </div>
             </div>
           </li>

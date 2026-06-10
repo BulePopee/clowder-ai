@@ -4,7 +4,14 @@
  */
 
 import { join } from 'node:path';
-import { type CatConfig, type CatId, CORE_COMMANDS, catRegistry } from '@cat-cafe/shared';
+import {
+  type CatConfig,
+  type CatId,
+  CORE_COMMANDS,
+  catRegistry,
+  type EventMemoryRecord,
+  type ILimbNode,
+} from '@cat-cafe/shared';
 import type { RedisClient } from '@cat-cafe/shared/utils';
 import { createRedisClient, SessionStore } from '@cat-cafe/shared/utils';
 import fastifyCookie from '@fastify/cookie';
@@ -12,8 +19,7 @@ import cors from '@fastify/cors';
 import fastifyWebsocket from '@fastify/websocket';
 import Fastify, { type FastifyReply } from 'fastify';
 import { resolveAnthropicRuntimeProfile, resolveForClient } from './config/account-resolver.js';
-import { generateCliConfigs, readCapabilitiesConfig } from './config/capabilities/capability-orchestrator.js';
-import { resolveStartupCliConfigContext } from './config/capabilities/startup-cli-config.js';
+import { regenerateStartupCliConfigs } from './config/capabilities/startup-cli-config.js';
 import { resolveBoundAccountRefForCat } from './config/cat-account-binding.js';
 import { getCatContextBudget } from './config/cat-budgets.js';
 import {
@@ -25,6 +31,7 @@ import {
   isCatAvailable,
   toAllCatConfigs,
 } from './config/cat-config-loader.js';
+import { configEventBus } from './config/config-event-bus.js';
 import { resolveFrontendBaseUrl, resolveFrontendCorsOrigins } from './config/frontend-origin.js';
 import { initRuntimeOverrides } from './config/session-strategy-overrides.js';
 import { assertStorageReady } from './config/storage-guard.js';
@@ -46,12 +53,13 @@ import {
   resolveAcpBootstrapCwd,
 } from './domains/cats/services/agents/providers/acp/acp-bootstrap-cwd.js';
 import { AntigravityAgentService } from './domains/cats/services/agents/providers/antigravity/AntigravityAgentService.js';
+import { RedisAntigravitySupervisorStore } from './domains/cats/services/agents/providers/antigravity/AntigravitySupervisorStore.js';
+import { clearL0Cache, warmL0Cache } from './domains/cats/services/agents/providers/l0-compiler.js';
 import { AgentRegistry } from './domains/cats/services/agents/registry/AgentRegistry.js';
 import { AuthorizationManager } from './domains/cats/services/auth/AuthorizationManager.js';
 import {
   AgentRouter,
   AuditEventTypes,
-  ClaudeAgentService,
   CodexAgentService,
   createDraftStore,
   createInvocationRecordStore,
@@ -64,7 +72,17 @@ import {
   MemoryGovernanceStore,
   OpenCodeAgentService,
 } from './domains/cats/services/index.js';
-import { initPushNotificationService } from './domains/cats/services/push/PushNotificationService.js';
+import {
+  getPushNotificationService,
+  initPushNotificationService,
+  resetPushNotificationService,
+} from './domains/cats/services/push/PushNotificationService.js';
+import {
+  RuntimeSessionSealReaper,
+  type RuntimeSessionSealReaperDrainResult,
+  startSerializedRuntimeSessionSealReaperInterval,
+} from './domains/cats/services/runtime-session/RuntimeSessionSealReaper.js';
+import { createRuntimeSessionStore } from './domains/cats/services/runtime-session/RuntimeSessionStoreFactory.js';
 import type { HandoffConfig } from './domains/cats/services/session/SessionSealer.js';
 import { SessionSealer } from './domains/cats/services/session/SessionSealer.js';
 import { TranscriptReader } from './domains/cats/services/session/TranscriptReader.js';
@@ -73,11 +91,15 @@ import { createAuthorizationAuditStore } from './domains/cats/services/stores/fa
 import { createAuthorizationRuleStore } from './domains/cats/services/stores/factories/AuthorizationRuleStoreFactory.js';
 import { createBacklogStore } from './domains/cats/services/stores/factories/BacklogStoreFactory.js';
 import { createCommunityIssueStore } from './domains/cats/services/stores/factories/CommunityIssueStoreFactory.js';
+import { createFrustrationIssueStore } from './domains/cats/services/stores/factories/FrustrationIssueStoreFactory.js';
+import { createLabelStore } from './domains/cats/services/stores/factories/LabelStoreFactory.js';
 import { createMemoryStore } from './domains/cats/services/stores/factories/MemoryStoreFactory.js';
 import { createMessageStore } from './domains/cats/services/stores/factories/MessageStoreFactory.js';
 import { createPendingRequestStore } from './domains/cats/services/stores/factories/PendingRequestStoreFactory.js';
+import { createProposalStore } from './domains/cats/services/stores/factories/ProposalStoreFactory.js';
 import { createPushSubscriptionStore } from './domains/cats/services/stores/factories/PushSubscriptionStoreFactory.js';
 import { createReadStateStore } from './domains/cats/services/stores/factories/ReadStateStoreFactory.js';
+import { createSessionHandoffProposalStore } from './domains/cats/services/stores/factories/SessionHandoffProposalStoreFactory.js';
 import { createSummaryStore } from './domains/cats/services/stores/factories/SummaryStoreFactory.js';
 import { createTaskStore } from './domains/cats/services/stores/factories/TaskStoreFactory.js';
 import { createThreadStore } from './domains/cats/services/stores/factories/ThreadStoreFactory.js';
@@ -95,6 +117,7 @@ import { shouldTrackApiActivity } from './domains/health/activity-route-filter.j
 import { PortDiscoveryService } from './domains/preview/port-discovery.js';
 import { collectRuntimePorts } from './domains/preview/port-validator.js';
 import { PreviewGateway } from './domains/preview/preview-gateway.js';
+import { appendServiceLog } from './domains/services/service-lifecycle.js';
 import { createSignalArticleLookup } from './domains/signals/services/signal-thread-lookup.js';
 import { AgentPaneRegistry } from './domains/terminal/agent-pane-registry.js';
 import { TmuxGateway } from './domains/terminal/tmux-gateway.js';
@@ -107,12 +130,15 @@ import {
 } from './infrastructure/connectors/connector-gateway-bootstrap.js';
 import { restartConnectorGateway } from './infrastructure/connectors/connector-gateway-lifecycle.js';
 import { createConnectorReloadSubscriber } from './infrastructure/connectors/connector-reload-subscriber.js';
+import { IssueCommentRouter } from './infrastructure/email/IssueCommentRouter.js';
 import {
   CiCdRouter,
   ConflictRouter,
   ConnectorInvokeTrigger,
+  fetchPrCiStatus,
   ReviewFeedbackRouter,
 } from './infrastructure/email/index.js';
+import { buildGhCliEnv, resolveGhCliToken } from './infrastructure/github/gh-cli-env.js';
 import { runSchedulerReplyUserIdBackfill } from './infrastructure/scheduler/scheduler-reply-userid-backfill.js';
 import { securityHeadersPlugin } from './infrastructure/security-headers.js';
 import { sessionAuthPlugin, sessionRoute } from './infrastructure/session-auth.js';
@@ -125,6 +151,7 @@ import { gameRoutes } from './routes/games.js';
 import {
   accountsRoutes,
   agentHooksRoutes,
+  audioProxyRoutes,
   auditRoutes,
   authorizationRoutes,
   backlogRoutes,
@@ -141,16 +168,20 @@ import {
   connectorHubRoutes,
   connectorMediaRoutes,
   distillationRoutes,
+  eventsRoutes,
   evidenceRoutes,
   executionDigestRoutes,
   exportRoutes,
   externalProjectRoutes,
+  externalRuntimeSessionsRoutes,
   featureDocDetailRoutes,
   firstRunQuestRoutes,
+  frustrationIssueRoutes,
   governanceStatusRoute,
   guideActionRoutes,
   intentCardRoutes,
   invocationsRoutes,
+  labelsRoutes,
   leaderboardEventsRoutes,
   leaderboardRoutes,
   libraryRoutes,
@@ -160,12 +191,16 @@ import {
   messagesRoutes,
   mkdirRoute,
   packsRoutes,
+  perspectiveRoutes,
   projectSetupRoute,
   projectsBootstrapRoutes,
   projectsRoutes,
+  proposalRoutes,
   pushRoutes,
   queueRoutes,
   quotaRoutes,
+  recallMetricsRoutes,
+  refAudioUploadRoutes,
   reflectRoutes,
   refluxRoutes,
   registerCallbackAuthDebugRoute,
@@ -174,6 +209,7 @@ import {
   rulesRoutes,
   servicesRoutes,
   sessionChainRoutes,
+  sessionHandoffApproveRoutes,
   sessionHooksRoutes,
   sessionStrategyConfigRoutes,
   sessionTranscriptRoutes,
@@ -201,7 +237,6 @@ import {
 import { knowledgeFeedRoutes } from './routes/knowledge-feed.js';
 import { marketplaceRoutes } from './routes/marketplace.js';
 import { previewRoutes } from './routes/preview.js';
-import { refAudioUploadRoutes } from './routes/ref-audio-upload.js';
 import { terminalRoutes } from './routes/terminal.js';
 import { threadExportRoutes } from './routes/thread-export.js';
 import { ApiInstanceLease, type ApiInstanceLeaseInvalidation } from './services/ApiInstanceLease.js';
@@ -228,6 +263,12 @@ export function getSocketManager(): SocketManager {
 }
 
 const PROCESS_START_AT = Date.now();
+
+function hasRuntimeSessionDrain(service: AgentService): service is AgentService & {
+  drainRuntimeSession(runtimeSessionId: string): Promise<RuntimeSessionSealReaperDrainResult>;
+} {
+  return typeof (service as { drainRuntimeSession?: unknown }).drainRuntimeSession === 'function';
+}
 
 async function main(): Promise<void> {
   const { logger: customLogger, isDebugMode, LOG_DIR_PATH } = await import('./infrastructure/logger.js');
@@ -447,12 +488,18 @@ async function main(): Promise<void> {
   const sessionStore = redis ? new SessionStore(redis) : undefined;
   const deliveryCursorStore = new DeliveryCursorStore(sessionStore);
   const threadStore = createThreadStore(redis);
+  const proposalStore = createProposalStore(redis);
+  const handoffProposalStore = createSessionHandoffProposalStore(redis);
+  const frustrationIssueStore = createFrustrationIssueStore(redis);
+  // F222: Create early so it's available for both AgentRouter (cancel burst detection) and AuthorizationManager
+  const authPendingStore = createPendingRequestStore(redis);
   // F155 B-4/B-6: Guide state is runtime-only (in-memory, resets on restart)
   const { InMemoryGuideSessionStore } = await import('./domains/guides/GuideSessionRepository.js');
   const guideSessionStore = new InMemoryGuideSessionStore();
   const { InMemoryGuideDismissTracker } = await import('./domains/guides/GuideDismissTracker.js');
   const dismissTracker = new InMemoryGuideDismissTracker();
   const taskStore = createTaskStore(redis);
+  const labelStore = createLabelStore(redis);
   const communityIssueStore = createCommunityIssueStore(redis);
   if (redis) {
     const { RedisPrTrackingStore } = await import('./infrastructure/email/RedisPrTrackingStore.js');
@@ -486,11 +533,13 @@ async function main(): Promise<void> {
     messageStore instanceof RedisMessageStore &&
     invocationRecordStore instanceof RedisInvocationRecordStore
   ) {
+    const { getOwnerUserId } = await import('./config/cat-config-loader.js');
     const backfillResult = await runSchedulerReplyUserIdBackfill({
       redis,
       messageStore,
       invocationRecordStore,
       threadStore,
+      defaultUserId: getOwnerUserId(),
     });
     if (!backfillResult.skipped && (backfillResult.repairedMessages > 0 || backfillResult.repairedInvocations > 0)) {
       app.log.info(
@@ -504,6 +553,7 @@ async function main(): Promise<void> {
   }
 
   const sessionChainStore = createSessionChainStore(redis);
+  const runtimeSessionStore = createRuntimeSessionStore(redis);
   // F24: Transcript Writer/Reader for session chain
   // E7 fix: resolve relative to monorepo root, not CWD (same fix as docsRoot in PR #524)
   const transcriptDataDir = process.env.TRANSCRIPT_DATA_DIR ?? `${findMonorepoRoot(process.cwd())}/data/transcripts`;
@@ -559,26 +609,59 @@ async function main(): Promise<void> {
   initRepoIdentity(repoRoot);
 
   const { createMemoryServices } = await import('./domains/memory/factory.js');
+  // Resolve embed mode. Priority:
+  //   1. If the user enabled the Embedding service in console (service.enabled=true),
+  //      force the in-process mode to 'on' (or honor an explicit 'shadow' / 'on' env
+  //      override). UI toggle is the most direct expression of user intent — letting
+  //      a stale EMBED_MODE=off in .env silently disable catch-up would be a foot-gun
+  //      (sidecar runs, but evidence_vectors stays empty + catch-up logs probed=false).
+  //   2. Otherwise, an explicit EMBED_MODE env wins.
+  //   3. Otherwise, default 'off' (service disabled in console, no env → no
+  //      embedding services wired up).
+  const { getServiceConfig: getEmbedSvcCfg } = await import('./domains/services/service-config.js');
+  const embedSvcEnabled = getEmbedSvcCfg('embedding-model')?.enabled ?? false;
+  const resolvedEmbedMode: 'off' | 'shadow' | 'on' = (() => {
+    const envMode = process.env.EMBED_MODE;
+    if (embedSvcEnabled) {
+      return envMode === 'shadow' || envMode === 'on' ? envMode : 'on';
+    }
+    if (envMode === 'off' || envMode === 'shadow' || envMode === 'on') return envMode;
+    return 'off';
+  })();
+  app.log.info(
+    `[api] F102: embed mode = ${resolvedEmbedMode} (EMBED_MODE=${process.env.EMBED_MODE ?? '(unset)'}, service.enabled=${embedSvcEnabled})`,
+  );
   const memoryServices = await createMemoryServices({
     type: 'sqlite',
     sqlitePath: process.env.EVIDENCE_DB ?? resolve(repoRoot, 'evidence.sqlite'),
     docsRoot: process.env.DOCS_ROOT ?? resolve(repoRoot, 'docs'),
     markersDir: resolve(repoRoot, 'docs', 'markers'),
     transcriptDataDir, // reuse the same resolved path as Writer/Reader (line 282)
-    // Gap-1: expose EMBED_MODE env variable (Phase C infra ready, default off for open-source)
-    embed: process.env.EMBED_MODE ? { embedMode: process.env.EMBED_MODE as 'off' | 'shadow' | 'on' } : undefined,
+    embed: { embedMode: resolvedEmbedMode },
     // Phase E-2: message passage indexing — provide a callback that reads thread messages
     messageListFn: async (threadId: string, limit?: number) => {
       const messages = await messageStore.getByThread(threadId, limit ?? 2000, 'default-user');
       return messages
         .filter((m: { origin?: string }) => m.origin !== 'briefing') // F148 Phase E (AC-E2): exclude briefing from evidence index
-        .map((m: { id: string; content: string; catId?: string | null; threadId: string; timestamp: number }) => ({
-          id: m.id,
-          content: m.content,
-          catId: m.catId ?? undefined,
-          threadId: m.threadId,
-          timestamp: m.timestamp,
-        }));
+        .map(
+          (m: {
+            id: string;
+            content: string;
+            catId?: string | null;
+            threadId: string;
+            timestamp: number;
+            contentBlocks?: readonly unknown[];
+            extra?: { rich?: { blocks?: readonly unknown[] } };
+          }) => ({
+            id: m.id,
+            content: m.content,
+            catId: m.catId ?? undefined,
+            threadId: m.threadId,
+            timestamp: m.timestamp,
+            contentBlocks: m.contentBlocks,
+            richBlocks: m.extra?.rich?.blocks,
+          }),
+        );
     },
     // Phase E-1: thread summary indexing — provide a callback that lists all threads
     threadListFn: async () => {
@@ -638,10 +721,20 @@ async function main(): Promise<void> {
   };
   const expeditionBootstrapService = new ExpeditionBootstrapService(indexStateManager, {
     rebuildIndex: async (projectPath: string) => {
-      const startMs = Date.now();
-      const { buildStructuralSummary } = await import('./domains/memory/ExpeditionBootstrapService.js');
-      const summary = buildStructuralSummary(projectPath);
-      return { docsIndexed: summary.docsList.length, durationMs: Date.now() - startMs };
+      if (isSameRepo(projectPath, repoRoot)) {
+        const startMs = Date.now();
+        const { buildStructuralSummary } = await import('./domains/memory/ExpeditionBootstrapService.js');
+        const summary = buildStructuralSummary(projectPath);
+        return { docsIndexed: summary.docsList.length, durationMs: Date.now() - startMs };
+      }
+      const { ensureProjectCollection } = await import('./domains/memory/bootstrap-collection-bridge.js');
+      return ensureProjectCollection(
+        projectPath,
+        memoryServices.catalog!,
+        memoryServices.collectionStores ?? new Map(),
+        memoryServices.dataDir!,
+        memoryServices.embeddingService,
+      );
     },
     getFingerprint,
     getTierCoverage: async (projectPath: string) => {
@@ -971,15 +1064,23 @@ async function main(): Promise<void> {
   let router!: AgentRouter;
   const syncAgentRegistry = async (configs: Record<string, CatConfig>) => {
     agentRegistry.reset();
+    clearL0Cache(); // Invalidate stale L0 compilations from previous sync
     for (const [id, config] of Object.entries(configs)) {
       const catId = config.id;
       // F32-b P1 fix: do NOT pass model here — let constructors resolve via
       // getCatModel(catId) which respects env override (CAT_*_MODEL > config > fallback)
       let service: AgentService;
       switch (config.clientId) {
-        case 'anthropic':
-          service = new ClaudeAgentService({ catId });
+        case 'anthropic': {
+          // F198 Phase B Step 3 canary: env-gated carrier selection.
+          // CAT_CAFE_CLAUDE_CARRIER=bg_daemon → --bg carrier (subscription
+          // quota, R1 救宪宪). Unset/other → -p (current production default).
+          const { createClaudeAgentServiceForCanary } = await import(
+            './domains/cats/services/agents/providers/claude-carrier-factory.js'
+          );
+          service = createClaudeAgentServiceForCanary(catId);
           break;
+        }
         case 'openai':
           service = new CodexAgentService({ catId });
           break;
@@ -1025,7 +1126,7 @@ async function main(): Promise<void> {
               mcpServers,
             });
           } else {
-            service = new GeminiAgentService({ catId });
+            service = new GeminiAgentService({ catId, agyProfile: config.agyProfile });
           }
           break;
         }
@@ -1038,6 +1139,13 @@ async function main(): Promise<void> {
         case 'antigravity':
           service = new AntigravityAgentService({
             catId,
+            runtimeSessionStore,
+            transcriptReader,
+            supervisorStore: redisClient
+              ? new RedisAntigravitySupervisorStore(redisClient, {
+                  auditDir: join(process.cwd(), 'data', 'antigravity-audit'),
+                })
+              : undefined,
           });
           break;
         case 'opencode':
@@ -1068,8 +1176,38 @@ async function main(): Promise<void> {
       agentRegistry.register(id, service);
     }
     if (router) router.refreshFromRegistry(agentRegistry);
+
+    // Pre-compile L0 system prompts for all registered cats in parallel.
+    // Avoids per-invocation subprocess overhead and ensures L0 is ready
+    // before the first message — also bypasses Windows NTFS junction
+    // issues that resolve by the time the user actually interacts (#802).
+    const registeredCatIds = Object.keys(configs).filter((id) => agentRegistry.has(id));
+    await warmL0Cache(registeredCatIds, app.log);
   };
   await syncAgentRegistry(catRegistry.getAllConfigs());
+
+  const runtimeSessionSealReaper = new RuntimeSessionSealReaper({
+    runtimeSessionStore,
+    sessionSealer,
+    drainRuntimeSession: async (record) => {
+      if (!agentRegistry.has(record.catId)) {
+        return {
+          ok: false,
+          drainResult: 'skipped_runtime_unreachable',
+          reason: `no AgentService registered for ${record.catId}`,
+        };
+      }
+      const service = agentRegistry.get(record.catId);
+      if (!hasRuntimeSessionDrain(service)) {
+        return {
+          ok: false,
+          drainResult: 'skipped_runtime_unreachable',
+          reason: `AgentService for ${record.catId} cannot drain ${record.runtime}`,
+        };
+      }
+      return service.drainRuntimeSession(record.runtimeSessionId);
+    },
+  });
 
   // F136 Phase 3A: Cat catalog subscriber — syncs AgentRegistry when cats CRUD emits cat-config events
   const { createCatCatalogSubscriber } = await import('./config/cat-catalog-subscriber.js');
@@ -1102,7 +1240,9 @@ async function main(): Promise<void> {
       app.log.error(`[tmux] CAT_CAFE_TMUX_AGENT=1 but tmux not found: ${(err as Error).message}`);
     }
   }
-  const agentPaneRegistry = tmuxGateway ? new AgentPaneRegistry() : undefined;
+  // F198 Phase C P1-1: registry is unconditional — bg carrier sessions (claude --bg)
+  // must be trackable regardless of whether tmux agent panes are enabled.
+  const agentPaneRegistry = new AgentPaneRegistry();
 
   // F120: Preview Gateway (独立端口反向代理) + Port Discovery
   const PREVIEW_GATEWAY_ENABLED = process.env.PREVIEW_GATEWAY_ENABLED !== '0';
@@ -1144,6 +1284,14 @@ async function main(): Promise<void> {
         redis,
         toolUsageArchiver,
       )
+    : undefined;
+  // F188 Phase F AC-F10: append-only tool event log (sequence preserving)
+  const toolEventLog = redis
+    ? new (await import('./domains/cats/services/tool-usage/ToolEventLog.js')).ToolEventLog(redis)
+    : undefined;
+  // F188 Phase F AC-F10 (AS-4): skill load event log
+  const skillLoadEventLog = redis
+    ? new (await import('./domains/cats/services/tool-usage/SkillLoadEventLog.js')).SkillLoadEventLog(redis)
     : undefined;
 
   // F150: Daily archive sweep — persist expiring Redis counters to JSONL
@@ -1211,6 +1359,7 @@ async function main(): Promise<void> {
     ...(sessionStore ? { sessionStore } : {}),
     ...(threadStore ? { threadStore } : {}),
     sessionChainStore,
+    runtimeSessionStore,
     transcriptWriter,
     transcriptReader,
     sessionSealer,
@@ -1225,10 +1374,14 @@ async function main(): Promise<void> {
     packStore,
     evidenceStore: memoryServices.evidenceStore,
     ...(toolUsageCounter ? { toolUsageCounter } : {}),
+    ...(toolEventLog ? { toolEventLog } : {}),
+    ...(skillLoadEventLog ? { skillLoadEventLog } : {}),
     guideSessionStore,
     dismissTracker,
     worldContextProvider,
     worldStore,
+    frustrationIssueStore,
+    pendingRequestStore: authPendingStore,
   });
 
   // F39: Message queue delivery
@@ -1303,9 +1456,68 @@ async function main(): Promise<void> {
     draftStore,
     invocationQueue,
     queueProcessor,
+    taskProgressStore, // F194 AC-B7: cleared on zombie reconcile
     ...(f101GameStore ? { gameStore: f101GameStore } : {}),
     ...(f101SharedDriver ? { autoPlayer: f101SharedDriver } : {}),
     holdBallCancelDeps: { dynamicTaskStore, taskRunner: taskRunnerV2 },
+    // F192 Phase G AC-G12 / F227 归一: magic word → Event Memory (single truth
+    // source) + a lightweight episode ref for F192's a2 projection.
+    onMagicWordDetected: (
+      hits: Array<{ word: string }>,
+      threadId: string,
+      catId: string | null,
+      messageId: string,
+      ownerUserId: string,
+      messageExcerpt?: string,
+    ) => {
+      for (const hit of hits) {
+        // 1) Write the full event FIRST. LL-048 / 砚砚: user-visible data — never
+        //    silently swallow. On failure, dead-letter for replay (最终不丢);
+        //    must not block message processing.
+        const record: EventMemoryRecord = {
+          type: hit.word,
+          trigger: 'human_brake',
+          cat: catId ?? 'unknown',
+          threadId,
+          messageId,
+          timestamp: Date.now(),
+          summary: messageExcerpt ?? hit.word,
+          cognitiveTransition: 'user_brake',
+          relatedHarness: null,
+          confidence: 'high',
+        };
+        let eventId: string;
+        try {
+          eventId = memoryServices.eventMemoryStore.markEvent(record, ownerUserId).event.eventId;
+        } catch (err) {
+          // P1-3 (砚砚): dead-letter so the event is recoverable, not lost.
+          try {
+            memoryServices.eventMemoryStore.appendDeadLetter(record, ownerUserId, String(err));
+          } catch (dlErr) {
+            app.log.error({ dlErr, threadId, word: hit.word }, '[F227] dead-letter append ALSO failed');
+          }
+          app.log.error(
+            { err, threadId, word: hit.word },
+            '[F227] Event Memory write failed — dead-lettered for replay',
+          );
+          continue; // no orphan episode ref without a backing event
+        }
+        // 2) Episode ref = projection convenience for F192 a2 (secondary, best-effort).
+        try {
+          appendMagicWordRefToEpisode(taskOutcomeStore, {
+            eventId,
+            word: hit.word,
+            threadId,
+            catId: catId ?? 'unknown',
+          });
+        } catch (err) {
+          app.log.error(
+            { err, threadId, eventId },
+            '[F227] episode magic_word_ref append failed (event already persisted)',
+          );
+        }
+      }
+    },
   };
   await app.register(messagesRoutes, messagesOpts);
   await app.register(queueRoutes, {
@@ -1315,6 +1527,10 @@ async function main(): Promise<void> {
     invocationTracker,
     socketManager,
     messageStore, // F117: for marking queued messages as canceled on withdraw/clear
+    invocationRecordStore, // F194 Phase B: canonical liveness read source
+    draftStore, // F194 Phase B: canonical liveness read source
+    taskProgressStore, // F194 AC-B7: cleared on zombie reconcile
+    invocationRegistry: registry, // F194 Phase Z (KD-22): namespace bridge for parent↔child invocation
   });
   await app.register(invocationsRoutes, {
     invocationRecordStore,
@@ -1365,6 +1581,13 @@ async function main(): Promise<void> {
   if (toolUsageCounter) {
     await app.register(toolUsageRoutes, { toolUsageCounter });
   }
+  // F200 Phase B: Recall metrics API
+  await app.register(recallMetricsRoutes, {
+    evidenceDb: memoryServices.store.getDb(),
+    messageStore,
+    taskStore,
+    threadStore,
+  });
   // F153 Phase E: Hub embedded observability routes
   const { telemetryRoutes } = await import('./routes/telemetry.js');
   await app.register(telemetryRoutes, {
@@ -1373,6 +1596,124 @@ async function main(): Promise<void> {
     metricsSnapshotStore: telemetryHandle.metricsSnapshotStore ?? undefined,
     checkReadiness,
   });
+  // F192 Phase E-hub: harness eval verdict lifecycle surface.
+  // F192 OQ-21: late-bound holder for ConnectorInvokeTrigger — eval-hub routes
+  // register before invokeTrigger is created (line ~2600). Manual trigger route
+  // resolves the live trigger at request time via this holder, so the provider
+  // returns null until index.ts wires it after invokeTrigger construction.
+  const invokeTriggerHolder: {
+    current: ConnectorInvokeTrigger | null;
+    get(): ConnectorInvokeTrigger | null;
+  } = {
+    current: null,
+    get() {
+      return this.current;
+    },
+  };
+
+  const { evalHubRoutes } = await import('./routes/eval-hub.js');
+  // F192 Phase H AC-H4: real GitPublisher (git worktree + gh) + per-domain generators
+  const { createGitWorktreePublisher } = await import(
+    './infrastructure/harness-eval/publish-verdict/git-worktree-publisher.js'
+  );
+  const { createA2aGeneratorAdapter } = await import(
+    './infrastructure/harness-eval/publish-verdict/a2a-generator-adapter.js'
+  );
+  const { createTaskOutcomeGeneratorAdapter } = await import(
+    './infrastructure/harness-eval/publish-verdict/task-outcome-generator-adapter.js'
+  );
+  const { createSopGeneratorAdapter } = await import(
+    './infrastructure/harness-eval/publish-verdict/sop-generator-adapter.js'
+  );
+
+  // F192 Phase H 收尾 PR-2 (砚砚 R1 P1 + Q5): capability-wakeup generator wires a real
+  // CapabilityWakeupTrialProviderImpl with all 4 required ports (sessionStore /
+  // transcriptReader / toolEventLog / skillLoadEventLog). Constructor fail-closed —
+  // if Redis-backed ports are unavailable (no Redis client), skip cw wire entirely
+  // (eval-cat-invocation domain instructions filtering will degrade gracefully:
+  // cw cats see base instructions without publish section, handler returns 501).
+  const verdictGenerators: Partial<
+    Record<
+      'eval:a2a' | 'eval:capability-wakeup' | 'eval:memory' | 'eval:sop' | 'eval:task-outcome',
+      ReturnType<typeof createA2aGeneratorAdapter>
+    >
+  > = {
+    'eval:a2a': createA2aGeneratorAdapter(),
+    'eval:sop': createSopGeneratorAdapter(),
+    'eval:task-outcome': createTaskOutcomeGeneratorAdapter(),
+  };
+  if (toolEventLog && skillLoadEventLog) {
+    const { createCapabilityWakeupGeneratorAdapter } = await import(
+      './infrastructure/harness-eval/publish-verdict/capability-wakeup-generator-adapter.js'
+    );
+    const { CapabilityWakeupTrialProviderImpl } = await import(
+      './infrastructure/harness-eval/capability-wakeup/capability-wakeup-trial-provider-impl.js'
+    );
+    const { createCapabilityWakeupRuntimeSessionEnumerator } = await import(
+      './infrastructure/harness-eval/capability-wakeup/capability-wakeup-session-enumerator.js'
+    );
+    const cwProvider = new CapabilityWakeupTrialProviderImpl({
+      sessionStore: sessionChainStore,
+      transcriptReader,
+      toolEventLog,
+      skillLoadEventLog,
+      sessionEnumerator: createCapabilityWakeupRuntimeSessionEnumerator({
+        runtimeSessionStore,
+        getFamilyForCat: (catId) => catRegistry.tryGet(catId)?.config.breedId,
+      }),
+    });
+    verdictGenerators['eval:capability-wakeup'] = createCapabilityWakeupGeneratorAdapter(cwProvider);
+  }
+
+  // F192 publish_verdict eval:memory wire-up — wires MemoryMetricsProvider
+  // backed by RecallMetricsComputer + computeLibraryHealth against live
+  // evidenceDb + markerQueue. Constructor is cheap (pure ctor), so unconditional.
+  if (memoryServices.markerQueue) {
+    const { createMemoryGeneratorAdapter } = await import(
+      './infrastructure/harness-eval/publish-verdict/memory-generator-adapter.js'
+    );
+    const { MemoryMetricsProviderImpl } = await import(
+      './infrastructure/harness-eval/memory/memory-metrics-provider-impl.js'
+    );
+    const memProvider = new MemoryMetricsProviderImpl({
+      evidenceDb: memoryServices.store.getDb(),
+      markersProvider: memoryServices.markerQueue,
+      repoRoot,
+      docsRoot: process.env.DOCS_ROOT ?? resolve(repoRoot, 'docs'),
+    });
+    verdictGenerators['eval:memory'] = createMemoryGeneratorAdapter(memProvider);
+  }
+
+  // F192 Phase G: Task Outcome Episode — L3 eval signals.
+  const { TaskOutcomeEpisodeStore } = await import('./infrastructure/harness-eval/task-outcome/task-outcome-store.js');
+  const taskOutcomeDbPath = process.env.TASK_OUTCOME_DB ?? resolve(repoRoot, 'task-outcome-episodes.sqlite');
+  const taskOutcomeStore = new TaskOutcomeEpisodeStore(taskOutcomeDbPath);
+  await app.register(evalHubRoutes, {
+    harnessFeedbackRoot: resolve(repoRoot, 'docs', 'harness-feedback'),
+    threadStore,
+    redis: redisClient ?? undefined,
+    invokeTriggerProvider: invokeTriggerHolder,
+    messageStore,
+    gitPublisher: createGitWorktreePublisher({ repoRoot }),
+    verdictGenerators,
+    // 砚砚 R4 P1 + cloud R4 P1: register CallbackAuthRegistry for MCP route auth.
+    callbackRegistry: registry,
+    // 砚砚 R9 P1: shared-MCP (Antigravity) agent-key publish path needs this.
+    agentKeyRegistry,
+    taskOutcomeDbPath,
+    eventMemoryDbPath: memoryServices.eventMemoryDbPath,
+  });
+  // AC-G13: Cancel burst detector (in-memory, per-process)
+  const { buildProposalRejectSignal } = await import(
+    './infrastructure/harness-eval/task-outcome/task-outcome-signal-builder.js'
+  );
+  const { CancelBurstDetector } = await import('./infrastructure/harness-eval/task-outcome/cancel-burst-detector.js');
+  const cancelBurstDetector = new CancelBurstDetector({ threshold: 3, windowMs: 60_000 });
+  const { appendPermissionCancelToEpisode, appendMagicWordRefToEpisode, checkAndAppendCancelBurst } = await import(
+    './infrastructure/harness-eval/task-outcome/task-outcome-signal-wiring.js'
+  );
+  const { taskOutcomeRoutes } = await import('./routes/task-outcome.js');
+  await app.register(taskOutcomeRoutes, { store: taskOutcomeStore });
 
   // F153: Prompt X-Ray debug routes
   const { promptCaptureRoutes } = await import('./routes/prompt-captures.js');
@@ -1427,7 +1768,7 @@ async function main(): Promise<void> {
     const { promisify } = await import('node:util');
     const execFileAsync = promisify(execFile);
     try {
-      await execFileAsync('gh', ['repo', 'view', repoFullName, '--json', 'name'], { timeout: 10_000 });
+      await execFileAsync('gh', ['repo', 'view', repoFullName, '--json', 'name'], getGitHubExecOptions(10_000));
       return true;
     } catch (err: unknown) {
       // gh ran but repo not found/no access → process exit code is a number
@@ -1435,6 +1776,49 @@ async function main(): Promise<void> {
         return false;
       }
       // Infrastructure failure (gh not found, timeout, auth broken) → propagate
+      throw err;
+    }
+  };
+
+  // F202 Phase 2 follow-up: validate specific PR exists (number-level, not just repo)
+  const validatePr = async (repoFullName: string, prNumber: number): Promise<boolean> => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    try {
+      await execFileAsync(
+        'gh',
+        ['api', `repos/${repoFullName}/pulls/${prNumber}`, '--jq', '.number'],
+        getGitHubExecOptions(10_000),
+      );
+      return true;
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && typeof (err as Record<string, unknown>).code === 'number') {
+        return false;
+      }
+      throw err;
+    }
+  };
+
+  // F202 Phase 2 follow-up: validate specific issue exists (number-level, not just repo)
+  // P2-cloud: also reject PR numbers — GitHub Issues API returns PRs with .pull_request set
+  const validateIssue = async (repoFullName: string, issueNumber: number): Promise<boolean> => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    try {
+      const { stdout } = await execFileAsync(
+        'gh',
+        ['api', `repos/${repoFullName}/issues/${issueNumber}`, '--jq', '.pull_request != null'],
+        getGitHubExecOptions(10_000),
+      );
+      // If .pull_request is set, this is a PR not a pure issue — reject
+      if (stdout.trim() === 'true') return false;
+      return true;
+    } catch (err: unknown) {
+      if (err instanceof Error && 'code' in err && typeof (err as Record<string, unknown>).code === 'number') {
+        return false;
+      }
       throw err;
     }
   };
@@ -1457,6 +1841,247 @@ async function main(): Promise<void> {
   const limbPairingStore = new LimbPairingStore();
   registerLimbNodeRoutes(app, { limbRegistry, pairingStore: limbPairingStore });
 
+  // F202-2B: Hoisted for late-binding GitHub schedule rehydration (closure set inside F202 block)
+  let rehydrateGitHubSchedules: ((githubDeps: Record<string, unknown>) => Promise<void>) | undefined;
+  let getGitHubPluginEnv: () => Record<string, string | undefined> = () => ({});
+  const getGitHubEnvValue = (key: string): string | undefined => {
+    const pluginEnv = getGitHubPluginEnv();
+    return Object.hasOwn(pluginEnv, key) ? pluginEnv[key] : process.env[key];
+  };
+  const getGitHubToken = (): string | undefined => {
+    return resolveGhCliToken({ pluginEnv: getGitHubPluginEnv() });
+  };
+  const getGitHubExecOptions = (timeout: number): { timeout: number; env?: NodeJS.ProcessEnv } => {
+    return {
+      timeout,
+      env: buildGhCliEnv({ token: getGitHubToken() }),
+    };
+  };
+  const { createRepoActivityTemplate } = await import('./infrastructure/scheduler/templates/repo-activity.js');
+  templateRegistry.register(createRepoActivityTemplate({ getGitHubToken }));
+  const maxGithubId = (items: { id?: unknown }[]): number => {
+    let cursor = 0;
+    for (const item of items) {
+      if (typeof item.id === 'number' && Number.isFinite(item.id) && item.id > cursor) {
+        cursor = item.id;
+      }
+    }
+    return cursor;
+  };
+  const fetchPrTrackingBoundary = async (repoFullName: string, prNumber: number) => {
+    const { fetchPaginated } = await import('./infrastructure/github/fetch-paginated.js');
+    const [reviewComments, issueComments, reviews, ciStatus] = await Promise.all([
+      fetchPaginated(`/repos/${repoFullName}/pulls/${prNumber}/comments`, {
+        ghToken: getGitHubToken(),
+      }),
+      fetchPaginated(`/repos/${repoFullName}/issues/${prNumber}/comments`, {
+        ghToken: getGitHubToken(),
+      }),
+      fetchPaginated(`/repos/${repoFullName}/pulls/${prNumber}/reviews`, {
+        ghToken: getGitHubToken(),
+      }),
+      fetchPrCiStatus(repoFullName, prNumber, app.log, { ghToken: getGitHubToken() }),
+    ]);
+    return {
+      review: {
+        lastCommentCursor: maxGithubId([
+          ...(reviewComments as { id?: unknown }[]),
+          ...(issueComments as { id?: unknown }[]),
+        ]),
+        lastDecisionCursor: maxGithubId(reviews as { id?: unknown }[]),
+      },
+      ...(ciStatus
+        ? {
+            ci: {
+              headSha: ciStatus.headSha,
+              ...(ciStatus.aggregateBucket === 'pending'
+                ? {}
+                : {
+                    lastFingerprint: `${ciStatus.headSha}:${ciStatus.aggregateBucket}`,
+                    lastBucket: ciStatus.aggregateBucket,
+                  }),
+            },
+          }
+        : {}),
+    };
+  };
+  const fetchIssueCommentCursor = async (repoFullName: string, issueNumber: number): Promise<number> => {
+    const { fetchPaginated } = await import('./infrastructure/github/fetch-paginated.js');
+    const comments = await fetchPaginated(`/repos/${repoFullName}/issues/${issueNumber}/comments`, {
+      ghToken: getGitHubToken(),
+    });
+    return maxGithubId(comments as { id?: unknown }[]);
+  };
+
+  // F202: Plugin framework — discovery + config + resource activation
+  {
+    const { join } = await import('node:path');
+    const { PluginRegistry } = await import('./domains/plugin/PluginRegistry.js');
+    const { PluginResourceActivator, rehydrateEnabledPluginLimbs, rehydrateEnabledPluginSchedules } = await import(
+      './domains/plugin/PluginResourceActivator.js'
+    );
+    const { ScheduleFactoryRegistry } = await import('./domains/plugin/ScheduleFactoryRegistry.js');
+    const { registerPluginRoutes } = await import('./routes/plugin-routes.js');
+    const { generateCliConfigs, readCapabilitiesConfig, writeCapabilitiesConfig, withCapabilityLock } = await import(
+      './config/capabilities/capability-orchestrator.js'
+    );
+    const { resolveStartupCliConfigContext } = await import('./config/capabilities/startup-cli-config.js');
+    const { resolveActiveProjectRoot } = await import('./utils/active-project-root.js');
+
+    const monorepoRoot = findMonorepoRoot(process.cwd());
+    const pluginsDir = join(monorepoRoot, 'plugins');
+    const { loadAllPluginConfigs, resolvePluginEnv } = await import('./domains/plugin/plugin-config-store.js');
+    const pluginRegistry = new PluginRegistry(pluginsDir);
+    pluginRegistry.scan();
+    const scannedManifests = pluginRegistry.getAllManifests();
+    const loadedEnvKeys = loadAllPluginConfigs(resolveActiveProjectRoot(), scannedManifests);
+    app.log.info(
+      `[api] F202: PluginRegistry scanned ${scannedManifests.length} plugin(s), loaded ${loadedEnvKeys} config key(s)`,
+    );
+    getGitHubPluginEnv = () => {
+      const githubManifest = pluginRegistry.getManifest('github');
+      return githubManifest ? resolvePluginEnv([githubManifest]) : {};
+    };
+
+    const limbAdapterRegistry = new Map<string, (yamlPath: string) => Promise<ILimbNode>>();
+
+    // F202 Phase 2: Schedule factory registry + GitHub factories
+    const scheduleFactoryRegistry = new ScheduleFactoryRegistry();
+    const { registerGitHubScheduleFactories } = await import('./domains/plugin/github-schedule-factories.js');
+    registerGitHubScheduleFactories(scheduleFactoryRegistry);
+
+    // F202-2B: Mutable deps ref — starts with just log, populated with full GitHub deps later
+    const scheduleFactoryDeps: Record<string, unknown> = { log: app.log };
+
+    const pluginActivator = new PluginResourceActivator({
+      resolveProjectRoot: () => resolveActiveProjectRoot(),
+      pluginsDir,
+      limbRegistry,
+      readCapabilities: () => readCapabilitiesConfig(resolveActiveProjectRoot()),
+      writeCapabilities: async (config) => {
+        const root = resolveActiveProjectRoot();
+        await writeCapabilitiesConfig(root, config);
+        const { paths } = resolveStartupCliConfigContext(root);
+        await generateCliConfigs(config, paths);
+      },
+      withCapabilityLock: (fn) => withCapabilityLock(resolveActiveProjectRoot(), fn),
+      limbAdapterFactory: async (pluginId, limbYamlPath) => {
+        const factory = limbAdapterRegistry.get(pluginId);
+        if (!factory) {
+          throw new Error(
+            `No platform-specific limb adapter registered for plugin '${pluginId}'. ` +
+              `Limb resources require a concrete adapter (see Phase 2 for examples).`,
+          );
+        }
+        return factory(limbYamlPath);
+      },
+      // F202 Phase 2: schedule resource activation deps
+      scheduleFactoryRegistry,
+      taskRunner: {
+        registerPostStart: (task) => taskRunnerV2.registerPostStart(task),
+        unregister: (taskId) => taskRunnerV2.unregister(taskId),
+      },
+      // F202-2B: Mutable deps ref — populated via rehydrateGitHubSchedules after GitHub services created
+      scheduleFactoryDeps:
+        scheduleFactoryDeps as import('./domains/plugin/ScheduleFactoryRegistry.js').ScheduleFactoryDeps,
+    });
+
+    const startupCaps = await readCapabilitiesConfig(resolveActiveProjectRoot());
+    await rehydrateEnabledPluginLimbs({
+      capabilities: startupCaps,
+      pluginRegistry,
+      pluginsDir,
+      limbAdapterRegistry,
+      limbRegistry,
+      log: app.log,
+    });
+
+    // F202-2B: Schedule rehydration deferred — GitHub factories need deps created later.
+    // Closure captures F202 scope; called after GitHub services are created (before taskRunnerV2.start).
+    rehydrateGitHubSchedules = async (githubDeps: Record<string, unknown>) => {
+      // Populate the mutable deps ref (also updates pluginActivator's reference)
+      Object.assign(scheduleFactoryDeps, githubDeps);
+
+      // Migration: auto-enable GitHub schedule resources on first startup after Phase B migration
+      // Uses marker file to prevent re-enable after explicit disable (P2-1 fix)
+      const root = resolveActiveProjectRoot();
+      const githubManifest = pluginRegistry.getManifest('github');
+      if (githubManifest) {
+        const existingCaps = await readCapabilitiesConfig(root);
+        const {
+          shouldRunGitHubScheduleMigration,
+          markGitHubScheduleMigrationDone,
+          buildGitHubMigrationEntries,
+          buildGitHubMigrationEnv,
+          buildGitHubScheduleOverrideMigrations,
+          promotePendingGitHubMigrationEntries,
+        } = await import('./domains/plugin/github-schedule-factories.js');
+        const hasRepoScanRuntimeDeps = !!(githubDeps as Record<string, unknown>).reconciliationDedup;
+        const migrationEnv = buildGitHubMigrationEnv(getGitHubPluginEnv());
+        let latestCaps = existingCaps;
+        if (shouldRunGitHubScheduleMigration(root, existingCaps)) {
+          // P2-1 fix: gate repo-scan on both env vars AND runtime deps (Redis).
+          // Without Redis, factory construction fails at rehydration, leaving
+          // capabilities.json with "enabled" but no running task.
+          const entries = buildGitHubMigrationEntries(githubManifest, migrationEnv, {
+            repoScanDepsAvailable: hasRepoScanRuntimeDeps,
+          });
+          if (entries.length > 0) {
+            const overrideMigrations = buildGitHubScheduleOverrideMigrations(
+              entries,
+              globalControlStore.listOverrides(),
+            );
+            for (const override of overrideMigrations) {
+              globalControlStore.setTaskOverride(override.taskId, override.enabled, override.updatedBy);
+            }
+
+            // P2-cloud: spread existingCaps to preserve governancePack and other top-level fields
+            const updatedCaps: import('@cat-cafe/shared').CapabilitiesConfig = {
+              ...(existingCaps ?? { version: 1 as const, capabilities: [] }),
+              version: 1 as const,
+              capabilities: [...(existingCaps?.capabilities ?? []), ...entries],
+            };
+            await writeCapabilitiesConfig(root, updatedCaps);
+            latestCaps = updatedCaps;
+            markGitHubScheduleMigrationDone(root);
+            const enabledEntryCount = entries.filter((entry) => entry.enabled).length;
+            const pendingEntryCount = entries.length - enabledEntryCount;
+            app.log.info(
+              `[api] F202-2B migration: enabled ${enabledEntryCount} GitHub schedule resources ` +
+                `${pendingEntryCount > 0 ? `and left ${pendingEntryCount} pending ` : ''}` +
+                `and migrated ${overrideMigrations.length} scheduler overrides`,
+            );
+          }
+        }
+        const pendingPromotion = promotePendingGitHubMigrationEntries(
+          latestCaps ?? { version: 1 as const, capabilities: [] },
+          githubManifest,
+          migrationEnv,
+          { repoScanDepsAvailable: hasRepoScanRuntimeDeps },
+        );
+        if (pendingPromotion.changed) {
+          await writeCapabilitiesConfig(root, pendingPromotion.config);
+          app.log.info(
+            '[api] F202-2B migration: enabled pending GitHub repo-scan schedule after deps became available',
+          );
+        }
+      }
+
+      // Rehydrate all enabled schedule resources (includes any migrated GitHub entries)
+      const caps = await readCapabilitiesConfig(resolveActiveProjectRoot());
+      await rehydrateEnabledPluginSchedules({
+        capabilities: caps,
+        pluginRegistry,
+        scheduleFactoryRegistry,
+        taskRunner: taskRunnerV2,
+        scheduleFactoryDeps:
+          scheduleFactoryDeps as import('./domains/plugin/ScheduleFactoryRegistry.js').ScheduleFactoryDeps,
+        log: app.log,
+      });
+    };
+
+    registerPluginRoutes(app, { pluginRegistry, pluginActivator, limbRegistry, pluginsDir });
+  }
   // F174 D2b-1 — single notifier instance shared between callback auth preHandler
   // (posts in-context surface on 401) and the hide-similar debug endpoint
   // (lets the user 24h-suppress a (reason, tool, catId) tuple).
@@ -1471,12 +2096,20 @@ async function main(): Promise<void> {
     taskStore,
     backlogStore,
     threadStore,
+    sessionChainStore,
+    runtimeSessionStore,
+    proposalStore,
+    handoffProposalStore,
     agentRegistry,
     router,
     invocationRecordStore,
     invocationTracker,
     deliveryCursorStore,
     validateRepo,
+    validatePr,
+    validateIssue,
+    fetchPrTrackingBoundary,
+    fetchIssueCommentCursor,
     ...(workflowSopStore ? { workflowSopStore } : {}),
     queueProcessor,
     invocationQueue,
@@ -1486,6 +2119,7 @@ async function main(): Promise<void> {
     limbRegistry,
     limbPairingStore,
     guideSessionStore,
+    labelStore,
     holdBallDeps: {
       registry,
       taskRunner: taskRunnerV2,
@@ -1494,6 +2128,27 @@ async function main(): Promise<void> {
       messageStore,
       socketManager,
       threadStore,
+      onHoldBallCancelFeedback: (input) => {
+        void import('./domains/cats/services/frustration/FrustrationDetector.js')
+          .then(({ evaluate }) =>
+            evaluate(
+              {
+                signal: {
+                  type: 'user_report',
+                  toolName: 'cat_cafe_hold_ball',
+                  cancelReason: 'hold_ball_cancel',
+                },
+                threadId: input.threadId,
+                userId: input.userId,
+                catId: input.catId,
+              },
+              { frustrationIssueStore, messageStore, socketManager: socketManager ?? undefined },
+            ),
+          )
+          .catch(() => {
+            // Best-effort: hold cancellation must not be blocked by feedback issue creation.
+          });
+      },
     },
   } as Parameters<typeof callbacksRoutes>[1];
   await app.register(callbacksRoutes, callbackOpts);
@@ -1504,7 +2159,7 @@ async function main(): Promise<void> {
 
   // Authorization system — 猫猫动态权限 (Redis-backed when available)
   const authRuleStore = createAuthorizationRuleStore(redis);
-  const authPendingStore = createPendingRequestStore(redis);
+  // authPendingStore created earlier (line ~480) for F222 cancel burst detection
   const authAuditStore = createAuthorizationAuditStore(redis);
   const authManager = new AuthorizationManager({
     ruleStore: authRuleStore,
@@ -1518,6 +2173,47 @@ async function main(): Promise<void> {
     ruleStore: authRuleStore,
     auditStore: authAuditStore,
     socketManager,
+    onPermissionCancel: (input) => {
+      try {
+        // AC-G10/G11: permission cancel → episode a2 signal (production helper)
+        appendPermissionCancelToEpisode(taskOutcomeStore, {
+          toolName: input.toolName,
+          paramsSummary: input.paramsSummary,
+          cancelReason: input.cancelReason,
+          catId: input.catId,
+          threadId: input.threadId,
+        });
+
+        // AC-G13: Check for cancel burst (≥3 cancels in 1 minute)
+        checkAndAppendCancelBurst(taskOutcomeStore, cancelBurstDetector, input.threadId, Date.now());
+
+        // F222 UX-3: "取消并反馈" — immediately trigger auto-issue (no threshold)
+        if (input.withFeedback && input.userId) {
+          void import('./domains/cats/services/frustration/FrustrationDetector.js')
+            .then(({ evaluate }) =>
+              evaluate(
+                {
+                  signal: {
+                    type: 'user_report',
+                    toolName: input.toolName,
+                    cancelReason: input.cancelReason,
+                  },
+                  threadId: input.threadId,
+                  userId: input.userId,
+                  catId: input.catId,
+                },
+                { frustrationIssueStore, messageStore, socketManager: socketManager ?? undefined },
+              ),
+            )
+            .catch(() => {
+              // Best-effort: swallow import/evaluate failures so the authorization
+              // response is never blocked by frustration detection issues.
+            });
+        }
+      } catch {
+        // Best-effort: don't break authorization flow
+      }
+    },
   });
   await app.register(threadsRoutes, {
     threadStore,
@@ -1531,13 +2227,69 @@ async function main(): Promise<void> {
     backlogStore,
     ...(readStateStore ? { readStateStore } : {}),
     guideSessionStore,
+    labelStore,
+    indexBuilder: memoryServices.indexBuilder as
+      | { markThreadDirty(threadId: string): void; flushDirtyThreads?(): number | Promise<number> }
+      | undefined,
   });
+  await app.register(labelsRoutes, { labelStore, threadStore });
   await app.register(threadBranchRoutes, {
     threadStore,
     messageStore,
     socketManager,
   });
   await app.register(threadExportRoutes, { threadStore });
+  // F192: Shared callback — record proposal rejection as task outcome A2 signal.
+  // Covers both F128 (thread proposal) and F225 (session handoff proposal) rejections.
+  const onProposalReject = (input: {
+    proposalId: string;
+    proposalType: 'thread' | 'session_handoff';
+    catId: string;
+    threadId: string;
+    proposalTitle?: string;
+    rejectionReason?: string;
+  }) => {
+    try {
+      const record = buildProposalRejectSignal(input);
+      taskOutcomeStore.appendSignal(
+        (
+          taskOutcomeStore.getActiveEpisode(input.threadId) ??
+          taskOutcomeStore.createEpisode({
+            trigger: 'cat_initiated',
+            threadId: input.threadId,
+            participants: input.catId ? [input.catId] : [],
+          })
+        ).episodeId,
+        { category: 'a2', record },
+      );
+    } catch {
+      // Best-effort: eval signal recording must not break the rejection flow
+    }
+  };
+
+  await app.register(proposalRoutes, {
+    proposalStore,
+    threadStore,
+    messageStore,
+    socketManager,
+    router,
+    invocationQueue,
+    queueProcessor,
+    onProposalReject: (input) => onProposalReject({ ...input, proposalType: 'thread' }),
+  });
+  // F225: cat-initiated session handoff approve/reject (user-auth commit-point dispatcher)
+  await app.register(sessionHandoffApproveRoutes, {
+    handoffProposalStore,
+    sessionChainStore,
+    sessionSealer,
+    invocationQueue,
+    queueProcessor,
+    socketManager,
+    onProposalReject: (input) => onProposalReject({ ...input, proposalType: 'session_handoff' }),
+  });
+  // F222: Frustration auto-issue routes
+  await app.register(frustrationIssueRoutes, { frustrationIssueStore });
+
   // F142: shared connector binding store — reused by threadCatsRoutes AND connector gateway
   const { RedisConnectorThreadBindingStore } = await import(
     './infrastructure/connectors/RedisConnectorThreadBindingStore.js'
@@ -1697,11 +2449,46 @@ async function main(): Promise<void> {
   await app.register(exportRoutes, { messageStore, threadStore });
   await app.register(configRoutes);
   await app.register(configSecretsRoutes);
+  await app.register(rulesRoutes);
+  await app.register(servicesRoutes, {
+    lifecycle: {
+      autoStartEnabled: true,
+      onServiceReady: ({ service, operator, reason }) => {
+        if (service.id !== 'embedding-model' || !memoryServices.indexBuilder) return;
+        appendServiceLog(service.id, `[start] embedding service ready (${reason}); scheduling evidence rebuild\n`);
+        app.log.info(
+          { serviceId: service.id, operator, reason },
+          '[api] F102: embedding service ready; scheduling evidence rebuild',
+        );
+        const startedAt = Date.now();
+        void memoryServices.indexBuilder
+          .rebuild({ force: true })
+          .then((result) => {
+            const elapsedMs = Date.now() - startedAt;
+            appendServiceLog(
+              service.id,
+              `[start] evidence rebuild completed: ${result.docsIndexed} indexed, ${result.docsSkipped} skipped (${elapsedMs}ms)\n`,
+            );
+            app.log.info(
+              `[api] F102: embedding service catch-up rebuild completed - ${result.docsIndexed} indexed, ${result.docsSkipped} skipped (${elapsedMs}ms)`,
+            );
+          })
+          .catch((error) => {
+            appendServiceLog(service.id, `[start] evidence rebuild failed: ${String(error)}\n`);
+            app.log.warn(
+              { err: error, serviceId: service.id },
+              '[api] F102: embedding service catch-up rebuild failed',
+            );
+          });
+      },
+    },
+  });
   await app.register(featureDocDetailRoutes);
   await app.register(accountsRoutes);
   await app.register(claudeRescueRoutes);
   await app.register(auditRoutes, { threadStore });
   await app.register(capabilitiesRoutes);
+  await app.register(audioProxyRoutes);
 
   {
     const { createAdapterRegistry } = await import('./marketplace/index.js');
@@ -1738,10 +2525,7 @@ async function main(): Promise<void> {
     },
   });
   await app.register(avatarsRoutes);
-  await app.register(refAudioUploadRoutes);
   await app.register(skillsRoutes);
-  await app.register(servicesRoutes);
-  await app.register(rulesRoutes);
   await app.register(memoryRoutes, { memoryStore, threadStore });
 
   // Session chain (F24)
@@ -1751,8 +2535,10 @@ async function main(): Promise<void> {
     messageStore,
     transcriptReader,
     sessionSealer,
+    runtimeSessionStore,
   });
   await app.register(sessionTranscriptRoutes, { sessionChainStore, threadStore, transcriptReader });
+  await app.register(externalRuntimeSessionsRoutes, { sessionChainStore, runtimeSessionStore, threadStore });
   const hookToken = process.env.CAT_CAFE_HOOK_TOKEN || '';
   await app.register(sessionHooksRoutes, {
     sessionChainStore,
@@ -1778,11 +2564,38 @@ async function main(): Promise<void> {
   const { voteRoutes } = await import('./routes/votes.js');
   await app.register(voteRoutes, { threadStore, socketManager, messageStore });
 
-  // Evidence search (SQLite) + reindex endpoint (D-11) + F-4 federated search
+  // F188 Phase A: rebuild job tracker
+  const { RebuildJobTracker } = await import('./domains/memory/RebuildJobTracker.js');
+  const rebuildJobTracker = new RebuildJobTracker();
+
+  // Evidence search (SQLite) + reindex endpoint (D-11) + F-4 federated search + F188 rebuild
   await app.register(evidenceRoutes, {
     evidenceStore: memoryServices.evidenceStore,
+    embeddingService: memoryServices.embeddingService,
     indexBuilder: memoryServices.indexBuilder,
     knowledgeResolver: memoryServices.knowledgeResolver,
+    rebuildJobTracker,
+  });
+  // F227: Event Memory query route (GET /api/memory/events)
+  await app.register(eventsRoutes, {
+    eventMemoryStore: memoryServices.eventMemoryStore,
+    socketEmit: (event, data, room) => {
+      socketManager?.broadcastToRoom(room, event, data);
+    },
+    // F227 (砚砚 R2 P1): MCP callback auth for the cat_cafe_teleport callbackPost path.
+    callbackRegistry: registry,
+    agentKeyRegistry,
+    // F227 Task 7: corpus sources for the historical backfill route.
+    threadStore,
+    messageStore,
+  });
+  await app.register(perspectiveRoutes, {
+    repoRoot,
+    evidenceStore: memoryServices.evidenceStore,
+    knowledgeResolver: memoryServices.knowledgeResolver,
+    ...(memoryServices.catalog && memoryServices.collectionStores
+      ? { graphCatalog: memoryServices.catalog, graphStores: memoryServices.collectionStores }
+      : {}),
   });
 
   // F163: Knowledge promotion admin API (localhost-only)
@@ -1796,6 +2609,9 @@ async function main(): Promise<void> {
   await app.register(f163AuditRoutes, {
     evidenceStore: memoryServices.evidenceStore as unknown as Parameters<typeof f163AuditRoutes>[1]['evidenceStore'],
     knowledgeResolver: memoryServices.knowledgeResolver,
+    markerQueue: memoryServices.markerQueue,
+    repoRoot,
+    docsRoot: process.env.DOCS_ROOT ?? resolve(repoRoot, 'docs'),
   });
 
   // F152 Phase C: Distillation routes (global lesson reflow)
@@ -1835,6 +2651,7 @@ async function main(): Promise<void> {
     db: memoryServices.store.getDb(),
     materializationService: memoryServices.materializationService,
     catalog: memoryServices.catalog,
+    collectionStores: memoryServices.collectionStores,
   });
 
   // F186: Library catalog API (Phase D: includes external collections + dataDir for register endpoint)
@@ -1844,10 +2661,21 @@ async function main(): Promise<void> {
     if (!libraryStores.has('project:cat-cafe')) libraryStores.set('project:cat-cafe', memoryServices.store);
     if (memoryServices.globalStore && !libraryStores.has('global:methods'))
       libraryStores.set('global:methods', memoryServices.globalStore);
+    // Use the resolvedEmbedMode computed above (service.enabled overrides EMBED_MODE=off).
+    const libraryEmbedMode: 'shadow' | 'on' | undefined =
+      resolvedEmbedMode === 'shadow' || resolvedEmbedMode === 'on' ? resolvedEmbedMode : undefined;
     await app.register(libraryRoutes, {
       catalog: memoryServices.catalog,
       stores: libraryStores,
       dataDir: memoryServices.dataDir,
+      managedVaultBase: memoryServices.dataDir,
+      embeddingService: memoryServices.embeddingService,
+      embedMode: libraryEmbedMode,
+      // F188 Phase F AC-F9: pass redis for tool-usage-metrics endpoint (砚砚 review P1-2)
+      ...(redisClient ? { redis: redisClient } : {}),
+      // AC-H1 P1 R3: runtime exclude updates for parent IndexBuilder
+      indexBuilder: memoryServices.indexBuilder as import('./domains/memory/IndexBuilder.js').IndexBuilder | undefined,
+      parentRoot: process.env.DOCS_ROOT ?? resolve(repoRoot, 'docs'),
     });
   }
 
@@ -1878,10 +2706,26 @@ async function main(): Promise<void> {
 
   // Commands route needs opus service for task extraction.
   // Lazy-init: empty catalog (first-run) has no opus entry yet — defer until first use.
-  let _opusService: ClaudeAgentService | undefined;
+  // 砚砚 Step-3 P2 (2026-05-14): route through canary factory so this path
+  // also honors CAT_CAFE_CLAUDE_CARRIER=bg_daemon when canary flips.
+  // 砚砚 Step-3 P1 re-review: invoke() must directly return AsyncIterable
+  // (not Promise<AsyncIterable>), otherwise `for await (... of svc.invoke())`
+  // crashes at runtime. Use sync generator wrapper that defers async setup
+  // to first yield.
+  let _opusService: AgentService | undefined;
   const opusService: AgentService = {
-    invoke(...args: Parameters<AgentService['invoke']>) {
-      return (_opusService ??= new ClaudeAgentService()).invoke(...args);
+    invoke(prompt, options) {
+      // Sync return of AsyncGenerator — IS AsyncIterable. Lazy init happens
+      // before first yield, then delegates.
+      return (async function* opusLazyInvoke() {
+        if (!_opusService) {
+          const { createClaudeAgentServiceForCanary } = await import(
+            './domains/cats/services/agents/providers/claude-carrier-factory.js'
+          );
+          _opusService = createClaudeAgentServiceForCanary('opus' as CatId);
+        }
+        yield* _opusService.invoke(prompt, options);
+      })();
     },
   };
   await app.register(commandsRoutes, {
@@ -1892,7 +2736,9 @@ async function main(): Promise<void> {
     threadStore,
     registry: commandRegistry,
   });
-  await app.register(signalsRoutes);
+  await app.register(signalsRoutes, {
+    getGitHubApiToken: () => getGitHubEnvValue('GITHUB_MCP_PAT'),
+  });
   await app.register(signalStudyRoutes, { threadStore });
   await app.register(signalCollectionRoutes);
   await app.register(signalPodcastRoutes, {
@@ -1906,44 +2752,68 @@ async function main(): Promise<void> {
   // Serve uploaded files (images)
   const uploadDir = getDefaultUploadDir(process.env.UPLOAD_DIR);
   await app.register(uploadsRoutes, { uploadDir });
+  await app.register(refAudioUploadRoutes);
 
   // F088: Serve downloaded connector media files
   const connectorMediaDir = process.env.CONNECTOR_MEDIA_DIR ?? './data/connector-media';
   await app.register(connectorMediaRoutes, { mediaDir: connectorMediaDir });
 
   // F34: TTS Provider (mlx-audio → Python TTS server)
+  // Drop the eager baseUrl injection so the provider resolves the TTS
+  // endpoint via service manifest + persisted config on every request.
+  // /reconfigure-driven port changes therefore apply without restarting
+  // the API (codex P1 2026-05-26). Explicit TTS_URL env is still honored
+  // because resolveServiceEndpoint reads endpointEnvVars first.
   const ttsRegistry = new TtsRegistry();
   ttsRegistry.register(new MlxAudioTtsProvider());
   const ttsCacheDir = process.env.TTS_CACHE_DIR ?? './data/tts-cache';
-  await app.register(ttsRoutes, { ttsRegistry, cacheDir: ttsCacheDir, messageStore });
+  await app.register(ttsRoutes, { ttsRegistry, cacheDir: ttsCacheDir });
   initVoiceBlockSynthesizer(ttsRegistry, ttsCacheDir);
   initStreamingTtsRegistry(ttsRegistry);
   startTtsCacheCleaner(ttsCacheDir);
 
   // C1+C2: Web Push Notifications (optional — requires VAPID keys)
-  const vapidPublicKey = process.env.VAPID_PUBLIC_KEY ?? '';
-  const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY ?? '';
-  const vapidSubjectRaw = process.env.VAPID_SUBJECT ?? 'mailto:cat-cafe@localhost';
-  const vapidSubject =
-    vapidSubjectRaw.includes('@') && !vapidSubjectRaw.startsWith('mailto:') && !vapidSubjectRaw.startsWith('http')
-      ? `mailto:${vapidSubjectRaw}`
-      : vapidSubjectRaw;
   const pushSubscriptionStore = createPushSubscriptionStore(redis);
-  const pushService =
-    vapidPublicKey && vapidPrivateKey
-      ? initPushNotificationService({
-          subscriptionStore: pushSubscriptionStore,
-          vapidPublicKey,
-          vapidPrivateKey,
-          vapidSubject,
-        })
-      : null;
+  const resolveVapidPublicKey = (): string => process.env.VAPID_PUBLIC_KEY ?? '';
+  const configurePushServiceFromEnv = () => {
+    const currentVapidPublicKey = process.env.VAPID_PUBLIC_KEY ?? '';
+    const currentVapidPrivateKey = process.env.VAPID_PRIVATE_KEY ?? '';
+    const currentVapidSubject = process.env.VAPID_SUBJECT ?? 'mailto:cat-cafe@localhost';
+    if (!currentVapidPublicKey || !currentVapidPrivateKey) {
+      resetPushNotificationService();
+      return null;
+    }
+    return initPushNotificationService({
+      subscriptionStore: pushSubscriptionStore,
+      vapidPublicKey: currentVapidPublicKey,
+      vapidPrivateKey: currentVapidPrivateKey,
+      vapidSubject: currentVapidSubject,
+    });
+  };
+  const pushService = configurePushServiceFromEnv();
   if (pushService) {
     app.log.info('[api] Web Push enabled (VAPID configured)');
   } else {
     app.log.info('[api] Web Push disabled (VAPID keys not set)');
   }
-  await app.register(pushRoutes, { pushSubscriptionStore, pushService, vapidPublicKey });
+  let pushConfigUnsub: (() => void) | null = configEventBus.onKeysChange(
+    ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'],
+    () => {
+      const nextPushService = configurePushServiceFromEnv();
+      if (nextPushService) {
+        app.log.info('[api] Web Push hot-reloaded (VAPID configured)');
+      } else {
+        app.log.info('[api] Web Push hot-reloaded disabled (VAPID keys not set)');
+      }
+    },
+  );
+  await app.register(pushRoutes, {
+    pushSubscriptionStore,
+    pushService,
+    vapidPublicKey: resolveVapidPublicKey(),
+    getPushService: getPushNotificationService,
+    getVapidPublicKey: resolveVapidPublicKey,
+  });
 
   // F-BLOAT: Progressive disclosure docs endpoints (no auth, static content)
   await app.register(registerCallbackDocsRoutes);
@@ -2011,6 +2881,14 @@ async function main(): Promise<void> {
     f101RecoveryPlayer?.stopAllLoops();
   });
 
+  let runtimeSessionSealReaperTimer: ReturnType<typeof setInterval> | null = null;
+  app.addHook('onClose', async () => {
+    if (runtimeSessionSealReaperTimer) {
+      clearInterval(runtimeSessionSealReaperTimer);
+      runtimeSessionSealReaperTimer = null;
+    }
+  });
+
   // #603: Preload governance overlay (.local / .local-override)
   // Start listening
   let address: string;
@@ -2024,11 +2902,7 @@ async function main(): Promise<void> {
   }
   app.log.info(`[api] Server running on ${address}`);
   app.log.info(`[ws] WebSocket server ready`);
-
-  // Auto-start enabled services (fire-and-forget)
-  import('./domains/services/service-autostart.js')
-    .then((m) => m.autoStartEnabledServices(app.log))
-    .catch((err) => app.log.warn('[services] auto-start init failed: %s', err));
+  memoryServices.indexBuilder?.startPassageEmbeddingWarmup();
 
   // F156: Friendly hint for private network access
   if (HOST === '0.0.0.0' && process.env.CORS_ALLOW_PRIVATE_NETWORK !== 'true') {
@@ -2070,6 +2944,40 @@ async function main(): Promise<void> {
     app.log.warn(`[api] Orphan Chrome cleanup failed (best-effort): ${String(err)}`);
   }
 
+  const RUNTIME_SESSION_SEAL_REAPER_INTERVAL_MS = Number.parseInt(
+    process.env.CAT_CAFE_RUNTIME_SESSION_SEAL_REAPER_INTERVAL_MS ?? '30000',
+    10,
+  );
+  try {
+    const startupRuntimeReaper = await runtimeSessionSealReaper.runOnce();
+    if (
+      startupRuntimeReaper.sealed > 0 ||
+      startupRuntimeReaper.pending > 0 ||
+      startupRuntimeReaper.skippedMaxRetries > 0 ||
+      startupRuntimeReaper.failed > 0
+    ) {
+      app.log.info({ result: startupRuntimeReaper }, '[api] F211 runtime session seal reaper startup sweep completed');
+    }
+  } catch (err) {
+    app.log.warn(`[api] F211 runtime session seal reaper startup sweep failed (best-effort): ${String(err)}`);
+  }
+  runtimeSessionSealReaperTimer = startSerializedRuntimeSessionSealReaperInterval({
+    runtimeSessionSealReaper,
+    intervalMs:
+      Number.isSafeInteger(RUNTIME_SESSION_SEAL_REAPER_INTERVAL_MS) && RUNTIME_SESSION_SEAL_REAPER_INTERVAL_MS > 0
+        ? RUNTIME_SESSION_SEAL_REAPER_INTERVAL_MS
+        : 30_000,
+    onResult: (result) => {
+      if (result.sealed > 0 || result.failed > 0) {
+        app.log.info({ result }, '[api] F211 runtime session seal reaper sweep completed');
+      }
+    },
+    onError: () => {
+      // best-effort periodic reaper
+    },
+  });
+  runtimeSessionSealReaperTimer.unref();
+
   // F118 Hardening: Global session reaper — startup sweep + periodic scan.
   // Reconciles sessions stuck in 'sealing' state that the per-invoke lazy
   // reaper would never visit (e.g., threads with no subsequent invocations).
@@ -2108,10 +3016,8 @@ async function main(): Promise<void> {
   // Best-effort: regenerate CLI configs at startup so runtime-derived env
   // (Gemini placeholders, Antigravity sidecar key files) reaches CLI config.
   try {
-    const { projectRoot, paths } = resolveStartupCliConfigContext(process.cwd());
-    const capConfig = await readCapabilitiesConfig(projectRoot);
-    if (capConfig) {
-      await generateCliConfigs(capConfig, paths);
+    const result = await regenerateStartupCliConfigs(process.cwd());
+    if (result.generated) {
       app.log.info('[api] CLI configs regenerated at startup');
     }
   } catch (err) {
@@ -2148,6 +3054,7 @@ async function main(): Promise<void> {
     invocationTracker,
     invocationQueue,
     queueProcessor,
+    messageStore,
     threadMetaLookup: async (threadId) => {
       const thread = await threadStore.get(threadId);
       if (!thread) return undefined;
@@ -2163,33 +3070,68 @@ async function main(): Promise<void> {
   // F140: Feedback filter (Rule A self-authored only post-E.2 cutover)
   const { createGitHubFeedbackFilter } = await import('./infrastructure/email/github-feedback-filter.js');
   const { createSetupNoiseFilter } = await import('./infrastructure/email/setup-noise-filter.js');
-  let selfGitHubLogin: string | undefined;
-  try {
+  const { createGitHubSelfLoginResolver } = await import('./infrastructure/github/self-login-resolver.js');
+  const resolveGitHubSelfLogin = async (): Promise<string | undefined> => {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
-    const { stdout } = await promisify(execFile)('gh', ['api', '/user', '--jq', '.login'], { timeout: 10_000 });
-    selfGitHubLogin = stdout.trim() || undefined;
-    app.log.info(`[api] F140: feedback filter self=${selfGitHubLogin}`);
-  } catch {
-    app.log.warn('[api] F140: could not resolve GitHub login — self-filter disabled');
-  }
-  const feedbackFilter = createGitHubFeedbackFilter({ selfGitHubLogin });
+    const execFileAsync = promisify(execFile);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { stdout } = await execFileAsync('gh', ['api', '/user', '--jq', '.login'], getGitHubExecOptions(10_000));
+        const login = stdout.trim();
+        if (login) return login;
+      } catch {
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 3_000));
+      }
+    }
+    return undefined;
+  };
+  const selfLoginResolver = createGitHubSelfLoginResolver({
+    getConfiguredLogin: () => getGitHubEnvValue('GITHUB_SELF_LOGIN'),
+    getTokenFingerprint: () => getGitHubToken(),
+    resolveLogin: resolveGitHubSelfLogin,
+  });
+  let loggedSelfGitHubLogin: string | undefined | null = null;
+  const logGitHubSelfLoginState = (login: string | undefined): void => {
+    if (login) {
+      if (loggedSelfGitHubLogin !== login) {
+        app.log.info(`[api] F140: feedback filter self=${login}`);
+      }
+      loggedSelfGitHubLogin = login;
+      return;
+    }
+    if (loggedSelfGitHubLogin !== undefined) {
+      app.log.error('[api] F140: self-filter DISABLED — set GITHUB_SELF_LOGIN env as fallback');
+    }
+    loggedSelfGitHubLogin = undefined;
+  };
+  const refreshGitHubSelfLogin = async (): Promise<string | undefined> => {
+    const login = await selfLoginResolver.refreshIfNeeded();
+    logGitHubSelfLoginState(login);
+    return login;
+  };
+  await refreshGitHubSelfLogin();
+  const feedbackFilter = createGitHubFeedbackFilter({ getSelfGitHubLogin: () => selfLoginResolver.getCurrent() });
 
   // F140 Phase E.2 cutover: setup-noise bot allowlist env name切换
   // GITHUB_SETUP_NOISE_BOT_LOGINS (new, post-E.2 semantics) takes precedence;
+  // P2-3 fix: pass a thunk so the filter reflects runtime config changes
+  // (e.g. GITHUB_SETUP_NOISE_BOT_LOGINS updated via plugin config panel)
+  // without requiring a server restart.
   // GITHUB_AUTHORITATIVE_REVIEW_LOGINS (legacy E.1 借壳) falls back for
   // backward compat — will be removed in a follow-up release.
-  const setupNoiseBotLogins = (
-    process.env.GITHUB_SETUP_NOISE_BOT_LOGINS ||
-    process.env.GITHUB_AUTHORITATIVE_REVIEW_LOGINS ||
-    'chatgpt-codex-connector[bot]'
-  )
-    .split(',')
-    .map((s: string) => s.trim())
-    .filter(Boolean);
-  app.log.info(`[api] F140: setup-noise bot logins=${setupNoiseBotLogins.join(', ')}`);
+  const getSetupNoiseBotLogins = (): readonly string[] =>
+    (
+      getGitHubEnvValue('GITHUB_SETUP_NOISE_BOT_LOGINS') ||
+      process.env.GITHUB_AUTHORITATIVE_REVIEW_LOGINS ||
+      'chatgpt-codex-connector[bot]'
+    )
+      .split(',')
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+  app.log.info(`[api] F140: setup-noise bot logins=${getSetupNoiseBotLogins().join(', ')}`);
 
-  const setupNoiseFilter = createSetupNoiseFilter(setupNoiseBotLogins);
+  const setupNoiseFilter = createSetupNoiseFilter(getSetupNoiseBotLogins);
 
   // F140 Phase E.3 cleanup (2026-04-25): email/IMAP watcher source files removed.
   // Polling (ReviewFeedbackTaskSpec) is the sole truth source for review feedback.
@@ -2197,12 +3139,24 @@ async function main(): Promise<void> {
   // F139 Phase 4b: late-bind invokeTrigger so templates can wake cats
   taskRunnerV2.setInvokeTrigger(invokeTrigger);
 
-  // F139: Register PR-related TaskSpecs into unified scheduler
-  {
-    const { createCiCdCheckTaskSpec } = await import('./infrastructure/email/CiCdCheckTaskSpec.js');
-    const { createConflictCheckTaskSpec } = await import('./infrastructure/email/ConflictCheckTaskSpec.js');
-    const { createReviewFeedbackTaskSpec } = await import('./infrastructure/email/ReviewFeedbackTaskSpec.js');
+  // F192 OQ-21: late-bind invokeTrigger for manual eval trigger endpoint.
+  // eval-hub routes registered at line ~1543 (before invokeTrigger existed);
+  // the holder pattern lets `POST /api/eval-domains/:domainId/trigger-now`
+  // resolve the live trigger at request time. Without this bind, the route
+  // returns 503 instead of waking the eval cat.
+  invokeTriggerHolder.current = invokeTrigger;
 
+  // F167 Phase M: late-bind busy checker for pre-fire defer (hold_ball activation).
+  // Same thread-busy signal as delivery-batch-done (messages.ts:1822 /
+  // ConnectorInvokeTrigger.ts:692): active invocation OR queued/processing slot.
+  // When a hold wake fires while the cat is mid-work, the scheduler re-arms the
+  // once-task instead of delivering a stale wake ("history replay").
+  taskRunnerV2.setBusyChecker((threadId) => invocationTracker.has(threadId) || queueProcessor.isThreadBusy(threadId));
+
+  // F202-2B: GitHub schedule deps + rehydration (replaces hardcoded task registrations)
+  // Router/service creation stays here — same deps available as before.
+  // Task registration moved to plugin framework via rehydrateGitHubSchedules closure.
+  {
     const deliveryDeps = { messageStore, socketManager };
 
     const cicdRouter = new CiCdRouter({
@@ -2220,22 +3174,51 @@ async function main(): Promise<void> {
           threadId,
         );
       },
+      // F192 Phase G: wire PR merge/close events to task-outcome episodes
+      onPrLifecycle: (event) => {
+        try {
+          const ep =
+            taskOutcomeStore.getActiveEpisode(event.threadId) ??
+            taskOutcomeStore.createEpisode({
+              trigger: 'cat_initiated',
+              threadId: event.threadId,
+              participants: [],
+            });
+          taskOutcomeStore.appendSignal(ep.episodeId, {
+            category: 'a1',
+            record: {
+              type: event.type,
+              ref: event.ref,
+              outcome: event.outcome,
+              timestamp: new Date().toISOString(),
+            },
+          });
+          // Auto-complete on merge+success (same logic as handleA1WorldTruth)
+          if (ep.terminalState === 'in_progress' && event.type === 'merge' && event.outcome === 'success') {
+            taskOutcomeStore.updateTerminalState(ep.episodeId, 'completed');
+          }
+        } catch {
+          // Best-effort: don't break CI/CD routing
+        }
+      },
     });
 
-    // F140: ConflictRouter (state-transition dedup + KD-9 fingerprint reset)
     const conflictRouter = new ConflictRouter({
       taskStore,
       deliveryDeps,
       log: app.log,
     });
 
-    // F140: ReviewFeedbackRouter (three-section aggregated messages)
     const reviewFeedbackRouter = new ReviewFeedbackRouter({
       deliveryDeps,
       log: app.log,
     });
 
-    taskRunnerV2.register(createCiCdCheckTaskSpec({ taskStore, cicdRouter, invokeTrigger, log: app.log }));
+    // F202 Phase 2D: Issue comment tracking
+    const issueCommentRouter = new IssueCommentRouter({
+      deliveryDeps,
+      log: app.log,
+    });
 
     // F140: conflict-check with ConflictRouter + urgent trigger
     const checkMergeable = async (repo: string, pr: number) => {
@@ -2245,108 +3228,128 @@ async function main(): Promise<void> {
       const { stdout } = await execFileAsync(
         'gh',
         ['pr', 'view', String(pr), '-R', repo, '--json', 'mergeable,headRefOid'],
-        { timeout: 15_000 },
+        getGitHubExecOptions(15_000),
       );
       const data = JSON.parse(stdout);
-      // Use `mergeable` (CONFLICTING/MERGEABLE/UNKNOWN) — not `mergeStateStatus` (DIRTY/CLEAN/...)
-      // ConflictRouter checks for exact string 'CONFLICTING'
       return { mergeState: data.mergeable ?? 'UNKNOWN', headSha: data.headRefOid ?? '' };
     };
 
     const { ConflictAutoExecutor } = await import('./infrastructure/email/ConflictAutoExecutor.js');
     const autoExecutor = new ConflictAutoExecutor({ log: app.log });
 
-    taskRunnerV2.register(
-      createConflictCheckTaskSpec({
-        taskStore,
-        checkMergeable,
-        conflictRouter,
-        invokeTrigger,
-        autoExecutor,
-        log: app.log,
-      }),
-    );
+    const { fetchPaginated: fetchPaginatedFn } = await import('./infrastructure/github/fetch-paginated.js');
+    const fetchPaginated = (endpoint: string, sinceId?: number) =>
+      fetchPaginatedFn(endpoint, { sinceId, ghToken: getGitHubToken() });
 
-    // F140: review-feedback with ReviewFeedbackRouter (KD-11 replaces review-comments)
-    // feedbackFilter created above — Rule A only post-E.2 cutover (self-authored skip)
-
-    const fetchPaginated = async (endpoint: string) => {
+    const fetchPrMetadata = async (repo: string, pr: number) => {
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const execFileAsync = promisify(execFile);
-      const { stdout } = await execFileAsync('gh', ['api', endpoint, '--paginate', '--jq', '.[]'], {
-        timeout: 30_000,
-      });
-      if (!stdout.trim()) return [];
-      return stdout
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
+      try {
+        const { stdout } = await execFileAsync(
+          'gh',
+          ['pr', 'view', String(pr), '-R', repo, '--json', 'headRefOid,state,mergedAt'],
+          getGitHubExecOptions(15_000),
+        );
+        const data = JSON.parse(stdout) as { headRefOid?: string; state?: string; mergedAt?: string | null };
+        const prState =
+          data.mergedAt || data.state === 'MERGED' ? 'merged' : data.state === 'CLOSED' ? 'closed' : 'open';
+        return { headSha: data.headRefOid ?? '', prState };
+      } catch (error) {
+        app.log.warn(
+          { repo, pr, err: error },
+          '[api] review-feedback metadata lookup failed; continuing without PR metadata',
+        );
+        return null;
+      }
     };
 
-    taskRunnerV2.register(
-      createReviewFeedbackTaskSpec({
-        taskStore,
-        fetchComments: async (repo, pr) => {
-          const [reviewComments, issueComments] = await Promise.all([
-            fetchPaginated(`/repos/${repo}/pulls/${pr}/comments`),
-            fetchPaginated(`/repos/${repo}/issues/${pr}/comments`),
-          ]);
-          return [...reviewComments, ...issueComments].map(
-            (c: {
-              id: number;
-              body: string;
-              created_at: string;
-              user?: { login: string };
-              path?: string;
-              line?: number;
-              pull_request_review_id?: number;
-            }) => ({
-              id: c.id,
-              author: c.user?.login ?? 'unknown',
-              body: c.body,
-              createdAt: c.created_at,
-              commentType: c.pull_request_review_id ? ('inline' as const) : ('conversation' as const),
-              ...(c.path ? { filePath: c.path } : {}),
-              ...(c.line ? { line: c.line } : {}),
-            }),
-          );
-        },
-        fetchReviews: async (repo, pr) => {
-          const reviews = await fetchPaginated(`/repos/${repo}/pulls/${pr}/reviews`);
-          return reviews.map(
-            (r: { id: number; user?: { login: string }; state: string; body: string; submitted_at: string }) => ({
-              id: r.id,
-              author: r.user?.login ?? 'unknown',
-              state: r.state as 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED' | 'COMMENTED',
-              body: r.body,
-              submittedAt: r.submitted_at,
-            }),
-          );
-        },
-        reviewFeedbackRouter,
-        invokeTrigger,
-        log: app.log,
-        // F140 Phase E.2 cutover: Rule A only (self-authored skip). Authoritative bot
-        // review feedback is now delivered through this polling channel — Rule B dropped.
-        isEchoComment: (c) => feedbackFilter.shouldSkipComment(c),
-        isEchoReview: (r) => feedbackFilter.shouldSkipReview(r),
-        // F140 Phase E.1: bot setup-only conversation noise (polling-side)
-        isNoiseComment: setupNoiseFilter,
-      }),
-    );
-    app.log.info('[api] F139/F140: cicd-check, conflict-check, review-feedback specs registered');
-  }
+    const fetchComments = async (repo: string, pr: number, sinceId?: number) => {
+      await refreshGitHubSelfLogin();
+      const [reviewComments, issueComments] = await Promise.all([
+        fetchPaginated(`/repos/${repo}/pulls/${pr}/comments`, sinceId),
+        fetchPaginated(`/repos/${repo}/issues/${pr}/comments`, sinceId),
+      ]);
+      return [...reviewComments, ...issueComments].map(
+        (c: {
+          id: number;
+          body: string;
+          created_at: string;
+          user?: { login: string };
+          commit_id?: string;
+          path?: string;
+          line?: number;
+          pull_request_review_id?: number;
+        }) => ({
+          id: c.id,
+          author: c.user?.login ?? 'unknown',
+          body: c.body,
+          createdAt: c.created_at,
+          ...(c.commit_id ? { commitId: c.commit_id } : {}),
+          commentType: c.pull_request_review_id ? ('inline' as const) : ('conversation' as const),
+          ...(c.path ? { filePath: c.path } : {}),
+          ...(c.line ? { line: c.line } : {}),
+        }),
+      );
+    };
 
-  // F141 Phase B: Reconciliation scan —补偿 webhook 漏掉的 open PRs/Issues
-  {
-    const ghRepoAllowlist = process.env.GITHUB_REPO_ALLOWLIST;
-    const ghInboxCatId = process.env.GITHUB_REPO_INBOX_CAT_ID;
+    const fetchReviews = async (repo: string, pr: number, sinceId?: number) => {
+      await refreshGitHubSelfLogin();
+      const reviews = await fetchPaginated(`/repos/${repo}/pulls/${pr}/reviews`, sinceId);
+      return reviews.map(
+        (r: {
+          id: number;
+          user?: { login: string };
+          state: string;
+          body: string;
+          submitted_at: string;
+          commit_id?: string;
+        }) => ({
+          id: r.id,
+          author: r.user?.login ?? 'unknown',
+          state: r.state as 'APPROVED' | 'CHANGES_REQUESTED' | 'DISMISSED' | 'COMMENTED',
+          body: r.body,
+          submittedAt: r.submitted_at,
+          ...(r.commit_id ? { commitId: r.commit_id } : {}),
+        }),
+      );
+    };
+
+    // F202 Phase 2D: Issue comment fetchers (parallel to PR comment fetchers)
+    const fetchIssueComments = async (repoFullName: string, issueNumber: number, sinceId?: number) => {
+      await refreshGitHubSelfLogin();
+      const comments = await fetchPaginated(`/repos/${repoFullName}/issues/${issueNumber}/comments`, sinceId);
+      return comments.map((c: { id: number; body: string; created_at: string; user?: { login: string } }) => ({
+        id: c.id,
+        author: c.user?.login ?? 'unknown',
+        body: c.body,
+        createdAt: c.created_at,
+      }));
+    };
+
+    const fetchIssueState = async (repoFullName: string, issueNumber: number): Promise<'open' | 'closed'> => {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+      try {
+        const { stdout } = await execFileAsync(
+          'gh',
+          ['api', `/repos/${repoFullName}/issues/${issueNumber}`, '--jq', '.state'],
+          getGitHubExecOptions(15_000),
+        );
+        return stdout.trim() === 'closed' ? 'closed' : 'open';
+      } catch (error) {
+        app.log.warn({ repoFullName, issueNumber, err: error }, '[api] issue state lookup failed; assuming open');
+        return 'open';
+      }
+    };
+
+    // Repo-scan deps (conditional on env vars + redis)
+    const ghRepoAllowlist = getGitHubEnvValue('GITHUB_REPO_ALLOWLIST');
+    const ghInboxCatId = getGitHubEnvValue('GITHUB_REPO_INBOX_CAT_ID');
+    let repoScanDeps: Record<string, unknown> = {};
 
     if (ghRepoAllowlist && ghInboxCatId && redisClient) {
-      const { createRepoScanTaskSpec } = await import(
-        './infrastructure/connectors/github-repo-event/RepoScanTaskSpec.js'
-      );
       const { ReconciliationDedup } = await import(
         './infrastructure/connectors/github-repo-event/ReconciliationDedup.js'
       );
@@ -2359,13 +3362,11 @@ async function main(): Promise<void> {
         redisClient as import('./infrastructure/connectors/github-repo-event/ReconciliationDedup.js').ReconciliationRedisLike,
       );
 
-      const allowlist = ghRepoAllowlist.split(',').map((r: string) => r.trim());
-
       const fetchGhApi = async (args: string[]): Promise<string> => {
         const { execFile } = await import('node:child_process');
         const { promisify } = await import('node:util');
         const execFileAsync = promisify(execFile);
-        const { stdout } = await execFileAsync('gh', args, { timeout: 30_000 });
+        const { stdout } = await execFileAsync('gh', args, getGitHubExecOptions(30_000));
         return stdout;
       };
 
@@ -2402,22 +3403,44 @@ async function main(): Promise<void> {
       const { getOwnerUserId } = await import('./config/cat-config-loader.js');
       const effectiveUserId = getOwnerUserId();
 
-      taskRunnerV2.register(
-        createRepoScanTaskSpec({
-          repoAllowlist: allowlist,
-          inboxCatId: ghInboxCatId,
-          defaultUserId: effectiveUserId,
-          reconciliationDedup,
-          bindingStore: new RedisConnectorThreadBindingStore(redisClient),
-          deliverFn: deliverConnectorMessage,
-          deliveryDeps: { messageStore, socketManager },
-          invokeTrigger,
-          fetchOpenPRs,
-          fetchOpenIssues,
-          log: app.log,
-        }),
-      );
-      app.log.info('[api] F141 Phase B: repo-scan spec registered');
+      repoScanDeps = {
+        repoAllowlist: ghRepoAllowlist.split(',').map((r: string) => r.trim()),
+        inboxCatId: ghInboxCatId,
+        defaultUserId: effectiveUserId,
+        reconciliationDedup,
+        bindingStore: new RedisConnectorThreadBindingStore(redisClient),
+        deliverFn: deliverConnectorMessage,
+        deliveryDeps: { messageStore, socketManager },
+        fetchOpenPRs,
+        fetchOpenIssues,
+      };
+    }
+
+    // F202-2B: Populate factory deps + rehydrate schedule resources via plugin framework
+    if (rehydrateGitHubSchedules) {
+      await rehydrateGitHubSchedules({
+        taskStore,
+        cicdRouter,
+        fetchPrStatus: (repo: string, pr: number) => fetchPrCiStatus(repo, pr, app.log, { ghToken: getGitHubToken() }),
+        conflictRouter,
+        reviewFeedbackRouter,
+        invokeTrigger,
+        checkMergeable,
+        autoExecutor,
+        fetchPrMetadata,
+        fetchComments,
+        fetchReviews,
+        isEchoComment: (c: { author: string }) => feedbackFilter.shouldSkipComment(c),
+        isEchoReview: (r: { author: string }) => feedbackFilter.shouldSkipReview(r),
+        isNoiseComment: setupNoiseFilter,
+        // F202 Phase 2D: issue comment tracking deps
+        issueCommentRouter,
+        fetchIssueComments,
+        fetchIssueState,
+        isEchoIssueComment: (c: { author: string }) => feedbackFilter.shouldSkipComment(c),
+        ...repoScanDeps,
+      });
+      app.log.info('[api] F202-2B: GitHub schedule resources rehydrated via plugin framework');
     }
   }
 
@@ -2447,6 +3470,45 @@ async function main(): Promise<void> {
   const hydrated = taskRunnerV2.hydrateDynamic(dynamicTaskStore, templateRegistry);
   if (hydrated > 0) app.log.info(`[api] F139: hydrated ${hydrated} dynamic task(s)`);
 
+  // F192 livefix OQ-17: Register daily + weekly eval domain tasks (reads eval-domains/*.yaml, triggers eval cats)
+  const { createEvalDomainDailySpec, createEvalDomainWeeklySpec } = await import(
+    './infrastructure/harness-eval/domain/eval-domain-daily.js'
+  );
+  const { getOwnerUserId } = await import('./config/cat-config-loader.js');
+  // cloud R6 P2 (PR-2) + memory wire-up: mirror the same wired set the
+  // eval-hub.ts route computes (Object.keys(verdictGenerators)). Bootstrap-time
+  // invariant:
+  //   eval:a2a always wired;
+  //   eval:capability-wakeup wired iff toolEventLog + skillLoadEventLog exist;
+  //   eval:memory wired iff memoryServices.markerQueue exists (always-present in
+  //     production but gated for parity with test/edge configs).
+  // This gates scheduled daily/weekly invocations' publish instructions on actual runtime support
+  // — without this, scheduled eval would tell cat to publish even when no Redis/markers →
+  // handler 501 → wasted run. Mirrors the eval-hub.ts route-layer gating.
+  const wiredPublishDomains = new Set<
+    'eval:a2a' | 'eval:memory' | 'eval:sop' | 'eval:capability-wakeup' | 'eval:task-outcome'
+  >(['eval:a2a']);
+  wiredPublishDomains.add('eval:task-outcome');
+  // eval:sop has no runtime dependencies (unlike cw needing toolEventLog or memory
+  // needing markerQueue) — unconditionally wired like eval:a2a and eval:task-outcome.
+  wiredPublishDomains.add('eval:sop');
+  if (toolEventLog && skillLoadEventLog) {
+    wiredPublishDomains.add('eval:capability-wakeup');
+  }
+  if (memoryServices.markerQueue) {
+    wiredPublishDomains.add('eval:memory');
+  }
+  const evalScheduleOpts = {
+    harnessFeedbackRoot: resolve(repoRoot, 'docs', 'harness-feedback'),
+    threadStore,
+    defaultUserId: getOwnerUserId(),
+    listDynamicTasks: () => dynamicTaskStore.getAll(),
+    redis: redisClient ?? undefined,
+    wiredPublishDomains,
+  };
+  taskRunnerV2.register(createEvalDomainDailySpec(evalScheduleOpts));
+  taskRunnerV2.register(createEvalDomainWeeklySpec(evalScheduleOpts));
+
   // F139: Start unified scheduler (all registered specs)
   taskRunnerV2.start();
   app.log.info(`[api] F139: unified scheduler started (${taskRunnerV2.getRegisteredTasks().join(', ')})`);
@@ -2463,6 +3525,9 @@ async function main(): Promise<void> {
         if (!msg) return null;
         const resolved = msg instanceof Promise ? await msg : msg;
         return resolved ? { source: resolved.source } : null;
+      },
+      async getByThreadBefore(threadId: string, timestamp: number, limit?: number) {
+        return messageStore.getByThreadBefore(threadId, timestamp, limit);
       },
     },
     threadStore,
@@ -2588,6 +3653,8 @@ async function main(): Promise<void> {
       // Stop event bus subscribers
       catCatalogSubscriber.unsubscribe();
       accountBindingSubscriber.unsubscribe();
+      pushConfigUnsub?.();
+      pushConfigUnsub = null;
       connectorReloadUnsub?.();
       try {
         await connectorGatewayHandle?.stop();

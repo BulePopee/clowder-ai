@@ -38,6 +38,8 @@ interface OpenCodeConfig {
   provider: Record<string, OpenCodeProviderConfig>;
   plugin?: string[];
   mcp?: Record<string, unknown>;
+  /** F203 Phase I: instruction file paths for native L0 injection (compression-immune system role). */
+  instructions?: string[];
 }
 
 export function generateOpenCodeConfig(options: OpenCodeConfigOptions): OpenCodeConfig {
@@ -102,8 +104,19 @@ export interface OpenCodeRuntimeConfigOptions {
   defaultModel?: string;
   apiType?: OpenCodeApiType;
   hasBaseUrl?: boolean;
+  /**
+   * Native-auth OpenCode accounts (OAuth/subscription) must not receive
+   * provider auth placeholders that point at unset CAT_CAFE_OC_* env vars.
+   */
+  omitProviderAuth?: boolean;
   /** Absolute path to Clowder AI MCP server entry (packages/mcp-server/dist/index.js). */
   mcpServerPath?: string;
+  /**
+   * F203 Phase I: Instruction file paths injected into OpenCode's `instructions` config.
+   * These are loaded by OpenCode every turn into `role: "system"` messages — compression-immune.
+   * Typical contents: [compiledL0Path, "OPENCODE.md"].
+   */
+  instructions?: readonly string[];
 }
 
 export interface OpenCodeRuntimeConfigDebugSummary {
@@ -152,7 +165,16 @@ export function safeProviderName(name: string): string {
 }
 
 export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOptions): OpenCodeConfig {
-  const { providerName, models, defaultModel, apiType = 'openai', hasBaseUrl = false, mcpServerPath } = options;
+  const {
+    providerName,
+    models,
+    defaultModel,
+    apiType = 'openai',
+    hasBaseUrl = false,
+    omitProviderAuth = false,
+    mcpServerPath,
+    instructions,
+  } = options;
 
   const configName = safeProviderName(providerName);
 
@@ -176,8 +198,8 @@ export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOpti
         npm: NPM_ADAPTER_FOR_API_TYPE[apiType] ?? NPM_ADAPTER_FOR_API_TYPE.openai,
         models: modelsMap,
         options: {
-          ...(hasBaseUrl ? { baseURL: `{env:${OC_BASE_URL_ENV}}` } : {}),
-          apiKey: `{env:${OC_API_KEY_ENV}}`,
+          ...(!omitProviderAuth && hasBaseUrl ? { baseURL: `{env:${OC_BASE_URL_ENV}}` } : {}),
+          ...(!omitProviderAuth ? { apiKey: `{env:${OC_API_KEY_ENV}}` } : {}),
         },
       },
     },
@@ -190,6 +212,13 @@ export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOpti
         command: ['node', mcpServerPath],
       },
     };
+  }
+
+  // F203 Phase I: inject compiled L0 + OPENCODE.md paths into instructions.
+  // OpenCode merges instructions across config layers (concat + dedup),
+  // so these are additive to any project-root opencode.json instructions.
+  if (instructions && instructions.length > 0) {
+    config.instructions = [...instructions];
   }
 
   return config;
@@ -229,6 +258,38 @@ export function summarizeOpenCodeRuntimeConfigForDebug(
 
 function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+/**
+ * F203 Phase I: Write an instructions-only opencode config (no provider block).
+ *
+ * Used for OpenCode fallback paths (subscription/unresolved/known-model) where
+ * a full runtime config is not generated. The config ONLY contains `instructions`
+ * so OpenCode reads L0 + OPENCODE.md into system role. No provider/apiKey fields
+ * → `buildEnv` must NOT clear native auth when this config is set.
+ *
+ * Callers must also set `CAT_CAFE_OC_INSTRUCTIONS_ONLY=1` in callbackEnv so
+ * `OpenCodeAgentService.buildEnv` knows to preserve native auth.
+ */
+export function writeOpenCodeInstructionsOnlyConfig(
+  projectRoot: string,
+  catId: string,
+  invocationId: string,
+  instructions: readonly string[],
+): string {
+  const safeCatId = sanitizePathSegment(catId);
+  const safeInvocationId = sanitizePathSegment(invocationId);
+  const configDir = join(projectRoot, '.cat-cafe', `oc-config-${safeCatId}-${safeInvocationId}`);
+  mkdirSync(configDir, { recursive: true });
+  const configPath = join(configDir, 'opencode.json');
+  const tempPath = `${configPath}.tmp-${process.pid}`;
+  const config: Pick<OpenCodeConfig, '$schema' | 'instructions'> = {
+    $schema: 'https://opencode.ai/config.json',
+    instructions: [...instructions],
+  };
+  writeFileSync(tempPath, JSON.stringify(config, null, 2), 'utf-8');
+  renameSync(tempPath, configPath);
+  return configPath;
 }
 
 /**

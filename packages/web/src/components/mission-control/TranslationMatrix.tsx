@@ -48,7 +48,7 @@ export function TranslationMatrix({ cards, selectedCardId, onSelectCard, onCreat
         <button
           type="button"
           onClick={onCreateCard}
-          className="rounded-lg bg-[var(--cafe-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--cafe-accent-hover,#7A6139)]"
+          className="rounded-lg bg-[var(--mc-accent)] px-3 py-1.5 text-xs font-medium text-[var(--cafe-surface)] hover:bg-[var(--mc-accent-hover)]"
         >
           + 新建 Intent Card
         </button>
@@ -61,10 +61,10 @@ export function TranslationMatrix({ cards, selectedCardId, onSelectCard, onCreat
             key={f.value}
             type="button"
             onClick={() => setBucketFilter(f.value)}
-            className={`rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
+            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
               bucketFilter === f.value
-                ? 'bg-[var(--cafe-accent)] text-[var(--cafe-surface)]'
-                : 'bg-[var(--console-pill-bg)] text-cafe-secondary hover:bg-[var(--console-pill-bg)]'
+                ? 'bg-[var(--mc-accent)] text-[var(--cafe-surface)]'
+                : 'bg-[var(--console-hover-bg)] text-cafe-secondary hover:bg-[var(--console-border-soft)]'
             }`}
           >
             {f.label}
@@ -74,13 +74,13 @@ export function TranslationMatrix({ cards, selectedCardId, onSelectCard, onCreat
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <div className="rounded-lg bg-[var(--console-field-bg)] p-8 text-center text-sm text-cafe-muted">
+        <div className="rounded-lg bg-[var(--console-shell-bg)] p-8 text-center text-sm text-cafe-secondary">
           {cards.length === 0 ? '尚无 Intent Cards。点击上方按钮开始需求翻译。' : '当前筛选无结果。'}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg shadow-[0_12px_30px_rgba(43,33,26,0.08)]">
+        <div className="overflow-hidden rounded-lg shadow-[0_8px_22px_rgba(43,33,26,0.04)]">
           <table className="w-full text-left text-xs">
-            <thead className="bg-[var(--console-card-bg)] text-[10px] font-semibold uppercase text-cafe-muted">
+            <thead className="bg-[var(--console-hover-bg)] text-micro font-semibold uppercase text-cafe-secondary">
               <tr>
                 <th className="px-3 py-2">甲方原文</th>
                 <th className="px-3 py-2">Intent Card</th>
@@ -94,7 +94,7 @@ export function TranslationMatrix({ cards, selectedCardId, onSelectCard, onCreat
                   key={card.id}
                   onClick={() => onSelectCard(card.id)}
                   className={`cursor-pointer transition-colors hover:bg-[var(--console-card-bg)] ${
-                    selectedCardId === card.id ? 'bg-[var(--console-pill-bg)]' : 'bg-cafe-surface'
+                    selectedCardId === card.id ? 'bg-[var(--console-hover-bg)]' : 'bg-[var(--console-card-bg)]'
                   }`}
                 >
                   <td className="max-w-[200px] truncate px-3 py-2 text-cafe">{card.originalText || '—'}</td>
@@ -108,7 +108,7 @@ export function TranslationMatrix({ cards, selectedCardId, onSelectCard, onCreat
                     {card.triage ? (
                       <BucketBadge bucket={card.triage.bucket} />
                     ) : (
-                      <span className="text-[10px] text-cafe-muted">未评估</span>
+                      <span className="text-micro text-cafe-muted">未评估</span>
                     )}
                   </td>
                 </tr>

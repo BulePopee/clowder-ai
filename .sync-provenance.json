@@ -1,12 +1,12 @@
 {
-  "source_commit_sha": "a04a9b67a70845719ea2fddb5849527e2ce0cf32",
-  "target_head_sha": "ebd0736ad1faa0034b49c539a0397ca655b9e3b2",
+  "source_commit_sha": "0952b3770566f53f15fc85292d5c11f51bc29db5",
+  "target_head_sha": "4e0e8c14e182b58b85630e64c39591599908e3eb",
   "release_tag": null,
   "source_snapshot_tag": null,
   "manifest_version": 3,
-  "included_file_count": 3131,
+  "included_file_count": 4179,
   "excluded_file_count": 13,
-  "transform_count": 33,
+  "transform_count": 34,
   "secret_scan_result": "clean",
-  "synced_at": "2026-05-06T17:59:06Z"
+  "synced_at": "2026-06-10T05:46:45Z"
 }

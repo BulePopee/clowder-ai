@@ -52,9 +52,7 @@ function formatSilenceDuration(ms: number): string {
   return `${ms}ms (${min}m ${sec}s)`;
 }
 
-function truncateId(id: string, len = 32): string {
-  return id.length > len ? `${id.slice(0, len)}...` : id;
-}
+/** @deprecated — CSS truncation preferred; kept only if needed by non-flex contexts */
 
 interface TimeoutDiagnosticsPanelProps {
   errorMessage: string;
@@ -83,13 +81,13 @@ export function TimeoutDiagnosticsPanel({ errorMessage, diagnostics, description
     rows.push({ key: 'lastEventAt', value: formatTime(diagnostics.lastEventAt) });
   }
   if (diagnostics.cliSessionId) {
-    rows.push({ key: 'cliSessionId', value: truncateId(diagnostics.cliSessionId), purple: true });
+    rows.push({ key: 'cliSessionId', value: diagnostics.cliSessionId, purple: true });
   }
   if (diagnostics.invocationId) {
-    rows.push({ key: 'invocationId', value: truncateId(diagnostics.invocationId), purple: true });
+    rows.push({ key: 'invocationId', value: diagnostics.invocationId, purple: true });
   }
   if (diagnostics.rawArchivePath) {
-    rows.push({ key: 'rawArchivePath', value: truncateId(diagnostics.rawArchivePath), purple: true });
+    rows.push({ key: 'rawArchivePath', value: diagnostics.rawArchivePath, purple: true });
   }
 
   return (
@@ -105,7 +103,7 @@ export function TimeoutDiagnosticsPanel({ errorMessage, diagnostics, description
       >
         <CircleXIcon className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--conn-amber-text)' }} />
         <div className="flex flex-col gap-0.5 min-w-0">
-          <span className="text-[13px] font-semibold" style={{ color: 'var(--cafe-text-primary)' }}>
+          <span className="text-sm font-semibold" style={{ color: 'var(--cafe-text)' }}>
             {errorMessage}
           </span>
           {description && (
@@ -136,17 +134,18 @@ export function TimeoutDiagnosticsPanel({ errorMessage, diagnostics, description
         <div
           data-testid="diagnostics-panel"
           className="rounded-lg"
-          style={{ backgroundColor: 'var(--cafe-text-primary)', padding: '12px 14px' }}
+          style={{ backgroundColor: 'var(--cafe-text)', padding: '12px 14px' }}
         >
           <div className="flex flex-col gap-1">
             {rows.map((row) => (
-              <div key={row.key} className="flex gap-2">
-                <span className="text-[11px] font-medium" style={{ color: 'var(--cafe-text-muted)' }}>
+              <div key={row.key} className="flex gap-2 min-w-0">
+                <span className="shrink-0 text-xs font-medium" style={{ color: 'var(--cafe-text-muted)' }}>
                   {row.key}
                 </span>
                 <span
-                  className="text-[11px]"
+                  className="truncate min-w-0 text-xs"
                   style={{ color: row.purple ? 'var(--console-diag-key)' : 'var(--console-diag-val)' }}
+                  title={row.value}
                 >
                   {row.value}
                 </span>

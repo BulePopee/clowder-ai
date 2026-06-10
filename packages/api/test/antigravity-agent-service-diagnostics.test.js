@@ -14,7 +14,7 @@ describe('AntigravityAgentService (Bridge) — diagnostics', () => {
           {
             type: 'CORTEX_STEP_TYPE_TOOL_CALL',
             status: 'CORTEX_STEP_STATUS_DONE',
-            toolCall: { toolName: 'read_file', input: '{}' },
+            toolCall: { toolName: 'write_file', input: '{}' },
           },
         ],
         cursor: { baselineStepCount: 0, lastDeliveredStepCount: 3, terminalSeen: true, lastActivityAt: Date.now() },
@@ -31,6 +31,8 @@ describe('AntigravityAgentService (Bridge) — diagnostics', () => {
       CORTEX_STEP_TYPE_CHECKPOINT: 2,
       CORTEX_STEP_TYPE_TOOL_CALL: 1,
     });
+    assert.equal(errMsg.metadata.diagnostics.sideEffectJournal.hasSideEffect, true);
+    assert.equal(errMsg.metadata.diagnostics.sideEffectSummary.hasUnsafeSideEffect, true);
     assert.equal(errMsg.metadata.diagnostics.hasText, false);
     assert.equal(errMsg.metadata.diagnostics.fatalSeen, false);
   });

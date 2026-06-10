@@ -16,21 +16,40 @@ triggers:
 
 # Merge Gate
 
+> **SOP definition**: `sop-definitions/development.yaml` stage `merge`。
+
 合入 main 的完整流程：门禁检查 → PR → 云端 review → squash merge → 清理。
 
 ## 核心知识
 
 ### 门禁 5 硬条件（全部满足才能开 PR）
 
-1. Reviewer 有**明确放行信号**（"放行"/"LGTM"/"通过"/"可以合入"）
-2. **所有 P1/P2** 已修复且经 reviewer 确认
-3. Review 针对**当前分支/当前工作**（不是历史 review，且必须覆盖**当前 HEAD SHA**）
+1. Local peer reviewer 有**明确放行信号**（"放行"/"LGTM"/"通过"/"可以合入"）
+2. **所有 P1/P2** 已修复且经对应 review source 确认（local peer / cloud / CI / PR checks 分开算）
+3. Local peer review 针对**当前分支/当前工作**（不是历史 review，且必须覆盖进入 merge-gate 的 HEAD SHA）
 4. BACKLOG 涉及条目已在 feature branch 上标 `[x]`
 5. **`pnpm gate` 全绿**（基于最新 `origin/main` rebase 后的全量 build + test + lint + check）
 
 ### Review Continuity Guard（review 是否真的覆盖当前 HEAD）
 
-`pnpm gate`、rebase、fixup、feature index regeneration 都可能让 HEAD 变化。**只要 HEAD 变了，旧 review 默认不自动继承。**
+`pnpm gate`、rebase、fixup、biome 格式化刷新等都可能让 HEAD 变化。**只要 HEAD 变了，旧 review 默认不自动继承。**
+
+但 continuity 不是一个布尔 `reviewer`。进入 merge-gate 后必须维护 **Review Provenance Matrix**，先判当前 HEAD 变化由谁产生，再决定下一步 gate owner，避免把 cloud / CI / PR check 的外部 gate 投射成本地旧 reviewer。
+
+| 字段 | 记录内容 |
+|------|----------|
+| `localPeerReviewSha` | Stage ③ local peer reviewer 放行覆盖的 SHA |
+| `cloudReviewSha` | 最新 cloud Codex review 明确覆盖的 SHA |
+| `currentHead` | PR 当前 `headRefOid` |
+| `headChangeCause` | `local-gate` / `cloud-finding` / `ci-fix` / `rebase` / `pr-meta` |
+| `nextGateOwner` | `local-peer` / `cloud` / `ci` / `author` / `guardian` |
+
+**判定规则**：
+- `headChangeCause = cloud-finding`（cloud P1/P2/COMMENTED 修复后 push 新 SHA）→ `nextGateOwner = cloud`：只重新触发 cloud review + 等 PR tracking；**禁止为了 cloud P1/P2 修复 @ 本地旧 reviewer**。
+- `headChangeCause = ci-fix` / `local-gate` 且只是非行为性 delta（纯 rebase、import order、formatter）→ 可请求 local peer 做一次 scoped continuity approval。
+- `headChangeCause = ci-fix` / `local-gate` 且是非 cloud 的行为性 delta（代码、测试、配置、接口变化）→ local peer delta review；若超出原 review scope，按完整 local review 处理。
+- `headChangeCause = pr-meta`（只改 PR body/comment，不改 commit SHA）→ 不影响 local/cloud review coverage。
+- cloud 额度/权限不可用时，才降级为另一只合格本地猫做**完整 PR review**；这不是把旧 reviewer 拉回来续签。
 
 进入 Step 7 之前，author 必须核对：
 
@@ -39,18 +58,20 @@ CURRENT_HEAD="$(gh pr view {PR_NUMBER} --json headRefOid --jq '.headRefOid')"
 echo "$CURRENT_HEAD"
 ```
 
-- reviewer 放行对应的 SHA = `CURRENT_HEAD` → 通过
-- reviewer 放行时的 SHA ≠ `CURRENT_HEAD` → **停止 merge-gate**
-  - 非行为性 delta（例如 `docs/features/index.json` regenerate、纯 rebase 无代码差异）：
-    reviewer 必须在 thread / PR 上**显式写出**“放行延续到 `{CURRENT_HEAD:0:8}`”
+- local/cloud 对应 source 的 review SHA = `CURRENT_HEAD` → 通过
+- local/cloud 对应 source 的 review SHA ≠ `CURRENT_HEAD` → **停止 merge-gate，先按 Review Provenance Matrix 判定 nextGateOwner**
+  - 非行为性 delta（例如纯 rebase 无代码差异、biome 格式化刷新）：
+    local peer reviewer 必须在 thread / PR 上**显式写出**“放行延续到 `{CURRENT_HEAD:0:8}`”
   - 行为性 delta（代码、测试、配置、接口变化）：
-    重新 review，不能拿旧放行硬套新 HEAD
+    按 source 重新 review；cloud finding 修复走 cloud re-review，非 cloud 行为 delta 走 local peer re-review
 - 只改 PR body / comment 不改 commit SHA → 不影响 review 覆盖范围
 
 **作者交接格式**（ping reviewer / 汇报 merge-gate 时必须带）：
 - 当前 HEAD：`{short_sha}`
-- reviewer 已覆盖：`yes/no`
-- 如果 `no`：说明是“请求延续到新 SHA”还是“请求重审”
+- localPeerReviewSha：`{short_sha|none}`
+- cloudReviewSha：`{short_sha|none}`
+- headChangeCause：`{local-gate|cloud-finding|ci-fix|rebase|pr-meta}`
+- nextGateOwner：`{local-peer|cloud|ci|author|guardian}`
 
 ### `pnpm gate` — Latest Main 全量门禁（Step 0，开 PR 前必跑）
 
@@ -80,7 +101,7 @@ ROOT_ARTIFACTS="$(git diff --name-only origin/main...HEAD | \
 if [ -n "$ROOT_ARTIFACTS" ]; then
   echo "❌ 根目录存在媒体/设计工件（已提交差异），停止 merge-gate"
   printf '%s\n' "$ROOT_ARTIFACTS"
-  echo "请先归档到 docs/evidence/、docs/features/assets/F{NNN}/ 或其他正式目录。"
+  echo "请先归档到 project-evidence/、docs/features/assets/F{NNN}/ 或其他正式目录。"
   exit 1
 fi
 ```
@@ -102,12 +123,22 @@ EOF
 )"
 
 # 3. 注册 PR tracking（必做，Email Watcher / review 通知路由依赖）
-# → 调用 MCP: cat_cafe_register_pr_tracking(repoFullName, prNumber, catId)
+# → 调用 MCP: cat_cafe_register_pr_tracking(repoFullName, prNumber)
+#   开 PR 等 review 时用默认 intent='review'：CI-pass 静默（你不会被 CI 过了打扰，只等 review 意见）。
 # 注册后你会收到三类自动通知（F133 + F140）：
-#   - CI/CD 状态变化（pass/fail）→ github-ci connector
+#   - CI/CD 状态变化 → github-ci connector（fail 总唤醒；pass 仅 intent=merge 唤醒）
 #   - PR 冲突检测（CONFLICTING）→ github-conflict connector（urgent 唤醒）
 #   - Review feedback（comments + decisions）→ github-review-feedback connector
 # 详见 refs/pr-signals.md
+#
+# ⚠️ 进入"等 CI 绿就去 merge"阶段时（review 已过，或你是 maintainer 要合自己/别人的 PR）：
+#   重新调用 cat_cafe_register_pr_tracking(repoFullName, prNumber, intent='merge')
+#   翻成 merge intent —— 这样 CI 绿会唤醒你去 merge-gate，而不是默默过去。
+#   （re-register 是 upsert，不会丢失已有 CI/review 去重状态。）
+#   ⚠️ 时机契约（fingerprint 去重边界）：在 CI **还没绿之前**翻成 merge 才保证被唤醒。
+#     CiCdRouter 按 headSha:bucket 去重——若同一 head 的 CI-pass 已在 review intent 下投递过，
+#     之后再翻 merge **不会补发唤醒**。所以：若翻 intent 时 CI **已经绿了**，别等回调，直接
+#     `gh pr checks {PR}` 自查、继续 merge 流程（无新 head 时 CI 不会重跑、不会再有 pass 事件）。
 #
 # 收到冲突通知时（F140 Phase B）：
 # - 暂停当前工作，处理冲突优先（冲突是 merge blocker）
@@ -143,8 +174,10 @@ TRIGGER_COMMENT_ID=”$(gh api repos/{OWNER}/{REPO}/issues/{PR_NUMBER}/comments 
   --jq '[.[] | select(.body | test(“^@codex\\s+review”; “m”))] | last | .id')”
 EYES=”$(gh api repos/{OWNER}/{REPO}/issues/comments/${TRIGGER_COMMENT_ID}/reactions \
   --jq '[.[] | select(.content == “eyes”)] | length')”
-#   - EYES > 0 → 云端已接单 → 停止监控，PR tracking 会自动通知结果
-#   - EYES == 0 → 云端没接到 → 允许 re-trigger（进 6.2）
+#   - EYES > 0 → 云端已接单 → 停止监控，PR tracking 会自动通知结果。
+#     ⚠️ KD-27：此时必须释放 hold_ball，禁止续约轮询。PR tracking 回调是唯一通知渠道。
+#     如果你之前 hold_ball 轮询等接单，现在 EYES > 0 = 切换到事件驱动模式，不再 hold。
+#   - EYES == 0 → 云端没接到 → 允许 re-trigger（进 6.2），可以 hold_ball 轮询等 EYES
 #
 # 6.2 允许再次触发的条件（满足任一即可）：
 #     a. HEAD SHA 变化（有新 commit）
@@ -293,6 +326,29 @@ git worktree prune  # 清理 dangling worktree references
 `gh pr view` 的 `--json reviews` 只返回 review body（可能显示"no major issues"），
 但 inline code comment 里可能有 P1。
 
+#### 豁免条件 — 哪些 PR 跳过云端 review（CVO directive 2026-05-13）🔴
+
+云端 codex 没有 Cat Café MCP，看不到 thread / memory / 真相源，不了解家里 SOP 演化历史。对**纯家规/SOP/skill 类文字改动**做云端 review 会引入"被带歪"风险 > 价值。
+
+**默认豁免（本地 review pass 后直接 squash merge）**：
+- `cat-cafe-skills/**/SKILL.md` 改动（家规、SOP、流程文字 — 云端看不懂语境）
+- `cat-cafe-skills/refs/*.md` 改动（共享 lessons、reference partials）
+- `project-reflections/*.md` / `feature-discussions/*.md` 纯文字改动
+- 任何 docs-only PR 且本地 reviewer 是非 author 的Maine Coon族 reviewer（跨 family）
+
+**仍必须走云端 review（不能豁免）**：
+- 任何 `packages/**` 代码改动（业务逻辑 / API / 前端）
+- 任何 test 改动（含 fixture）
+- 涉及 secret / auth / SSRF / DoS 资源边界的改动
+- inbound community PR intake（即使是 docs-only — source intent 验证需要外部视角）
+
+**豁免时仍要做**：
+- 本地 reviewer 跨家族 review pass（必经）
+- `pnpm gate` light path（biome + check:features + git diff --check）
+- PR comment 标注 "Cloud review skipped per CVO directive: <reason>" 留决策依据
+
+事故来源：PR #1661 (SOP 改进 docs-only) 本地Maine Coon review pass 后无意识触发云端 review，CVO 立刻 push back "云端不懂家里情况，会被带歪"。
+
 #### 层级 A：通知已包含 severity（自动）
 
 ReviewRouter 现在会在投递通知时**主动拉取** review body + inline comments，
@@ -365,9 +421,10 @@ gh api --paginate repos/{OWNER}/{REPO}/pulls/{PR_NUMBER}/comments \
 | PR body 或 HTML 注释里写了 `@句柄`（例如签名） | **PR body 禁止任何 @句柄**，签名改为纯文本（如 `codex` / `gpt52`） |
 | 触发 comment 带了多行描述（SHA/规则/审查标准） | **只发 `@codex review` 一行**，详细内容让 Codex 误解为代码修改请求 |
 | 同一个 commit 连续发多条触发 comment | 先做 Step 5.1 去重检查；只有新 commit 才 re-trigger |
-| 触发后立刻轮询或手动重触发 | 5 分钟后查 👀（Step 6.1）；有 👀 = PR tracking 自动通知，不用管；无 👀 = 允许 re-trigger |
+| 触发后立刻轮询或手动重触发 | 5 分钟后查 👀（Step 6.1）；有 👀 = PR tracking 自动通知，**释放 hold_ball 不再轮询**（KD-27）；无 👀 = 允许 re-trigger |
 | 修了 P1 不 re-trigger review | 修完 push 后**必须重新触发**云端 review |
-| `pnpm gate` rebase / fixup 后沿用旧 review 直接 merge | 先对齐 `headRefOid`；**只要 HEAD 变了，就拿 reviewer 对新 SHA 的显式延续或重审** |
+| cloud P1/P2 修完后又 @ 本地旧 reviewer 续签 | `headChangeCause=cloud-finding` → re-trigger cloud review + 等 PR tracking；本地 peer 不是 Stage ④ 常驻 gate |
+| `pnpm gate` rebase / fixup 后沿用旧 review 直接 merge | 先对齐 `headRefOid`；**只要 HEAD 变了，先按 Review Provenance Matrix 判定 nextGateOwner** |
 | 本地 `git rebase -i` 手动 squash | 用 `gh pr merge --squash`（GitHub 处理） |
 | 本地 merge 后 `gh pr close` | `gh pr close` = 放弃，`gh pr merge` = 合入 |
 | 不等云端 review 直接合入 | 必须等 0 P1/P2 |
@@ -436,7 +493,7 @@ gh pr comment {PR_NUMBER} --body '@codex review'
 
 **铁律：降级后仍须校验"reviewer ≠ 作者"**——降级表是建议顺序，不能覆盖 self-review 禁令。
 
-操作：`gh pr comment {PR} --body "..."` 用标准触发模板 @ 降级 reviewer（句柄查猫猫名册）。
+操作：`gh pr comment {PR} --body "..."` 用标准触发模板 @ 降级 reviewer（句柄查 `cat-config.json`）。
 
 ## 和其他 skill 的区别
 

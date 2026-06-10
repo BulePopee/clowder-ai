@@ -1,6 +1,6 @@
 ---
 feature_ids: [F102]
-related_features: [F024, F100, F042]
+related_features: [F024, F100, F042, F186, F188]
 topics: [memory, adapter, evidence-store, architecture]
 doc_kind: spec
 created: 2026-03-11
@@ -8,11 +8,17 @@ created: 2026-03-11
 
 # F102: 记忆组件 Adapter 化重构 — IEvidenceStore + 本地索引
 
-> **Status**: done | **Owner**: Ragdoll | **Priority**: P1 | **Completed**: 2026-04-04 (Phase A~J) | **Reopened**: 2026-04-13 (Phase K) | **Re-closed**: 2026-04-14 (Phase K done, AC-K3/K4 deferred)
+> **Status**: done | **Owner**: Ragdoll | **Priority**: P1 | **Completed**: 2026-04-04 (Phase A~J) | **Reopened**: 2026-04-13 (Phase K) | **Re-closed**: 2026-04-14 (Phase K done; AC-K3 later completed by F209 Phase A; AC-K4 remains future work)
 >
-> ### 给其他猫的快速现状（2026-04-16 更新）
+> ### F188 Phase F 关联（2026-05-10）
 >
-> **Message 级别检索已上线运行。** 用 `search_evidence(scope="threads", depth="raw")` 可搜到具体消息（speaker + timestamp + passageId）。当前限制：`depth=raw` 仅走 lexical 模式（会显示 `[DEGRADED]` 提示），passage 向量路径（AC-K3）deferred。日常用 `mode="hybrid"` 搜 thread 时 depth 默认 summary 级别，已包含消息摘要；需要定位具体消息时切 `depth="raw"`。
+> F102 owns `search_evidence` (semantic retrieval entry, `IEvidenceStore.search()`). 而 F188 Phase F 新增的 `cat_cafe_graph_resolve` 和 `cat_cafe_list_recent` 是 **F188 agent-facing navigation tools** — graph_resolve 复用 F188 Phase C `GraphResolver`；list_recent 是新增 `RecentBrowseResolver` (metadata browse read-model)。**不属于 F102 索引层，不扩 `IEvidenceStore`**（Maine Coon 二审 P2 architecture boundary）。
+>
+> 三入口路由（精确 anchor / 零先验 / 语义模糊）在 `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `OPENCODE.md` 同步，single source of truth 在 `cat-cafe-skills/refs/memory-routing-partial.md`。
+>
+> ### 给其他猫的快速现状（2026-05-22 更新）
+>
+> **Message 级别检索已上线运行。** 用 `search_evidence(scope="threads", depth="raw")` 可搜到具体消息（speaker + timestamp + passageId）。F209 Phase A 已补上 passage vector path：`depth="raw"` 支持 lexical / semantic / hybrid，hybrid 用 passage BM25 + passage vector NN 做 RRF；embedding unavailable 时会 fail-open 到 lexical，并显式返回 `[DEGRADED]` / `effectiveMode="lexical"`。日常用 `mode="hybrid"` 搜 thread 时 depth 默认 summary 级别；需要定位具体消息时切 `depth="raw"`。
 >
 > 近期修复链（2026-04-14~16，PR #1155/#1160/#1179/#1192/#1195/#1204）：depth=raw 降级信号 → passage 排序 → heading→keywords 索引 → auto-rebuild 机制 → lexical recall backfill → docs scope filter 修正。核心检索能力已经过三轮 dogfood 验证。
 >
@@ -1356,7 +1362,7 @@ Knowledge Feed（Phase H）从 Workspace "知识模式"迁移到 `/memory` Tab 1
 
 ## 实现路线图（F/G/Gap 整体规划）
 
-> **当前状态**：Phase A~E ✅ + G foundation ✅ + H ✅ + I ✅ + F-4 ✅ + J ✅ + F-1/2/3 ✅ + Known Issues fix ✅ (PR #908) + Batch 1/2/3 ✅ + follow-up ✅ + **Phase K ✅**（AC-K1/K2 闭环，PR #1155）+ **post-K dogfood fixes ✅**（PR #1160/#1179/#1192/#1195/#1204 — passage ranking + heading keywords + auto-rebuild + recall backfill + docs scope filter）。AC-K3/K4 deferred。
+> **当前状态**：Phase A~E ✅ + G foundation ✅ + H ✅ + I ✅ + F-4 ✅ + J ✅ + F-1/2/3 ✅ + Known Issues fix ✅ (PR #908) + Batch 1/2/3 ✅ + follow-up ✅ + **Phase K ✅**（AC-K1/K2 闭环，PR #1155）+ **post-K dogfood fixes ✅**（PR #1160/#1179/#1192/#1195/#1204 — passage ranking + heading keywords + auto-rebuild + recall backfill + docs scope filter）+ **AC-K3 completed by F209 Phase A ✅**（PR #1842）。AC-K4 remains future work。
 > **team lead指示**：开源同步时增强功能需要开关，默认 off。
 
 ### 收尾三批次（2026-04-01 三方收敛：Ragdoll+Maine Coon GPT-5.4+team lead）
@@ -1480,13 +1486,13 @@ API route `evidence.ts:99` 始终返回 `degraded: false`。前端仍允许选�
 - [x] passage 渲染展示 `content`、`speaker`、`createdAt`，不再渲染不存在的 `text/score`
 - [x] context passages（上下文窗口）也正确渲染
 
-### P3: 能力增强（Deferred — 等场景倒逼再开）
+### P3: 能力增强（F209 Phase A 已接手 AC-K3）
 
 **AC-K3: passage-level vector path**（`depth=raw` 支持 `semantic/hybrid`）
 
-- ADR-020 已记录为 deferred
-- Phase I follow-up plan 已明确排除
-- 开启条件：有跨语言 raw 消息定位的真实场景
+- [x] F209 Phase A / PR #1842 已实现 passage-level vector path
+- [x] `depth=raw` semantic/hybrid 现在走 passage NN / passage BM25+NN RRF
+- [x] embedding unavailable 时 fail-open 到 lexical，并显式标 `degraded/effectiveMode`
 
 **AC-K4: L2 Rollup**（多 L1 segment 凝结为更高层摘要）
 
@@ -1497,7 +1503,7 @@ API route `evidence.ts:99` 始终返回 `degraded: false`。前端仍允许选�
 ### Phase K 验收标准
 
 - AC-K1/K2 全部打勾 → Phase K done → F102 re-close
-- AC-K3/K4 保持 deferred 状态，不阻塞 K close
+- AC-K3 已由 F209 Phase A 补齐；AC-K4 仍是 future work，不阻塞 K close
 
 ## Review Gate
 

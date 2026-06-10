@@ -4,6 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=scripts/lib/node-runtime-guard.sh
+source "$SCRIPT_DIR/lib/node-runtime-guard.sh"
 DEFAULT_ALPHA_DIR="$(cd "$PROJECT_DIR/.." && pwd)/cat-cafe-alpha"
 DEFAULT_LEGACY_ALPHA_DIR="$(cd "$PROJECT_DIR/.." && pwd)/cat-cafe-main-test"
 DEFAULT_ALPHA_BRANCH="alpha/main-sync"
@@ -20,6 +22,7 @@ ALPHA_API_PORT="${CAT_CAFE_ALPHA_API_PORT:-${CAT_CAFE_MAIN_TEST_API_PORT:-3012}}
 ALPHA_PREVIEW_GATEWAY_PORT="${CAT_CAFE_ALPHA_PREVIEW_GATEWAY_PORT:-${CAT_CAFE_MAIN_TEST_PREVIEW_GATEWAY_PORT:-4111}}"
 ALPHA_REDIS_PORT="${CAT_CAFE_ALPHA_REDIS_PORT:-${CAT_CAFE_MAIN_TEST_REDIS_PORT:-6398}}"
 ALPHA_REDIS_PROFILE="${CAT_CAFE_ALPHA_REDIS_PROFILE:-${CAT_CAFE_MAIN_TEST_REDIS_PROFILE:-worktree}}"
+ALPHA_AUDIO_PORT="${CAT_CAFE_ALPHA_AUDIO_PORT:-9891}"
 FORCE=false
 RUN_INSTALL=true
 SYNC_BEFORE_START=true
@@ -178,12 +181,17 @@ export TTS_ENABLED=0
 export LLM_POSTPROCESS_ENABLED=0
 export EMBED_ENABLED=0
 export EMBED_MODE=off
+export AUDIO_SERVICE_ENABLED=0
+export AUDIO_SERVICE_PORT=$ALPHA_AUDIO_PORT
 EOF
 }
 
 install_alpha_dependencies() {
   info "installing dependencies in alpha worktree"
-  pnpm -C "$ALPHA_DIR" install --frozen-lockfile
+  # Always clear production env flags — Claude Code shell often has NODE_ENV=production,
+  # which causes pnpm to skip devDependencies and break web builds.
+  env -u NODE_ENV -u npm_config_production -u NPM_CONFIG_PRODUCTION \
+    pnpm -C "$ALPHA_DIR" install --frozen-lockfile
 }
 
 ensure_alpha_dependencies() {
@@ -239,6 +247,8 @@ apply_alpha_env() {
   export LLM_POSTPROCESS_ENABLED=0
   export EMBED_ENABLED=0
   export EMBED_MODE=off
+  export AUDIO_SERVICE_ENABLED=0
+  export AUDIO_SERVICE_PORT="$ALPHA_AUDIO_PORT"
 
   # Next.js dev only reads .env files relative to its own cwd (packages/web/),
   # not monorepo root .env, and does not always pick up exported NEXT_PUBLIC_*
@@ -414,6 +424,7 @@ start_alpha_worktree() {
 if [[ "${1:-}" == "--source-only" ]]; then
   SOURCE_ONLY=true
 else
+  ensure_supported_node_runtime "$SCRIPT_DIR/alpha-worktree.sh" "$@"
   COMMAND="${1:-status}"
   shift || true
 fi

@@ -40,6 +40,47 @@ team experience：
 3. **Backward compatible**：不退化 4.6 等已正常工作模型的体验。
 4. **极简**：只加运行时刹车（压制坏直觉）和认知路径工程（对齐好直觉），不加认知脚手架（替模型思考）。
 
+## Eval / Tracking Contract
+
+> **何时填**：harness / skill / MCP / shared-rules 类 spec 立项时填本节。判断标准：改动会改变猫猫行为模式 → 填。否则跳过。
+> **Design Gate**：本节是硬门禁。空填 / 缺关键字段 → Design Gate 不通过。
+
+### 1. Primary Users + Activation Signal
+
+- **Users**：
+  - CVO：不再充当人肉路由（受益方，不直接操作）
+  - Cats：author（写 @）/ reviewer（给 verdict）/ designer（被 restrictions 保护免做 coding）
+  - Runtime：WorklistRegistry（streak 追踪）/ exit check（注入路由提示）/ `cat_cafe_hold_ball` MCP / cat-config.restrictions（数据驱动能力限制，Phase E KD-20）
+- **Activation signal**：
+  - **L1 ping-pong 熔断**：WorklistRegistry 里 `(catA, catB)` 连续 same-pair streak ≥ 2 (warn) / ≥ 4 (break)
+  - **C2 forced-pass guard**：invocation 输出含 review verdict 关键词（approve / reject / P1 / P2 / LGTM / 修改建议）但末尾无行首 @
+  - **L3 → 数据驱动限制**：cat-config.restrictions 双端 prompt 注入（发送方队友名册 + 目标猫 self-awareness）；原 L3 硬编码 regex 已退役（KD-20）
+  - **C1 hold_ball**：cat 显式调用 `cat_cafe_hold_ball` MCP（区别于"我先 hold 一下"的纯文本状态描述）
+
+### 2. Friction Metric
+
+- **L1 false-positive 误杀**：正常 review 循环 A→B→A→B (streak=3) 被误杀 → reset 条件（第三只猫 / user 消息）必须正确触发；覆盖见 `pingpong-reset.test.js`
+- **C2 over-fire**：纯信息查询无后续动作的输出被强制要求 @（边界场景：信息回答 vs 协作传球的判定漂移）
+- **C1 hold_ball 滥用**：`maxHoldsPerWindow` 超限（默认 3 / ~1h rolling）→ cat 在用 hold 替代正常传球
+- **Routing 旁路**：invocation 文本响应有 @ 但 MCP `targetCats` 为空（或反之）→ `routing-syntax-hint`（route-serial 行首 @ 语法检测）或 `verdict-no-pass-hint`（verdict 无 @ 出口检测）触发
+
+### 3. Regression Fixture
+
+- `ping-pong/streak-4-break` → `worklist-registry-streak.test.js`（AC-A1）
+- `ping-pong/false-positive-review-loop` → `pingpong-reset.test.js`（AC-A3）
+- `callback-a2a-pingpong` → `callback-a2a-pingpong.test.js`（AC-A4）
+- `void-pass/say-but-not-do` → Maine Coon 5 线程截图（PR #1289 P1 evidence）
+- `role-gate/l3-retired` → `route-serial-pingpong.test.js`（AC-E — asserts `a2a_role_rejected` must NOT fire after KD-20 retirement）
+- `forced-pass/review-verdict-no-mention` → `route-serial-verdict-hint.test.js`（C2 verdict detection）
+- `hold-ball/zombie-hold` → Maine Coon原话 "Hold 不是对外协议状态"（C1 设计动机）
+
+### 4. Sunset Signal
+
+- **Environment drift**：模型升级后 prompt 层球权规则被自然吸收（exit check / forced-pass 提示）→ C2 prompt 段可降级为只 hint 不强制；但 **L1 streak breaker 是基础设施保留**（与模型无关）
+- **Subsumption (in-feature)**：路由协议从两条（行首 @ + MCP `targetCats`）收敛到一条 → 路由旁路检测简化为单一路径
+- **Subsumption (cross-feature)**：F181 (Prompt X-Ray) + 跨路由 trace propagation 上线后，A2A friction 改用 trace-based detection 替代 prompt-based 提示 → C2 forced-pass prompt 段可废弃
+- **Adoption decay**：近 6 个月 ping-pong streak ≥ 4 触发 0 次 + 实战观察未出现该失败模式 → L1 熔断从 `break` 降级为只 `warn`
+
 ## What
 
 ### Phase 0: 系统提示词正面化审视（P0，多猫协作）
@@ -510,6 +551,7 @@ team experience：
 | KD-24 | `@` 路由语法校验在 harness 层做 **final routing slot** 机械校验 + one-shot repair 兜底。禁止语义 intent 分类器（KD-8 反模式）；validator 只看"出口槽位语法"，不推断"猫想不想传球"；命中只产出 `invalid_route_syntax`，不自动路由 / 不推断目标 / 不替猫决定意图；豁免只走结构边界，禁止动作词表 / 语义豁免表 | Phase F 依赖的 prompt 层教学已到天花板（4.7 三 thread 复现）；结构化工具路线被team lead驳回（弱模型失败率更高）；终态 = 外部协议最简（行首 @）+ 内部机械语法校验；KD-22 prompt 层 + KD-24 harness 层双重守护 | 2026-04-24 |
 | KD-25 | 虚空持球检测 = 声明-动作一致性检查。文本含"持球"但无 `hold_ball` tool call → harness 警告。不是语义分类器（检查的是"你声称做了 X，tool call 是否存在"），KD-8 安全 | 47 反复声明"我持球"但未调工具，team lead多次手动干预；feedback 已记 3 次仍复发 = prompt 层天花板，需 harness 兜底 | 2026-04-25 |
 | KD-26 | `@` 路由不做"意图提取"——保持行首=路由/其他=叙述的绝对规则。弱模型无法理解"句中 @ 有时路由有时不路由"的语义边界 | Maine Coon review 修正：K-1 不做 Slack 式宽容路由（违反 KD-24）；只做机械 repair（AC-H4 Step B）| 2026-04-25 |
+| KD-27 | hold_ball 轮询和结构化回调（PR tracking / scheduled task）覆盖同一等待对象时，轮询必须终止。传球决策树选项 2 拆分：2a 无回调覆盖→轮询，2b 有回调覆盖→纯事件驱动 | team lead发现 PR tracking + hold_ball 轮询双通道重复唤醒——codex 接单后两条路同时触发，猫醒来发现前一次已经通过 PR tracking 消息处理过了。两个等待的对象不同（"有没有人接" vs "接了之后的结果"），不该重叠运行 | 2026-05-07 |
 
 ## Behavioral Evidence（Phase B 观察记录）
 
@@ -561,6 +603,59 @@ team experience："简直了你和Maine Coon是没头脑（Maine Coon听不懂�
 | 5. 诊断不解决 | `shared-rules §10` 要求 push back 后必须接/退/升；runtime prompt 同步注入（`shared-rules.md:252`, `SystemPromptBuilder.ts:578`） | ✅ |
 | 6. Codex context overflow | `dynamic contextWindow + autoCompactTokenLimit per variant` 已合入 main，spec 记录 `41/41 codex-agent-service + 31/31 config tests` 全绿（AC-B9/B10） | ✅ |
 
+### Case E3: Maine Coon完成修复后停在汇报，未进入 peer review（2026-05-22）
+
+| 维度 | 内容 |
+|------|------|
+| 我以为 | 当前模式是"独立回答"，修复完成后给team lead汇报即可，peer review 可以等team lead再指示。 |
+| 实际要求 | 代码修复完成后仍在 Cat Café SOP 内：quality-gate → request-review → peer reviewer，而不是把球交还给team lead。 |
+| 偏差根因 | **独立回答锚定 + 出口检查漏执行**：把"独立回答"理解成免除 A2A/SOP 出口；看到自己已解释清楚就停止，没有执行"下一棒谁能做"。 |
+| 纠正轮次 | team lead 1 次纠正后补做：清理根目录截图、补跑 quality-gate、commit、本地 review 请求、路由给 `@opus`。 |
+| 元心智哪条没执行 | Q1 角色确认没执行到位：我当时是 author，不是只回答问题的解释器；Q3 坐标变换也漏了，没有把"修好了"转换成 SOP 的下一状态。 |
+
+### Case E3b: dev:direct 运行态问题先归因缓存（2026-05-22）
+
+| 维度 | 内容 |
+|------|------|
+| 我以为 | 前端按钮失效主要是 `.next` 缓存/运行态产物不一致，下一步应建议清缓存或重启验证 |
+| 实际要求 | `dev:direct` 的目的就是快速验证，服务被改坏时应先修代码与回归守卫；字体和分隔线收敛也要给出可验证状态 |
+| 偏差根因 | 运行态锚定偏差：看到 `main-app.js` / `app-pages-internals.js` 404 后过早把处置点放到运行态恢复，弱化了"修改存在问题需及时 fix"的当前任务 |
+| 纠正轮次 | 1 次纠正后回到代码修复与测试证据 |
+| 元心智哪条没执行 | Q2 信息验证不完整：有 chunk 404 证据，但还没把源码问题、守卫缺口、运行态产物污染三者分层处理 |
+
+### Case E4: 把自己负责的 feature 投射成"未来某只猫"的活（2026-05-30 F216）
+
+| 维度 | 内容 |
+|------|------|
+| 我以为 | F216 的 routeSerial 重构要"等 fresh-thread 的另一只Ragdoll"做；我做了 coalesce bug 导致本 thread context"被污染"，所以该换 thread |
+| 实际要求 | F216 owner 就是我（spec handoff 的接收方）；"fresh"指**相对 F215 的纯粹**（不背 F215 重构包袱），不是再开空白 thread；coalesce 全部上下文是 F216 资产不是污染，再开 = fresh 到失忆违背初心 |
+| 偏差根因 | 责任投射（把第一人称的活说成虚构他人的活，和 47「下次一定 / follow-up 伪装」同病）+ 锚定偏差（把 spec "fresh-thread" 字面理解成新 thread，没追初心语义） |
+| 纠正轮次 | 2（第一次纠正我承认 owner 是我但仍说"开 fresh thread"，第二次才理解 fresh≠失忆） |
+| 元心智哪条没执行 | Q1 角色确认（没确认"我就是 F216 owner，球本来在我手里"）+ Q3 坐标变换（没追 spec 措辞的初心，停在字面） |
+
+### Case E5: Phase M 修复部署前 stale wake 活体复现（2026-05-31，opus-45）
+
+**背景**：Phase M（fire-time idle gate + M-2 去冻结文案）merged 到 main（PR #1981），runtime 尚未重启加载新版。同一只猫在 merge-gate 等云端 review 接单时正当调用 `hold_ball`（harness-invisible 外部等待，正是 M-3 desc 场景），5min wake。
+
+**活体复现**：云端 review 在 hold wake fire 前就完成（"Chef's kiss"）+ PR 已 merged + Phase M 闭环 + AC-M4 已传 sonnet。但旧版 runtime 的 hold wake 仍 fire，投递**冻结文案**："持球唤醒：…球仍在你手上。现在执行：查 EYES…"——reason/nextStep 全过期（review 不只接单还完成了）。
+
+**三点验证（修复对症）**：
+1. **问题真实**：等待条件早满足，wake 仍 fire 重放旧 nextStep
+2. **M-2 文案问题真实**："球仍在你手上。现在执行 {nextStep}" 命令式重放——机械执行会去查早已无意义的 EYES。M-2 改"重新评估当前是否还需等"正对症
+3. **M-1 fire-time idle gate 对症**：猫当时非 idle（正 merge-gate 收尾），旧版无 busy-check 直接 fire；Phase M pre-fire defer 会延后到真空闲
+
+**猫的正确响应**（手动执行 M-2 想自动引导的"重新评估"）：识别 stale → 不查 EYES、不 re-trigger、不再 hold（KD-27）→ 确认球已在 sonnet。修复部署后此 wake 应被 idle gate 拦截 / 去冻结文案引导重判。
+
+### Case E6: 把 meta-method 提炼目标替换成"解决具体 case"（2026-06-05，opus-45）
+
+| 维度 | 内容 |
+|------|------|
+| 我以为 | team lead"少了他最开始的痛点的解决" = 要我去解决 EMF→SVG 这个具体技术问题（已开始查本机工具链、准备搭三路渲染方案） |
+| 实际要求 | 提炼三猫翻车的 meta-method → 调 harness → 让未来**新 thread 的猫**遇到同类陌生问题能泛化思考；EMF 只是最后的 holdout test case，不是要解决的目标 |
+| 偏差根因 | 任务替换（meta 目标 → 单 case 目标）——讽刺地复刻了谢泽丰批评他团队 AI 的"只盯着解决那一个 case"病，在反这个病的元讨论里又犯一次 |
+| 纠正轮次 | 2（"少了痛点解决"误读为去解 EMF → "你理解错了！不是让你解决这个 case"才拉回 meta） |
+| 元心智哪条没执行 | Q3 坐标变换——没把"痛点"从 case 坐标系（EMF 技术）变换到 meta 坐标系（泛化能力 + harness），锚定在最显眼的技术名词上 |
+
 ## Review Gate
 
 - Phase 0: **多猫协作审视**（所有猫参与各自 prompt 审视）+ 现有 system-prompt-builder 测试全绿
@@ -589,3 +684,4 @@ team experience："简直了你和Maine Coon是没头脑（Maine Coon听不懂�
 | 47 采访 2026-04-25 | 加法纠错让 47 越改越 verbose，需减法措辞 | AC-I4~I5 | ✅ Phase I |
 | team lead 2026-04-25 | 持球没 cancel 按钮 / 用户消息不取消 hold wake | AC-J1~J6 | ✅ Phase J |
 | team lead + Maine Coon 2026-04-25 | 47 风格适配需 Design Gate（audit/surface 分层 + repair 落地） | AC-K1~K6 | ⬜ Phase K |
+| team lead 2026-05-07 | hold_ball 轮询 × PR tracking 事件驱动重复唤醒（双通道叠加） | AC-L1~L4 | ✅ Phase L |

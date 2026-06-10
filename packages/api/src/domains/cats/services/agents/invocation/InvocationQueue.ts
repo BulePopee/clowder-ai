@@ -39,15 +39,16 @@ export interface QueueEntry {
   /** F175: queue-internal priority — urgent entries sort before normal in dequeue */
   priority: 'urgent' | 'normal';
   /** F175: origin category for visual grouping */
-  sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'continuation';
+  sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'continuation' | 'issue';
   /** Queue-internal dedup key for agent control-flow work. */
   continuationKey?: string;
   /** F175: user drag-reorder position — explicit values override priority in dequeue */
   position?: number;
   /** F175: skill hint for connector triggers — flows through as promptTags on execution */
   suggestedSkill?: string;
-  /** F153: caller trace context for cross-route A2A propagation */
   callerTraceContext?: CallerTraceContext;
+  /** Explicit A2A trigger message for stream reply threading. */
+  a2aTriggerMessageId?: string;
 }
 
 export interface EnqueueResult {
@@ -89,6 +90,16 @@ export class InvocationQueue {
   }
 
   private static readonly PRIORITY_RANK: Record<string, number> = { urgent: 0, normal: 1 };
+
+  private static normalizedPriority(input: {
+    source: QueueEntry['source'];
+    sourceCategory?: QueueEntry['sourceCategory'];
+    priority?: QueueEntry['priority'];
+  }): QueueEntry['priority'] {
+    return input.source === 'agent' && input.sourceCategory !== 'continuation'
+      ? 'normal'
+      : (input.priority ?? 'normal');
+  }
 
   /** F175: multi-dimensional entry comparator for dequeue ordering.
    *  Position is scoped to same-user entries to prevent cross-user queue-jumping in shared threads. */
@@ -136,26 +147,43 @@ export class InvocationQueue {
       | 'priority'
       | 'position'
       | 'suggestedSkill'
-      | 'callerTraceContext'
     > & {
       autoExecute?: boolean;
       callerCatId?: string;
       priority?: 'urgent' | 'normal';
       suggestedSkill?: string;
-      callerTraceContext?: CallerTraceContext;
+      messageId?: string | null;
+      /** Defaults true for request replay dedupe; connector coalescing can opt out for in-flight entries. */
+      dedupeProcessing?: boolean;
     },
   ): EnqueueResult {
     const key = this.scopeKey(input.threadId, input.userId);
     const q = this.getOrCreate(key);
+    const priority = InvocationQueue.normalizedPriority(input);
+    const dedupeProcessing = input.dedupeProcessing ?? true;
 
     // Request replay dedupe: if an active entry already exists for this key in this scope,
     // return it instead of creating a second queue row.
     if (input.idempotencyKey) {
       const existing = q.find(
         (entry) =>
-          entry.idempotencyKey === input.idempotencyKey && (entry.status === 'queued' || entry.status === 'processing'),
+          entry.idempotencyKey === input.idempotencyKey &&
+          (entry.status === 'queued' || (dedupeProcessing && entry.status === 'processing')),
       );
       if (existing) {
+        if (existing.status === 'queued') {
+          const upgradedPriority =
+            (InvocationQueue.PRIORITY_RANK[priority] ?? 1) < (InvocationQueue.PRIORITY_RANK[existing.priority] ?? 1);
+          if (upgradedPriority) {
+            existing.priority = priority;
+          }
+          if (input.suggestedSkill && (upgradedPriority || !existing.suggestedSkill)) {
+            existing.suggestedSkill = input.suggestedSkill;
+          }
+          if (input.sourceCategory && !existing.sourceCategory) {
+            existing.sourceCategory = input.sourceCategory;
+          }
+        }
         const position = q.findIndex((entry) => entry.id === existing.id);
         return {
           outcome: 'enqueued',
@@ -180,7 +208,7 @@ export class InvocationQueue {
       userId: input.userId,
       idempotencyKey: input.idempotencyKey,
       content: input.content,
-      messageId: null,
+      messageId: input.messageId ?? null,
       mergedMessageIds: [],
       source: input.source,
       targetCats: [...input.targetCats],
@@ -190,12 +218,12 @@ export class InvocationQueue {
       autoExecute: input.autoExecute ?? false,
       callerCatId: input.callerCatId,
       senderMeta: input.senderMeta,
-      priority:
-        input.source === 'agent' && input.sourceCategory !== 'continuation' ? 'normal' : (input.priority ?? 'normal'),
+      priority,
       sourceCategory: input.sourceCategory,
       continuationKey: input.continuationKey,
       suggestedSkill: input.suggestedSkill,
       callerTraceContext: input.callerTraceContext,
+      a2aTriggerMessageId: input.a2aTriggerMessageId,
       position: undefined,
     };
     q.push(entry);
@@ -215,7 +243,14 @@ export class InvocationQueue {
   /** Backfill messageId on a new entry (null → value). */
   backfillMessageId(threadId: string, userId: string, entryId: string, messageId: string): void {
     const e = this.findEntry(threadId, userId, entryId);
-    if (e) e.messageId = messageId;
+    if (!e) return;
+    if (!e.messageId) {
+      e.messageId = messageId;
+      return;
+    }
+    if (e.messageId !== messageId && !e.mergedMessageIds.includes(messageId)) {
+      e.mergedMessageIds.push(messageId);
+    }
   }
 
   /** Rollback an enqueued entry — remove entirely. */
@@ -420,6 +455,22 @@ export class InvocationQueue {
     return null;
   }
 
+  /**
+   * Find the in-flight (processing) entry occupying a cat's per-cat slot in a thread, across all
+   * users. 2026-06-02 (Steer 无法抢占): steer-immediate uses this to locate the entry whose
+   * executeEntry holds the slot, so it can tombstone it (removeProcessedAcrossUsers) instead of
+   * force-releasing the slot — the tombstone makes executeEntry self-abort at its post-startAll
+   * guard, which is race-safe through the pre-start (create-await) window. Returns null if none.
+   */
+  findProcessingByCat(threadId: string, catId: string): QueueEntry | null {
+    for (const q of this.queues.values()) {
+      if (!this.queueMatchesThread(q, threadId)) continue;
+      const entry = q.find((e) => e.status === 'processing' && (e.targetCats[0] ?? 'unknown') === catId);
+      if (entry) return entry;
+    }
+    return null;
+  }
+
   /** Get unique userIds that have entries (any status) for this thread. */
   listUsersForThread(threadId: string): string[] {
     const users: string[] = [];
@@ -475,6 +526,95 @@ export class InvocationQueue {
   }
 
   /**
+   * F-coalesce: find the best in-flight agent entry to coalesce a same-turn handoff into.
+   *
+   * Used by callback-a2a-trigger to merge a caller's repeated same-turn handoffs to the same target
+   * instead of dispatching duplicate invocations. Resolution PREFERS a mergeable 'queued' entry over
+   * a 'processing' one: a queued entry can be merged in place (coalesceContentIntoQueuedAgent),
+   * whereas a processing entry is already running and can only be superseded (abort+restart, deferred
+   * to F216). So when a cat has BOTH a running entry and a queued follow-up, a third handoff must
+   * merge into the queued follow-up — not spawn yet another entry. Hence the two-pass scan.
+   *
+   * Stale processing entries (zombie invocations past STALE_PROCESSING_THRESHOLD_MS) are ignored so
+   * a hung invocation never permanently swallows new handoffs. Returns a copy (never a live ref).
+   */
+  findInFlightAgentEntry(threadId: string, catId: string, callerCatId?: string): QueueEntry | null {
+    // 云端 codex R4 P1: scope to sourceCategory 'a2a'. `source: 'agent'` alone also matches
+    // self-continuation entries (QueueProcessor.enqueueContinuation → source:'agent',
+    // sourceCategory:'continuation'). Without this filter an A2A handoff to a cat that has a queued
+    // continuation would merge INTO the continuation prompt — mixing unrelated control-flow content
+    // with another cat's handoff AND suppressing the real A2A route. Only same-category 'a2a' entries
+    // are the caller's repeated same-turn handoffs and thus semantically mergeable. (Mirrors the
+    // existing sourceCategory discrimination in isSystemPinnedQueueEntry / normalizedPriority.)
+    //
+    // F216 c0 (砚砚 GPT-5.5 review P1): ALSO scope by callerCatId. Only the SAME caller's repeated
+    // same-turn handoffs are mergeable — without this, cat A's queued handoff to a target gets
+    // coalesced/superseded by cat B's later handoff to the same target (cross-caller串味). Strict
+    // match: both sides must be defined AND equal — an entry with undefined callerCatId is never
+    // adopted by an arbitrary caller, and an undefined-caller lookup never adopts anyone (safe
+    // direction: prefer a fresh entry over a wrong merge). callerCatId omitted → caller scope off
+    // (legacy/test callers that don't care; production callback-a2a-trigger always passes it).
+    const matches = (e: QueueEntry): boolean => {
+      if (!(e.source === 'agent' && e.sourceCategory === 'a2a' && e.targetCats.includes(catId))) return false;
+      if (callerCatId === undefined) return true; // caller scope not requested
+      return e.callerCatId !== undefined && e.callerCatId === callerCatId;
+    };
+    // Pass 1: prefer a mergeable queued entry (in-place coalesce, no abort needed).
+    for (const q of this.queues.values()) {
+      if (!this.queueMatchesThread(q, threadId)) continue;
+      for (const e of q) {
+        if (matches(e) && e.status === 'queued') return { ...e };
+      }
+    }
+    // Pass 2: fall back to a fresh (non-stale) processing entry — caller defers supersede to F216.
+    const now = Date.now();
+    for (const q of this.queues.values()) {
+      if (!this.queueMatchesThread(q, threadId)) continue;
+      for (const e of q) {
+        if (!matches(e) || e.status !== 'processing') continue;
+        const age = now - (e.processingStartedAt ?? e.createdAt);
+        if (age < InvocationQueue.STALE_PROCESSING_THRESHOLD_MS) return { ...e };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * F-coalesce: merge new content + messageId into an existing QUEUED agent entry.
+   *
+   * Only succeeds while the entry is still 'queued' (not yet dispatched) — returns false if it has
+   * already started processing (the caller must supersede via abort+restart instead, see F216).
+   * Content is appended with a blank-line separator so the target cat sees both handoffs as one
+   * coherent message (parity with collectUserBatch's user-message coalescing). The new messageId is
+   * tracked in mergedMessageIds so delivery/ack covers both trigger messages.
+   */
+  coalesceContentIntoQueuedAgent(
+    threadId: string,
+    userId: string,
+    entryId: string,
+    content: string,
+    messageId?: string,
+    callerCatId?: string,
+  ): boolean {
+    const e = this.findEntry(threadId, userId, entryId);
+    if (!e || e.status !== 'queued') return false;
+    // 云端 codex R4 P1 (defense-in-depth): only A2A entries are mergeable. findInFlightAgentEntry
+    // already scopes to sourceCategory 'a2a', but guard here too so a future caller passing a
+    // continuation/other entryId can never splice a handoff into unrelated control-flow content.
+    if (!(e.source === 'agent' && e.sourceCategory === 'a2a')) return false;
+    // F216 c0 (砚砚 GPT-5.5 review P1): defense-in-depth caller scope — refuse cross-caller merge.
+    // findInFlightAgentEntry already caller-scopes, but guard here too so a stale/wrong entryId from
+    // a different caller can never splice content. Strict: when callerCatId is provided it must match
+    // a defined entry.callerCatId. Omitted → scope off (legacy/test callers).
+    if (callerCatId !== undefined && !(e.callerCatId !== undefined && e.callerCatId === callerCatId)) return false;
+    e.content = `${e.content}\n\n${content}`;
+    if (messageId && e.messageId !== messageId && !e.mergedMessageIds.includes(messageId)) {
+      e.mergedMessageIds.push(messageId);
+    }
+    return true;
+  }
+
+  /**
    * Cross-path dedup: checks processing + fresh queued agent entries.
    * Used by route-serial to prevent text-scan @mention when callback already dispatched.
    *
@@ -489,11 +629,12 @@ export class InvocationQueue {
   static readonly STALE_QUEUED_THRESHOLD_MS = 60_000;
   static readonly STALE_PROCESSING_THRESHOLD_MS = 600_000; // 10 minutes
 
-  hasActiveOrQueuedAgentForCat(threadId: string, catId: string): boolean {
+  hasActiveOrQueuedAgentForCat(threadId: string, catId: string, opts?: { excludeEntryId?: string }): boolean {
     const now = Date.now();
     for (const q of this.queues.values()) {
       if (!this.queueMatchesThread(q, threadId)) continue;
       for (const e of q) {
+        if (opts?.excludeEntryId && e.id === opts.excludeEntryId) continue;
         if (e.source !== 'agent' || !e.targetCats.includes(catId)) continue;
 
         if (e.status === 'processing') {
@@ -719,10 +860,9 @@ export class InvocationQueue {
   }
 
   /**
-   * Whether any user-sourced message is queued for this thread.
-   * Agent/connector-sourced entries are excluded — they have their own
-   * per-cat dedup via hasActiveOrQueuedAgentForCat and must NOT block
-   * the A2A text-scan fairness gate in routeSerial.
+   * Whether any user-sourced message is queued for this thread (user-only filter).
+   * F185 Phase B: text-scan fairness gate now uses hasQueuedNonAgentForThread instead.
+   * Retained for backward compatibility but no longer used by fairness gates.
    */
   hasQueuedUserMessagesForThread(threadId: string): boolean {
     for (const q of this.queues.values()) {

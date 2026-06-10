@@ -3,7 +3,8 @@ name: cross-thread-sync
 description: >
   跨 thread 协同：发现平行 session → 通知（3+2 件套）→ 争用协调 → 确认。
   Use when: 平行 session 之间需要协同、通知改动影响、共享文件争用。
-  Not for: 跨猫工作交接（用 cross-cat-handoff）。
+  Not for: 跨猫工作交接（用 cross-cat-handoff）、需要新建 thread 时（用 propose_thread / thread-orchestration）。
+  Boundary with F128: 发现跨 scope 问题 → 先 list_threads 查有没有已有 thread → 有 = 本 skill（cross_post）→ 没有 = propose_thread。
   Output: cross-post 通知 + 争用协调完成。
 triggers:
   - "通知另一个 session"
@@ -24,8 +25,6 @@ triggers:
 > 1. 在 content 末尾另起一行写 `@句柄`（如 `@目标猫句柄`）
 > 2. 传 `targetCats` 参数（如 `targetCats: ["opus"]`）
 
-**Announce at start:** "I'm using the cross-thread-sync skill to coordinate with parallel sessions."
-
 ## Step 1: 发现（谁在平行工作？）
 
 ```
@@ -35,15 +34,16 @@ triggers:
 # 2. 确认哪些在活跃
 → cat_cafe_list_threads(activeSince=<2h_ago_ms>)
 
-# 3. 必要时补上下文
-→ cat_cafe_search_messages(query="F088 phase", limit=5)
+# 3. 必要时补上下文（D15: cat_cafe_search_messages 已删除，用以下两个替代）
+→ cat_cafe_search_evidence(query="F088 phase", scope="threads", depth="raw")  # 跨 thread 搜过程
+→ cat_cafe_get_thread_context(threadId="<target>", keyword="F088")  # 单 thread 取最近消息
 ```
 
 **判断是否需要同步**：
 
 | 改动范围 | 是否通知 |
 |---------|---------|
-| 共享文件（BACKLOG、feature doc、cat-template.json） | 必须 |
+| 共享文件（BACKLOG、feature doc、cat-config.json） | 必须 |
 | 被其他 feature 依赖的接口/类型 | 必须 |
 | `packages/shared/**` | 必须 |
 | 纯内部改动（只影响自己 feature 的文件） | 不需要 |

@@ -12,8 +12,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { type CatId, type ContextHealth, catRegistry, type MessageContent } from '@cat-cafe/shared';
+import { dirname, join, resolve } from 'node:path';
+import { type CatId, type ContextHealth, catRegistry, type MessageContent, type SessionRecord } from '@cat-cafe/shared';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import {
   resolveBuiltinClientForProvider,
@@ -22,12 +22,13 @@ import {
 } from '../../../../../config/account-resolver.js';
 import { resolveBoundAccountRefForCat } from '../../../../../config/cat-account-binding.js';
 import { isSessionChainEnabled } from '../../../../../config/cat-config-loader.js';
+import { buildCatGitIdentityEnv } from '../../../../../config/cat-git-identity.js';
+import { getCatModel } from '../../../../../config/cat-models.js';
 import { getContextWindowFallback } from '../../../../../config/context-window-sizes.js';
 import { getSessionStrategy, shouldTakeAction } from '../../../../../config/session-strategy.js';
 import { assertSafeTestConfigRoot } from '../../../../../config/test-config-write-guard.js';
 import { capturePromptIfEnabled } from '../../../../../infrastructure/debug/prompt-capture-bridge.js';
 import { createModuleLogger } from '../../../../../infrastructure/logger.js';
-import type { CallerTraceContext } from '../../../../../infrastructure/telemetry/genai-semconv.js';
 import {
   AGENT_ID,
   GENAI_MODEL,
@@ -40,6 +41,7 @@ import {
   activeInvocations,
   catInvocationCount,
   catResponseDuration,
+  geminiContextFallback,
   invocationCompleted,
   invocationDuration,
   llmCallDuration,
@@ -49,7 +51,12 @@ import {
 } from '../../../../../infrastructure/telemetry/instruments.js';
 import { normalizeModel } from '../../../../../infrastructure/telemetry/model-normalizer.js';
 import { emitOtelLog } from '../../../../../infrastructure/telemetry/otel-logger.js';
-import { recordLlmCallSpan, recordToolUseSpan } from '../../../../../infrastructure/telemetry/span-helpers.js';
+import {
+  recordAgentLoop,
+  recordLlmCallSpan,
+  recordToolUseSpan,
+} from '../../../../../infrastructure/telemetry/span-helpers.js';
+import { ToolSpanTracker } from '../../../../../infrastructure/telemetry/tool-span-tracker.js';
 import { resolveActiveProjectRoot } from '../../../../../utils/active-project-root.js';
 import { resolveCliCommand } from '../../../../../utils/cli-resolve.js';
 import { DEFAULT_CLI_TIMEOUT_MS, resolveCliTimeoutMs } from '../../../../../utils/cli-timeout.js';
@@ -58,9 +65,12 @@ import { isUnderAllowedRoot } from '../../../../../utils/project-path.js';
 import { tcpProbe } from '../../../../../utils/tcp-probe.js';
 import type { AgentPaneRegistry } from '../../../../terminal/agent-pane-registry.js';
 import type { TmuxGateway } from '../../../../terminal/tmux-gateway.js';
+import { resolveBootcampWorkspaceRoot } from '../../bootcamp/workspace-root.js';
 import { createPromptDigest } from '../../context/prompt-digest.js';
 import { AuditEventTypes, getEventAuditLog } from '../../orchestration/EventAuditLog.js';
 import { resolveDefaultClaudeMcpServerPath } from '../providers/ClaudeAgentService.js';
+import { compileL0ViaSubprocess } from '../providers/l0-compiler.js';
+import { OC_INSTRUCTIONS_ONLY_ENV } from '../providers/OpenCodeAgentService.js';
 import {
   deriveOpenCodeApiType,
   OC_API_KEY_ENV,
@@ -68,11 +78,24 @@ import {
   parseOpenCodeModel,
   safeProviderName,
   summarizeOpenCodeRuntimeConfigForDebug,
+  writeOpenCodeInstructionsOnlyConfig,
   writeOpenCodeRuntimeConfig,
 } from '../providers/opencode-config-template.js';
+import { appendTranscriptPathHints } from '../providers/transcript-path-hints.js';
+import { buildContextManagementHint, queueContextHint, takeContextHintPrefix } from './context-management-hint.js';
 
 const log = createModuleLogger('invoke');
 const tracer = trace.getTracer('cat-cafe-api', '0.1.0');
+const TRANSCRIPT_DIR =
+  process.env.TRANSCRIPT_DIR ?? resolve(findMonorepoRoot(), 'scripts', 'meeting-copilot', 'transcripts');
+const CAT_INVOCATION_STALL_AUTO_KILL_MS = 7 * 60_000;
+const ANTIGRAVITY_AUTOMATIC_RETRY_FRAGMENT_REASONS = new Set([
+  'model_capacity',
+  'empty_response',
+  'stream_error',
+  'tool_conflict',
+  'runtime_disconnected',
+]);
 let _openCodeKnownModels: Set<string> | null = null;
 
 export function getOpenCodeKnownModels(): Set<string> {
@@ -106,12 +129,18 @@ export function _resetOpenCodeKnownModels(override?: Set<string> | null): void {
   _openCodeKnownModels = override ?? null;
 }
 
+import type {
+  RuntimeSessionMetadata,
+  RuntimeSessionUnexpectedRuntimeSessionSwitch,
+} from '../../runtime-session/RuntimeSessionMetadata.js';
+import type { IRuntimeSessionStore } from '../../runtime-session/RuntimeSessionStore.js';
 import type { SessionManager } from '../../session/SessionManager.js';
 import type { ISessionSealer } from '../../session/SessionSealer.js';
 import type { TranscriptSessionInfo, TranscriptWriter } from '../../session/TranscriptWriter.js';
 import type { ISessionChainStore } from '../../stores/ports/SessionChainStore.js';
 import type { IThreadStore } from '../../stores/ports/ThreadStore.js';
 import type { AgentMessage, AgentService, AgentServiceOptions } from '../../types.js';
+import { hasL0CompilerSeam } from '../../types.js';
 import type { InvocationRegistry } from '../invocation/InvocationRegistry.js';
 import { completeCapsuleForSeal, type RouteStateContinuityCapsule } from './CollaborationContinuityCapsule.js';
 import type { ResumeFailureKind } from './invoke-helpers.js';
@@ -120,6 +149,7 @@ import {
   extractTaskProgress,
   isCliTimeoutError,
   isContextWindowOverflowError,
+  isMalformedToolCallError,
   isMissingClaudeSessionError,
   isPromptTokenLimitExceededError,
   isTransientAcpPromptFailure,
@@ -212,6 +242,247 @@ function sessionIdentityKey(userId: string, catId: CatId, threadId: string): str
   return `${userId}:${catId as string}:${threadId}`;
 }
 
+function isAntigravityRuntimeSessionInit(msg: AgentMessage): boolean {
+  return (
+    msg.type === 'session_init' &&
+    msg.sessionLifecycle?.runtime === 'antigravity-desktop' &&
+    typeof msg.sessionLifecycle.runtimeSessionId === 'string' &&
+    msg.sessionLifecycle.runtimeSessionId.trim().length > 0
+  );
+}
+
+const UNEXPECTED_RUNTIME_SESSION_SWITCH_SEAL_REASON = 'unexpected_runtime_session_switch';
+
+function classifyUnexpectedRuntimeSessionSwitch(
+  lifecycle: NonNullable<AgentMessage['sessionLifecycle']>,
+  previousRuntimeSessionId: string,
+): Pick<RuntimeSessionUnexpectedRuntimeSessionSwitch, 'declaredPreviousRuntimeSessionId' | 'reason'> | null {
+  const declaredPreviousRuntimeSessionId = lifecycle.previousRuntimeSessionId?.trim();
+  if (!declaredPreviousRuntimeSessionId) {
+    return { reason: 'missing_previous_runtime_session_id' };
+  }
+  if (declaredPreviousRuntimeSessionId !== previousRuntimeSessionId) {
+    return {
+      declaredPreviousRuntimeSessionId,
+      reason: 'mismatched_previous_runtime_session_id',
+    };
+  }
+  return null;
+}
+
+function antigravityReplacementSealReason(msg: AgentMessage, previousRuntimeSessionId: string): string {
+  if (isAntigravityRuntimeSessionInit(msg) && msg.sessionLifecycle) {
+    const unexpected = classifyUnexpectedRuntimeSessionSwitch(msg.sessionLifecycle, previousRuntimeSessionId);
+    if (unexpected) return UNEXPECTED_RUNTIME_SESSION_SWITCH_SEAL_REASON;
+  }
+  return msg.sessionLifecycle?.sealReason ?? 'cli_session_replaced';
+}
+
+function buildUnexpectedRuntimeSessionSwitch(input: {
+  lifecycle: NonNullable<AgentMessage['sessionLifecycle']>;
+  previousSessionId: string;
+  previousRuntimeSessionId: string;
+  currentRuntimeSessionId: string;
+  detectedAt: number;
+}): RuntimeSessionUnexpectedRuntimeSessionSwitch | null {
+  const unexpected = classifyUnexpectedRuntimeSessionSwitch(input.lifecycle, input.previousRuntimeSessionId);
+  if (!unexpected) return null;
+  return {
+    detectedAt: input.detectedAt,
+    previousSessionId: input.previousSessionId,
+    previousRuntimeSessionId: input.previousRuntimeSessionId,
+    currentRuntimeSessionId: input.currentRuntimeSessionId,
+    ...('declaredPreviousRuntimeSessionId' in unexpected && unexpected.declaredPreviousRuntimeSessionId
+      ? { declaredPreviousRuntimeSessionId: unexpected.declaredPreviousRuntimeSessionId }
+      : {}),
+    reason: unexpected.reason,
+  };
+}
+
+async function markPreviousAntigravityRetryFragment(input: {
+  runtimeSessionStore: IRuntimeSessionStore;
+  sessionChainStore: ISessionChainStore;
+  lifecycle: NonNullable<AgentMessage['sessionLifecycle']>;
+  activePreviousRuntimeSessionId?: string;
+  userVisibleOutputSessionIds?: ReadonlySet<string>;
+  threadId: string;
+  catId: CatId;
+  now: number;
+}): Promise<void> {
+  const previousRuntimeSessionId = input.lifecycle.previousRuntimeSessionId;
+  const retryReason = input.lifecycle.sealReason;
+  if (!previousRuntimeSessionId) return;
+  if (!retryReason) return;
+  if (!ANTIGRAVITY_AUTOMATIC_RETRY_FRAGMENT_REASONS.has(retryReason)) return;
+  if (input.activePreviousRuntimeSessionId && previousRuntimeSessionId !== input.activePreviousRuntimeSessionId) return;
+
+  const previousRuntime = await input.runtimeSessionStore.getByRuntimeSession(
+    'antigravity-desktop',
+    previousRuntimeSessionId,
+  );
+  if (!previousRuntime) return;
+  if (!isRuntimeSessionInThread(previousRuntime, input.threadId, input.catId)) return;
+  if (!input.activePreviousRuntimeSessionId && !isAlreadySealedAntigravityRetryPrevious(previousRuntime, retryReason)) {
+    return;
+  }
+  if (input.userVisibleOutputSessionIds?.has(previousRuntime.sessionId)) return;
+
+  const previousRecord = await input.sessionChainStore.get(previousRuntime.sessionId);
+  if (!previousRecord) return;
+  if (!isSessionRecordInThread(previousRecord, input.threadId, input.catId)) return;
+  const activeRecord = await input.sessionChainStore.getActive(input.catId, input.threadId);
+  if (activeRecord?.id === previousRecord.id) return;
+  if (previousRecord.messageCount !== 0) return;
+
+  await input.runtimeSessionStore.updateLifecycle(previousRuntime.sessionId, {
+    retryFragment: {
+      kind: 'retry',
+      retryReason,
+      nextRuntimeSessionId: input.lifecycle.runtimeSessionId,
+      detectedAt: input.now,
+    },
+    lastObservedAt: Math.max(previousRuntime.lifecycle.lastObservedAt, input.now),
+  });
+}
+
+function isAlreadySealedAntigravityRetryPrevious(runtimeSession: RuntimeSessionMetadata, retryReason: string): boolean {
+  return runtimeSession.lifecycle.state !== 'active' && runtimeSession.lifecycle.sealReason === retryReason;
+}
+
+function isRuntimeSessionInThread(runtimeSession: RuntimeSessionMetadata, threadId: string, catId: CatId): boolean {
+  return runtimeSession.threadId === threadId && runtimeSession.catId === catId;
+}
+
+function isSessionRecordInThread(session: SessionRecord, threadId: string, catId: CatId): boolean {
+  return session.threadId === threadId && session.catId === catId;
+}
+
+function isUserVisibleSessionOutput(msg: AgentMessage): boolean {
+  return msg.type === 'text' || msg.type === 'tool_use' || msg.type === 'tool_result';
+}
+
+async function syncAntigravityRuntimeMetadata(input: {
+  runtimeSessionStore: IRuntimeSessionStore;
+  sessionChainStore: ISessionChainStore;
+  activeRec: SessionRecord;
+  msg: AgentMessage;
+  userVisibleOutputSessionIds?: ReadonlySet<string>;
+  threadId: string;
+  catId: CatId;
+  userId: string;
+}): Promise<void> {
+  if (!isAntigravityRuntimeSessionInit(input.msg)) return;
+  const lifecycle = input.msg.sessionLifecycle;
+  if (!lifecycle) return;
+  if (typeof input.msg.sessionId !== 'string' || input.activeRec.cliSessionId !== input.msg.sessionId) return;
+
+  const runtimeSessionId = lifecycle.runtimeSessionId;
+  const now = Date.now();
+  const activeRuntime = await input.runtimeSessionStore.getActiveByThreadCat(
+    'antigravity-desktop',
+    input.threadId,
+    input.catId,
+  );
+  const activeRuntimeBeingReplaced =
+    activeRuntime &&
+    activeRuntime.runtimeSessionId !== runtimeSessionId &&
+    activeRuntime.sessionId !== input.activeRec.id
+      ? activeRuntime
+      : null;
+  const unexpectedRuntimeSessionSwitch = activeRuntimeBeingReplaced
+    ? buildUnexpectedRuntimeSessionSwitch({
+        lifecycle,
+        previousSessionId: activeRuntimeBeingReplaced.sessionId,
+        previousRuntimeSessionId: activeRuntimeBeingReplaced.runtimeSessionId,
+        currentRuntimeSessionId: runtimeSessionId,
+        detectedAt: now,
+      })
+    : null;
+  if (activeRuntimeBeingReplaced) {
+    const hostRecord = await input.sessionChainStore.get(activeRuntimeBeingReplaced.sessionId);
+    if (hostRecord && hostRecord.threadId === input.threadId && hostRecord.catId === input.catId) {
+      const sealReason =
+        unexpectedRuntimeSessionSwitch !== null
+          ? UNEXPECTED_RUNTIME_SESSION_SWITCH_SEAL_REASON
+          : (lifecycle.sealReason ?? activeRuntimeBeingReplaced.lifecycle.sealReason ?? 'cli_session_replaced');
+      const drainIncomplete =
+        lifecycle.degraded === true || (lifecycle.drainResult && lifecycle.drainResult !== 'complete');
+      await input.runtimeSessionStore.updateLifecycle(activeRuntimeBeingReplaced.sessionId, {
+        state: drainIncomplete ? 'runtime_seal_pending' : 'sealed',
+        sealReason,
+        ...(lifecycle.drainResult ? { drainResult: lifecycle.drainResult } : {}),
+        ...(drainIncomplete
+          ? {
+              pendingSince: activeRuntimeBeingReplaced.lifecycle.pendingSince ?? now,
+              retryCount: activeRuntimeBeingReplaced.lifecycle.retryCount ?? 0,
+              lastFailureReason:
+                lifecycle.degradedReason ??
+                activeRuntimeBeingReplaced.lifecycle.lastFailureReason ??
+                'runtime drain did not prove completion',
+            }
+          : {}),
+        lastObservedAt: now,
+      });
+    } else {
+      await input.runtimeSessionStore.updateLifecycle(activeRuntimeBeingReplaced.sessionId, {
+        state: 'runtime_conflict_pending',
+        lastObservedAt: now,
+        lastFailureReason: `active runtime binding ${activeRuntimeBeingReplaced.runtimeSessionId} points to missing SessionRecord ${activeRuntimeBeingReplaced.sessionId}`,
+      });
+    }
+  }
+
+  await markPreviousAntigravityRetryFragment({
+    runtimeSessionStore: input.runtimeSessionStore,
+    sessionChainStore: input.sessionChainStore,
+    lifecycle,
+    activePreviousRuntimeSessionId: activeRuntimeBeingReplaced?.runtimeSessionId,
+    userVisibleOutputSessionIds: input.userVisibleOutputSessionIds,
+    threadId: input.threadId,
+    catId: input.catId,
+    now,
+  });
+
+  const existingRuntime = await input.runtimeSessionStore.getByRuntimeSession('antigravity-desktop', runtimeSessionId);
+  const identityHistory =
+    existingRuntime?.sessionId === input.activeRec.id && existingRuntime.identityHistory.length > 0
+      ? existingRuntime.identityHistory
+      : [
+          {
+            catId: input.catId,
+            model: input.msg.metadata?.model ?? 'unknown',
+            ...(typeof input.msg.metadata?.modelVerified === 'boolean'
+              ? { modelVerified: input.msg.metadata.modelVerified }
+              : {}),
+            ...(input.msg.metadata?.provider ? { provider: input.msg.metadata.provider } : {}),
+            from: now,
+            source: 'session_init' as const,
+          },
+        ];
+
+  await input.runtimeSessionStore.upsert({
+    sessionId: input.activeRec.id,
+    runtime: 'antigravity-desktop',
+    runtimeSessionId,
+    threadId: input.threadId,
+    catId: input.catId,
+    userId: input.userId,
+    surface: 'cat-cafe-dispatch',
+    identityHistory,
+    lifecycle: {
+      state: 'active',
+      startedAt: existingRuntime?.sessionId === input.activeRec.id ? existingRuntime.lifecycle.startedAt : now,
+      lastObservedAt: now,
+      ...((unexpectedRuntimeSessionSwitch ?? existingRuntime?.lifecycle.unexpectedRuntimeSessionSwitch)
+        ? {
+            unexpectedRuntimeSessionSwitch:
+              unexpectedRuntimeSessionSwitch ?? existingRuntime?.lifecycle.unexpectedRuntimeSessionSwitch,
+          }
+        : {}),
+    },
+  });
+}
+
 /**
  * Shared dependencies for all cat invocations within one AgentRouter
  */
@@ -224,6 +495,8 @@ export interface InvocationDeps {
   readonly taskProgressStore?: TaskProgressStore;
   /** F24: Session chain store for context health tracking */
   readonly sessionChainStore?: ISessionChainStore;
+  /** F211 Phase A2: runtime sidecar for provider runtime session metadata. */
+  readonly runtimeSessionStore?: IRuntimeSessionStore;
   /** F24 Phase B: Session sealer for auto-seal when context threshold reached */
   readonly sessionSealer?: ISessionSealer;
   /** F24 Phase C: Transcript writer for event collection + flush on seal */
@@ -298,6 +571,15 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
   const { registry, sessionManager, threadStore, apiUrl } = deps;
   const { catId, service, prompt, userId, threadId, isLastCat, signal: callerSignal } = params;
 
+  // F198 Bug #3: a bg carrier has no stable per-conversation sessionId — the
+  // daemon forks a fresh UUID every `--bg --resume` round. Derive a stable
+  // chainKey anchor so sessionId resolution / resume mutex / session_init
+  // record reuse / done bookkeeping all route through it instead of the
+  // rotating cliSessionId. Non-bg services are untouched (usesChainKeyResume
+  // defaults false → bgChainKey stays undefined and every existing path runs).
+  const isBgCarrier = service.usesChainKeyResume?.() ?? false;
+  const bgChainKey = isBgCarrier ? `bg:${threadId}:${catId}` : undefined;
+
   const { invocationId, callbackToken } = await registry.create(
     userId,
     catId,
@@ -358,6 +640,26 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // can resolve to a concrete value.
     CAT_CAFE_THREAD_ID: threadId,
     ...(process.env.CAT_CAFE_SIGNAL_USER ? { CAT_CAFE_SIGNAL_USER: process.env.CAT_CAFE_SIGNAL_USER } : {}),
+    // Per-cat git author identity (W1: cats are Agents with identity).
+    // GIT_AUTHOR_NAME/GIT_COMMITTER_NAME override the runtime git config's pinned
+    // user.name so each cat's commits carry its own name instead of all collapsing
+    // to one. Model comes from getCatModel(catId) — the SAME source as the system-prompt
+    // identity line (env CAT_{CATID}_MODEL > runtime catRegistry), so the author name
+    // tracks the cat's real model (opus-45 → claude-opus-4-8), not the catId or a stale
+    // catalog copy. Email is intentionally NOT set — it inherits git config (the CVO's
+    // GitHub noreply account) so contribution-graph attribution stays on one account
+    // while the name distinguishes the cat. (CVO directive 2026-05-28)
+    ...buildCatGitIdentityEnv(
+      catId as string,
+      catRegistry.tryGet(catId as string)?.config?.breedId,
+      ((): string | undefined => {
+        try {
+          return getCatModel(catId as string);
+        } catch {
+          return undefined;
+        }
+      })(),
+    ),
   };
 
   const auditLog = getEventAuditLog();
@@ -489,6 +791,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     parentCtx,
   );
 
+  // F153 Phase J AC-J3: per-invocation tool span tracker (real-duration MCP tool spans).
+  // Used when provider emits toolUseId; falls back to legacy recordToolUseSpan when not.
+  const toolSpanTracker = new ToolSpanTracker(invocationSpan, catId as string);
+
   // F153: Expose invocation span to caller + persist trace context for A2A propagation
   if (params.invocationSpanRef) params.invocationSpanRef.current = invocationSpan;
   const sc = invocationSpan.spanContext();
@@ -534,7 +840,25 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // The PATCH bind endpoint writes to sessionChainStore but not sessionManager,
     // so a freshly-bound session would be missed if we gate on sessionId being truthy.
     const sessionChainActive = isSessionChainEnabled(catId);
-    if (deps.sessionChainStore && sessionChainActive) {
+    if (isBgCarrier && bgChainKey && deps.sessionChainStore && sessionChainActive) {
+      // F198 Bug #3: bg resolves its resume target via the chainKey record's
+      // latestResumeSessionId (the daemon's previous fork UUID). bg reuses one
+      // record across daemon rotation instead of seal+create — but still
+      // respects an EXTERNAL seal (manual / threshold / reaper): a sealed record
+      // must NOT be resumed (mirrors the non-bg "no active → no resume" path).
+      try {
+        const bgRec = await preflightRace(
+          Promise.resolve(deps.sessionChainStore.getByChainKey(bgChainKey)),
+          'getByChainKey',
+          signal,
+        );
+        // Cloud review P1: only resume an ACTIVE bg record — start fresh if sealed.
+        sessionId = bgRec?.status === 'active' ? bgRec.latestResumeSessionId : undefined;
+      } catch {
+        // Fail-closed: start fresh if the chainKey read fails.
+        sessionId = undefined;
+      }
+    } else if (deps.sessionChainStore && sessionChainActive) {
       // Reaper: reconcile any sessions stuck in 'sealing' > 5 minutes (best-effort).
       if (deps.sessionSealer) {
         try {
@@ -599,10 +923,14 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       }
     }
 
-    // F118: Acquire per-cliSessionId mutex to prevent concurrent resume
-    if (sessionId) {
+    // F118: Acquire per-conversation mutex to prevent concurrent resume.
+    // F198 Bug #3: bg keys on the stable chainKey — sessionId rotates per daemon
+    // fork, so keying on it would let two `--resume` turns race. Non-bg keeps
+    // the cliSessionId key unchanged.
+    const mutexKey = isBgCarrier && bgChainKey ? bgChainKey : sessionId;
+    if (mutexKey) {
       try {
-        sessionMutexRelease = await sessionMutex.acquire(sessionId, signal);
+        sessionMutexRelease = await sessionMutex.acquire(mutexKey, signal);
       } catch (err) {
         // Abort while queued is not a runtime error — clean exit
         if (signal?.aborted) {
@@ -624,6 +952,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
     // Resolve workingDirectory from thread's projectPath
     let workingDirectory: string | undefined;
+    let bootcampWorkspaceError: Error | undefined;
     if (threadStore) {
       try {
         const thread = await preflightRace(Promise.resolve(threadStore.get(threadId)), 'threadStore.get', signal);
@@ -635,10 +964,20 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           if (!thread.projectPath.startsWith('games/') && isUnderAllowedRoot(thread.projectPath)) {
             workingDirectory = thread.projectPath;
           }
+        } else if (thread?.bootcampState) {
+          const bootcampWorkspace = await resolveBootcampWorkspaceRoot();
+          if (bootcampWorkspace.ok) {
+            workingDirectory = bootcampWorkspace.projectPath;
+          } else {
+            bootcampWorkspaceError = new Error(bootcampWorkspace.error);
+          }
         }
       } catch {
         // Thread store timeout or error — proceed without workingDirectory
       }
+    }
+    if (bootcampWorkspaceError) {
+      throw bootcampWorkspaceError;
     }
     const workingProjectRoot = workingDirectory ? findMonorepoRoot(workingDirectory) : undefined;
 
@@ -1019,10 +1358,60 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     const mcpServerPath = configuredMcpServerPath
       ? resolve(process.cwd(), configuredMcpServerPath)
       : resolveDefaultClaudeMcpServerPath();
+
+    // F203 Phase I: compile L0 for OpenCode BEFORE the runtime config condition.
+    // OpenCodeAgentService.injectsL0Natively() = true, so the route layer does
+    // pack-only. We MUST ensure every OpenCode invocation path gets compiled L0
+    // in the runtime config's instructions array — otherwise the cat loses its
+    // identity/governance/roster post-compaction (砚砚 P1 guard).
+    //
+    // The L0 file is written into the per-invocation config dir (P2: no separate
+    // dir leak — cleaned up together with the runtime config in finally).
+    let openCodeL0InstructionPaths: string[] | undefined;
+    if (provider === 'opencode') {
+      try {
+        // Use service's injectable l0CompilerFn if available (test seam, like Claude/Codex),
+        // otherwise fall back to the subprocess compiler (production path).
+        // l0CompilerFn via typed guard (no `any` — L0InjectableAgentService in types.ts).
+        // hasL0CompilerSeam guarantees l0CompilerFn is a function (type guard checks typeof),
+        // but TS narrows to `L0CompilerFn | undefined`. Use `?? compileL0ViaSubprocess` as
+        // the undefined branch is unreachable post-guard — avoids biome noNonNullAssertion.
+        const compilerFn = (hasL0CompilerSeam(service) && service.l0CompilerFn) || compileL0ViaSubprocess;
+
+        const l0Content = await compilerFn({ catId: catId as string });
+        // Write compiled L0 into the runtime config dir (created below or reused).
+        const safeCatId = (catId as string).replace(/[^a-zA-Z0-9._-]+/g, '-');
+        const safeInvocationId = invocationId.replace(/[^a-zA-Z0-9._-]+/g, '-');
+        const configDir = join(projectRoot, '.cat-cafe', `oc-config-${safeCatId}-${safeInvocationId}`);
+        mkdirSync(configDir, { recursive: true });
+        const l0Path = join(configDir, 'system-prompt-l0.md');
+        writeFileSync(l0Path, l0Content, 'utf8');
+        // Resolve OPENCODE.md from project root (OpenCode-specific addendum: question deny, interaction channel).
+        const opencodeInstructionsPath = resolve(projectRoot, 'OPENCODE.md');
+        openCodeL0InstructionPaths = [l0Path, opencodeInstructionsPath];
+        log.debug(
+          { catId, invocationId, l0Path, opencodeInstructionsPath, l0Bytes: l0Content.length },
+          'Compiled L0 for OpenCode (F203 Phase I)',
+        );
+      } catch (err) {
+        // Fail-closed: L0 compilation failure = cat invocation without identity is dangerous.
+        // Log and throw — do not proceed with a naked invocation.
+        log.error(
+          { catId, invocationId, err: err instanceof Error ? err.message : String(err) },
+          'F203 Phase I: L0 compilation failed for OpenCode — fail-closed, aborting invocation',
+        );
+        throw new Error(
+          `F203 fail-closed: cannot compile L0 for OpenCode cat ${catId as string}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // authType is either 'api_key' or 'oauth' — both need runtime config (MCP +
+    // L0 + model routing). The only difference is credential injection below.
+    const isApiKey = resolvedAccount?.authType === 'api_key';
     if (
       provider === 'opencode' &&
       resolvedAccount != null &&
-      resolvedAccount.authType === 'api_key' &&
       effectiveModel &&
       effectiveProviderName &&
       (hasExplicitOcProvider || !getOpenCodeKnownModels().has(effectiveModel) || mcpServerPath)
@@ -1044,7 +1433,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         defaultModel: effectiveModel,
         apiType,
         hasBaseUrl: Boolean(resolvedAccount.baseUrl),
+        omitProviderAuth: !isApiKey,
         mcpServerPath,
+        // F203 Phase I: inject compiled L0 + OPENCODE.md into instructions.
+        instructions: openCodeL0InstructionPaths,
       } as const;
       openCodeRuntimeConfigPath = writeOpenCodeRuntimeConfig(
         projectRoot,
@@ -1053,8 +1445,16 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         runtimeConfigOptions,
       );
       callbackEnv.OPENCODE_CONFIG = openCodeRuntimeConfigPath;
-      if (resolvedAccount.apiKey) callbackEnv[OC_API_KEY_ENV] = resolvedAccount.apiKey;
-      if (resolvedAccount.baseUrl) callbackEnv[OC_BASE_URL_ENV] = resolvedAccount.baseUrl;
+      // Credentials: only for api_key auth.
+      // OAuth users authenticate through OpenCode's native flow; their runtime
+      // config omits provider auth placeholders and signals buildEnv to preserve
+      // native auth instead of clearing it for the custom provider config path.
+      if (isApiKey) {
+        if (resolvedAccount.apiKey) callbackEnv[OC_API_KEY_ENV] = resolvedAccount.apiKey;
+        if (resolvedAccount.baseUrl) callbackEnv[OC_BASE_URL_ENV] = resolvedAccount.baseUrl;
+      } else {
+        callbackEnv[OC_INSTRUCTIONS_ONLY_ENV] = '1';
+      }
       log.debug(
         {
           catId,
@@ -1070,6 +1470,26 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           runtimeConfigSummary: summarizeOpenCodeRuntimeConfigForDebug(runtimeConfigOptions),
         },
         'Prepared OpenCode runtime config',
+      );
+    } else if (provider === 'opencode' && openCodeL0InstructionPaths) {
+      // F203 Phase I safety net (砚砚 P1 three-path guard): when the full runtime
+      // config condition is NOT met (e.g. subscription mode, no resolvedAccount,
+      // known legacy model without MCP), we STILL need instructions in a config
+      // so the cat doesn't lose its L0 identity.
+      //
+      // P1-1 fix: use instructions-only config (no provider block) + signal
+      // OC_INSTRUCTIONS_ONLY_ENV so buildEnv does NOT clear native auth.
+      openCodeRuntimeConfigPath = writeOpenCodeInstructionsOnlyConfig(
+        projectRoot,
+        catId as string,
+        invocationId,
+        openCodeL0InstructionPaths,
+      );
+      callbackEnv.OPENCODE_CONFIG = openCodeRuntimeConfigPath;
+      callbackEnv[OC_INSTRUCTIONS_ONLY_ENV] = '1';
+      log.info(
+        { catId, invocationId, openCodeConfigPath: openCodeRuntimeConfigPath },
+        'F203 Phase I: wrote instructions-only OpenCode config (fallback path, auth preserved)',
       );
     }
 
@@ -1108,10 +1528,21 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // F070-P2: missionPrefix (dispatch context) is prepended for external projects
     const promptWithMission = missionPrefix ? `${missionPrefix}\n\n${prompt}` : prompt;
 
-    const effectivePrompt =
+    let effectivePrompt =
       injectSystemPrompt && params.systemPrompt
         ? `${params.systemPrompt}\n\n---\n\n${promptWithMission}`
         : `${promptWithMission}`;
+
+    // F225 软层: deliver a pending context-management hint into the cat's actual
+    // prompt (a system_info output can't reach cat cognition — see
+    // context-management-hint). Queued on the prior warn turn; independent of
+    // injectSystemPrompt so it lands even on resumes that skip identity re-injection.
+    const contextHintPrefix = takeContextHintPrefix(compressionKey);
+    if (contextHintPrefix) {
+      effectivePrompt = `${contextHintPrefix}\n\n---\n\n${effectivePrompt}`;
+    }
+
+    effectivePrompt = appendTranscriptPathHints(effectivePrompt, TRANSCRIPT_DIR, threadId);
 
     capturePromptIfEnabled({
       catId: catId as string,
@@ -1124,6 +1555,13 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       userPrompt: prompt,
       effectivePrompt,
       injectionDecision: { isResume, canSkipOnResume, forceReinjection, injected: injectSystemPrompt },
+      // AC-G10 (Phase G native L0 closure / KD-44): if this provider injects
+      // L0 via a native system-role channel (Claude `--system-prompt-file` /
+      // Codex `-c developer_instructions=`), the bridge will best-effort
+      // fetch the compiled L0 and stamp it onto `nativeSystemPrompt`. Hot
+      // path stays non-blocking — the bridge handles fetch async + fail-safe
+      // (see comment block in prompt-capture-bridge.ts).
+      nativeL0Provider: service.injectsL0Natively?.() ?? false,
     });
 
     // F089 Phase 2+3: Create tmux spawn override for agent-in-pane execution
@@ -1161,14 +1599,40 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       ...(spawnCliOverride ? { spawnCliOverride } : {}),
       invocationId,
       ...(sessionId ? { cliSessionId: sessionId } : {}),
-      // F118 Phase B: Enable liveness probe with defaults for all CLI providers
-      // #774: stallAutoKill — auto-kill on idle-silent stall (~5min) instead of waiting 30min
-      livenessProbe: { stallAutoKill: true },
+      // F118 Phase B: Enable liveness probe for all CLI providers.
+      // #774: stallAutoKill clears truly stuck idle-silent CLIs before F216's 10m stale-processing guard.
+      // #854: Windows cannot sample CPU; suppress suspected_stall there so CLI_TIMEOUT_MS stays binding.
+      livenessProbe: { stallAutoKill: true, stallWarningMs: CAT_INVOCATION_STALL_AUTO_KILL_MS },
       ...(catConfig?.cliConfigArgs?.length ? { cliConfigArgs: catConfig.cliConfigArgs } : {}),
       parentSpan: invocationSpan,
     };
 
     let lastErrorMessage: string | undefined;
+    const userVisibleOutputSessionIds = new Set<string>();
+    const userVisibleOutputCountedSessionIds = new Set<string>();
+
+    const recordActiveSessionUserVisibleOutput = async (): Promise<void> => {
+      if (!deps.sessionChainStore || !sessionChainActive) return;
+      try {
+        // F198 Bug #3: bg looks up its record by the stable chainKey, not
+        // getActive (a sealed/rotated bg record must still be found).
+        const activeRec =
+          isBgCarrier && bgChainKey
+            ? await deps.sessionChainStore.getByChainKey(bgChainKey)
+            : await deps.sessionChainStore.getActive(catId, threadId);
+        if (!activeRec) return;
+        userVisibleOutputSessionIds.add(activeRec.id);
+        if ((activeRec.messageCount ?? 0) !== 0) return;
+        await deps.sessionChainStore.update(activeRec.id, {
+          messageCount: 1,
+          updatedAt: Date.now(),
+        });
+        userVisibleOutputCountedSessionIds.add(activeRec.id);
+        sessionRounds.record(1, { [AGENT_ID]: catId });
+      } catch {
+        /* best-effort: messageCount miss won't break invocation */
+      }
+    };
 
     const processMessage = async (msg: AgentMessage): Promise<AgentMessage[]> => {
       const outputs: AgentMessage[] = [];
@@ -1189,8 +1653,58 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           // Redis write failure — session won't persist, but chain continues
         }
 
-        // F24: Ensure SessionRecord exists for this session
-        if (deps.sessionChainStore && sessionChainActive) {
+        // F198 Phase C P1-1: register bg carrier daemon session for Hub observability.
+        // Only fires when the provider is claude-bg; msg.sessionId is the daemon shortId.
+        if (deps.agentPaneRegistry && msg.metadata?.provider === 'claude-bg') {
+          deps.agentPaneRegistry.registerBgCarrier({
+            invocationId,
+            catId,
+            daemonShortId: msg.sessionId,
+            threadId,
+          });
+        }
+
+        // F24 + F198 Bug #3: ensure a SessionRecord exists for this session.
+        if (isBgCarrier && bgChainKey && deps.sessionChainStore && sessionChainActive) {
+          // bg: look up the conversation by its stable chainKey. ACTIVE record →
+          // just update cliSessionId to the current daemon shortId (NO seal+create
+          // — that cascade is the multi-turn amnesia root cause). Missing (first
+          // round) OR externally sealed (cloud review P1: manual/threshold/reaper)
+          // → create a fresh record carrying the chainKey; the index re-points to
+          // it and the sealed record is NOT revived. (done bookkeeping still uses
+          // getByChainKey without a status filter for write tolerance.)
+          try {
+            const bgRec = await deps.sessionChainStore.getByChainKey(bgChainKey);
+            if (bgRec && bgRec.status === 'active') {
+              if (bgRec.cliSessionId !== msg.sessionId) {
+                await deps.sessionChainStore.update(bgRec.id, {
+                  cliSessionId: msg.sessionId,
+                  ...(params.continuityCapsule ? { continuityCapsule: params.continuityCapsule } : {}),
+                  updatedAt: Date.now(),
+                });
+              } else if (params.continuityCapsule) {
+                await deps.sessionChainStore.update(bgRec.id, {
+                  continuityCapsule: params.continuityCapsule,
+                });
+              }
+            } else {
+              const newRec = await deps.sessionChainStore.create({
+                cliSessionId: msg.sessionId,
+                threadId,
+                catId,
+                userId,
+                chainKey: bgChainKey,
+              });
+              if (params.continuityCapsule) {
+                await deps.sessionChainStore.update(newRec.id, {
+                  continuityCapsule: params.continuityCapsule,
+                });
+              }
+            }
+          } catch {
+            // Best-effort — don't break the invocation chain
+          }
+        } else if (deps.sessionChainStore && sessionChainActive) {
           try {
             const existing = await deps.sessionChainStore.getActive(catId, threadId);
             if (existing) {
@@ -1208,14 +1722,48 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                   // Use requestSeal + finalize to ensure transcript/digest are written,
                   // not bare update(status:'sealed') which skips flush.
                   let sealAccepted = false;
+                  const sealReason = antigravityReplacementSealReason(msg, existing.cliSessionId);
                   if (deps.sessionSealer) {
                     try {
                       const result = await deps.sessionSealer.requestSeal({
                         sessionId: existing.id,
-                        reason: 'cli_session_replaced',
+                        reason: sealReason,
                       });
                       sealAccepted = result.accepted;
                       if (sealAccepted) {
+                        const runtimeLifecycle = msg.sessionLifecycle;
+                        if (runtimeLifecycle && deps.transcriptWriter) {
+                          const sealTimestamp = Date.now();
+                          deps.transcriptWriter.appendEvent(
+                            {
+                              sessionId: existing.id,
+                              threadId,
+                              catId: existing.catId,
+                              cliSessionId: existing.cliSessionId,
+                              seq: existing.seq,
+                            },
+                            {
+                              type: 'system_info',
+                              catId,
+                              content: JSON.stringify({
+                                type: 'antigravity_runtime_lifecycle',
+                                runtime: runtimeLifecycle.runtime,
+                                runtimeSessionId: runtimeLifecycle.runtimeSessionId,
+                                previousRuntimeSessionId: runtimeLifecycle.previousRuntimeSessionId,
+                                sealReason,
+                                drainResult: runtimeLifecycle.drainResult,
+                                degraded: runtimeLifecycle.degraded === true,
+                                unexpectedRuntimeSessionSwitch:
+                                  sealReason === UNEXPECTED_RUNTIME_SESSION_SWITCH_SEAL_REASON,
+                                ...(runtimeLifecycle.degradedReason
+                                  ? { degradedReason: runtimeLifecycle.degradedReason }
+                                  : {}),
+                              }),
+                              timestamp: sealTimestamp,
+                            },
+                            invocationId,
+                          );
+                        }
                         deps.sessionSealer.finalize({ sessionId: existing.id }).catch(() => {});
                       }
                     } catch {
@@ -1226,7 +1774,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                     const now = Date.now();
                     await deps.sessionChainStore.update(existing.id, {
                       status: 'sealed',
-                      sealReason: 'cli_session_replaced',
+                      sealReason,
                       sealedAt: now,
                       updatedAt: now,
                     });
@@ -1280,6 +1828,26 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           }
         }
 
+        if (deps.runtimeSessionStore && deps.sessionChainStore && sessionChainActive) {
+          try {
+            const activeRec = await deps.sessionChainStore.getActive(catId, threadId);
+            if (activeRec) {
+              await syncAntigravityRuntimeMetadata({
+                runtimeSessionStore: deps.runtimeSessionStore,
+                sessionChainStore: deps.sessionChainStore,
+                activeRec,
+                msg,
+                userVisibleOutputSessionIds,
+                threadId,
+                catId,
+                userId,
+              });
+            }
+          } catch (err) {
+            log.warn({ threadId, catId, err }, 'Antigravity runtime metadata sync failed');
+          }
+        }
+
         // Push session info as system_info for frontend status panel
         // Include sessionSeq if SessionChainStore is available
         let sessionSeq: number | undefined;
@@ -1330,17 +1898,45 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
         // Increment session messageCount (best-effort).
         // This counter is critical for unseal safety: empty sessions (0 messages)
-        // can be displaced, but sessions with messages must not be silently sealed.
-        if (deps.sessionChainStore && sessionChainActive) {
+        // can be displaced, but sessions with user-visible output must not be
+        // silently sealed or folded away before a final done event arrives.
+        if (isBgCarrier && bgChainKey && deps.sessionChainStore && sessionChainActive) {
+          // F198 Bug #3: bg updates its chainKey record — messageCount (unless
+          // already counted this turn via recordActiveSessionUserVisibleOutput)
+          // + latestResumeSessionId (the daemon's new fork UUID from done
+          // metadata = the NEXT round's `--resume` target).
+          try {
+            const bgRec = await deps.sessionChainStore.getByChainKey(bgChainKey);
+            if (bgRec) {
+              const countThisTurn = !userVisibleOutputCountedSessionIds.has(bgRec.id);
+              const newCount = (bgRec.messageCount ?? 0) + 1;
+              const resumeSessionId = msg.metadata?.resumeSessionId;
+              const updateResume =
+                typeof resumeSessionId === 'string' && resumeSessionId !== bgRec.latestResumeSessionId;
+              await deps.sessionChainStore.update(bgRec.id, {
+                updatedAt: Date.now(),
+                ...(countThisTurn ? { messageCount: newCount } : {}),
+                ...(updateResume ? { latestResumeSessionId: resumeSessionId } : {}),
+              });
+              if (countThisTurn) {
+                sessionRounds.record(newCount, { [AGENT_ID]: catId });
+              }
+            }
+          } catch {
+            /* best-effort: messageCount miss won't break invocation */
+          }
+        } else if (deps.sessionChainStore && sessionChainActive) {
           try {
             const activeRec = await deps.sessionChainStore.getActive(catId, threadId);
             if (activeRec) {
-              const newCount = (activeRec.messageCount ?? 0) + 1;
-              await deps.sessionChainStore.update(activeRec.id, {
-                messageCount: newCount,
-                updatedAt: Date.now(),
-              });
-              sessionRounds.record(newCount, { [AGENT_ID]: catId });
+              if (!userVisibleOutputCountedSessionIds.has(activeRec.id)) {
+                const newCount = (activeRec.messageCount ?? 0) + 1;
+                await deps.sessionChainStore.update(activeRec.id, {
+                  messageCount: newCount,
+                  updatedAt: Date.now(),
+                });
+                sessionRounds.record(newCount, { [AGENT_ID]: catId });
+              }
             }
           } catch {
             /* best-effort: messageCount miss won't break invocation */
@@ -1436,6 +2032,11 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
           // F24: Compute and emit context health (only when session chain is enabled)
           if (sessionChainActive) {
+            // #679: Gemini CLI token stats are cumulative across all turns — not usable
+            // for context fill. Skip entire context_health block (raw usage still in
+            // invocation_usage above). Guard auto-disables when lastTurnInputTokens exists.
+            const isCumulativeOnly =
+              msg.metadata.usage.isCumulativeUsage === true && msg.metadata.usage.lastTurnInputTokens == null;
             // Use lastTurnInputTokens (per-API-call) for accurate context fill,
             // then fallback to aggregated inputTokens, and finally totalTokens
             // for providers (Gemini CLI) that only expose a total count.
@@ -1448,7 +2049,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                   ? 'input'
                   : msg.metadata.usage.totalTokens != null
                     ? 'total'
-                    : null;
+                    : undefined;
             const usedTokens =
               usedFrom === 'last_turn'
                 ? msg.metadata.usage.lastTurnInputTokens!
@@ -1457,7 +2058,21 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                   : usedFrom === 'total'
                     ? msg.metadata.usage.totalTokens!
                     : 0;
-            if (windowSize && usedTokens > 0) {
+            if (windowSize && usedTokens > 0 && isCumulativeOnly) {
+              log.warn(
+                {
+                  catId,
+                  threadId,
+                  invocationId,
+                  cumulativeUsedTokens: usedTokens,
+                  windowSize,
+                  usedFrom,
+                },
+                'Gemini cumulative-only usage observed; skipping context_health and auto-seal',
+              );
+              geminiContextFallback.add(1, { [AGENT_ID]: catId, [TRIGGER]: 'no_per_turn_signal' });
+            }
+            if (windowSize && usedTokens > 0 && !isCumulativeOnly) {
               const source: ContextHealth['source'] =
                 msg.metadata.usage.contextWindowSize != null && usedFrom !== 'total' ? 'exact' : 'approx';
               const health: ContextHealth = {
@@ -1465,6 +2080,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                 windowTokens: windowSize,
                 fillRatio: Math.min(usedTokens / windowSize, 1.0),
                 source,
+                usedFrom,
                 measuredAt: Date.now(),
               };
               // Update SessionRecord (best-effort): persist health + usage snapshot
@@ -1530,9 +2146,24 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                     switch (action.type) {
                       case 'none':
                         break;
-                      case 'warn':
-                        // warn is already emitted via context_health system_info above
+                      case 'warn': {
+                        // F225 软层: queue a cat-facing hint for the NEXT prompt. A
+                        // system_info output would never reach the cat (routing feeds only
+                        // `text` into previousResponses; ContextAssembler drops
+                        // userId='system') — so we ride the prompt-injection channel
+                        // (consumed at effectivePrompt assembly, ~line 1538). Nudges the cat
+                        // to run the context-self-management 3-axis self-check — NOT "handoff
+                        // now" (handoff-vs-compress is the cat's judgment). cKey matches the
+                        // compressionKey used there: `${userId}:${catId}:${threadId}`.
+                        queueContextHint(
+                          cKey,
+                          buildContextManagementHint({
+                            source: health.source,
+                            compressionCount: activeRecord?.compressionCount ?? 0,
+                          }),
+                        );
                         break;
+                      }
                       case 'seal':
                       case 'seal_after_compress': {
                         if (activeRecord) {
@@ -1630,12 +2261,63 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
         outputs.push({ ...msg, isFinal: isLastCat });
       } else {
-        outputs.push(attachInvocationIdToTaskProgress(msg));
-
-        // F153 Phase E: Record tool_use as child span (zero-duration; shows in trace tree with tool name + category)
-        if (msg.type === 'tool_use' && msg.toolName && invocationSpan) {
-          recordToolUseSpan(invocationSpan, catId, msg.toolName, msg.toolInput as Record<string, unknown>);
+        // F153 Phase I: agent_loop is telemetry-only — record marker, never push to outputs
+        // (no user-visible signal, no transcript write, no downstream forwarding).
+        // processMessage is an arrow function (not a loop), so `return outputs` (empty here)
+        // is the correct way to skip the remaining branches and transcript writer below.
+        if (msg.type === 'agent_loop') {
+          if (invocationSpan) recordAgentLoop(invocationSpan);
+          return outputs;
         }
+        // Main-merge: record user-visible session output (independent of toolTracing — uses raw msg).
+        if (isUserVisibleSessionOutput(msg)) {
+          await recordActiveSessionUserVisibleOutput();
+        }
+
+        // F153 Phase J AC-J2/J3 + J-B AC-J7: real-duration MCP tool spans when provider
+        // injects toolUseId, legacy zero-duration fallback otherwise (provider not yet
+        // wired per KD-41). For Slice J-B: enrich the AgentMessage with `toolTracing` so
+        // downstream `toStoredToolEvent` carries the tool span pointer into persistence
+        // (enabling AC-J8 hydrate-side real-duration restore). Push happens after enrichment
+        // (see line below) so outputs carry the enriched form, not the raw msg.
+        let enrichedMsg = msg;
+        if (msg.type === 'tool_use' && msg.toolName && invocationSpan) {
+          if (msg.toolUseId) {
+            const span = toolSpanTracker.start(msg.toolName, msg.toolUseId, msg.toolInput as Record<string, unknown>);
+            if (span) {
+              const sc = span.spanContext();
+              enrichedMsg = {
+                ...msg,
+                toolTracing: {
+                  traceId: sc.traceId,
+                  spanId: sc.spanId,
+                  parentSpanId: invocationSpan.spanContext().spanId,
+                },
+              };
+            }
+          } else {
+            recordToolUseSpan(invocationSpan, catId, msg.toolName, msg.toolInput as Record<string, unknown>);
+          }
+        }
+        // F153 Phase J AC-J2 + J-B AC-J7: pair tool_result with matching tool_use span,
+        // stamp `toolTracing` BEFORE closing the span (getContext peeks without removing),
+        // then close with status.
+        if (msg.type === 'tool_result' && msg.toolUseId) {
+          const ctx = toolSpanTracker.getContext(msg.toolUseId);
+          if (ctx && invocationSpan) {
+            enrichedMsg = {
+              ...msg,
+              toolTracing: {
+                traceId: ctx.traceId,
+                spanId: ctx.spanId,
+                parentSpanId: invocationSpan.spanContext().spanId,
+              },
+            };
+          }
+          toolSpanTracker.end(msg.toolUseId, msg.toolResultStatus ?? 'unknown');
+        }
+
+        outputs.push(attachInvocationIdToTaskProgress(enrichedMsg));
 
         // F26: Detect task management tools and emit task_progress for frontend
         if (msg.type === 'tool_use' && msg.toolName) {
@@ -1726,7 +2408,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     {
       const maskEnv = (env: Record<string, string>): Record<string, string> => {
         const masked: Record<string, string> = {};
-        for (const [k, v] of Object.entries(env)) {
+        for (const k of Object.keys(env)) {
           masked[k] = '***';
         }
         return masked;
@@ -1769,6 +2451,9 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       let suppressedContextOverflowError: AgentMessage | undefined;
       let suppressedTransientCliError: AgentMessage | undefined;
       let suppressedTimeoutError: AgentMessage | undefined;
+      // F215: Suppress malformed tool-call error for seal+fresh-retry (AC-C1/C2).
+      // Also suppress the system_info malformed_toolcall_detected signal that precedes the error.
+      let suppressedMalformedError: AgentMessage | undefined;
       let shouldRetryWithoutSession = false;
       let shouldRetryOnTransientCliExit = false;
       let attemptHasContentOutput = false;
@@ -1784,7 +2469,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         if (iterResult.done) break;
         const msg = iterResult.value;
         // F149: provider_signal / liveness_signal must NOT reset timeout — prevents "续命"
-        if (msg.type !== 'provider_signal' && msg.type !== 'liveness_signal') resetInvocationTimeout();
+        // F198 Phase C P2-1: status (daemon detail progress) also must NOT reset timeout —
+        // a daemon sending frequent status updates must not evade the 30-min kill deadline.
+        if (msg.type !== 'provider_signal' && msg.type !== 'liveness_signal' && msg.type !== 'status')
+          resetInvocationTimeout();
         if (shouldTrackGeminiResumeFailures && options.sessionId && msg.type === 'error') {
           const failureKind = classifyResumeFailure(msg.error);
           if (failureKind) {
@@ -1837,20 +2525,91 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           suppressedTimeoutError = msg;
           continue;
         }
+        // F215 AC-C1/C2: Suppress malformed tool-call error + preceding system_info signal
+        // → seal session + fresh-context retry (sessionId=undefined).
+        // Applies on all attempts (even without session) so a retried invocation that still
+        // produces malformed output also enters the fallback chain.
+        //
+        // BLOCKING 2 fix: malformed_toolcall_detected is emitted BEFORE the error, so we
+        // must suppress it unconditionally (not gated on suppressedMalformedError being set).
+        if (
+          msg.type === 'system_info' &&
+          (() => {
+            try {
+              return JSON.parse(msg.content ?? '{}').type === 'malformed_toolcall_detected';
+            } catch {
+              return false;
+            }
+          })()
+        ) {
+          // Internal detection signal — always suppress; never reaches user.
+          continue;
+        }
+        // P1 7th fix: only suppress malformed error (and retry) when NO content was emitted yet.
+        // Other self-heal paths (prompt limit, context overflow) all guard on !attemptHasContentOutput.
+        // Without this guard, a multi-step run that used a tool then ended with a malformed turn
+        // would re-run the original prompt from scratch — duplicating tool actions.
+        if (msg.type === 'error' && isMalformedToolCallError(msg.error) && !attemptHasContentOutput) {
+          suppressedMalformedError = msg;
+          continue;
+        }
+        // F215 AC-B6 UX fix: when content was already emitted, the malformed error must NOT reach
+        // the user with "系统已触发恢复流程" (a lie — no retry fires when attemptHasContentOutput=true).
+        // Replace the raw error with an honest partial-output text notice.
+        if (msg.type === 'error' && isMalformedToolCallError(msg.error) && attemptHasContentOutput) {
+          log.warn(
+            { catId, error: msg.error },
+            '[F215] Malformed after content output — replacing misleading error with partial-output notice',
+          );
+          const notice: AgentMessage = {
+            type: 'text',
+            catId: catId as CatId,
+            content: `\n\n🐾 手抖了——最后一步没完成。上面的内容已经送到了，可以追问或让其他猫猫接着做。`,
+            timestamp: Date.now(),
+          };
+          for await (const out of streamProcessedOutputs(notice)) {
+            yield out;
+          }
+          continue;
+        }
 
         if (
           suppressedMissingSessionError ||
           suppressedPromptLimitError ||
           suppressedContextOverflowError ||
           suppressedTransientCliError ||
-          suppressedTimeoutError
+          suppressedTimeoutError ||
+          suppressedMalformedError
         ) {
           if (msg.type === 'done') {
+            // F215 AC-C1: Seal malformed session before fresh retry.
+            if (suppressedMalformedError && deps.sessionSealer && deps.sessionChainStore) {
+              try {
+                const activeRec = await deps.sessionChainStore.getActive(catId as CatId, threadId);
+                if (activeRec) {
+                  const sealResult = await deps.sessionSealer.requestSeal({
+                    sessionId: activeRec.id,
+                    reason: 'malformed_toolcall',
+                  });
+                  if (sealResult.accepted) {
+                    sessionManager.delete(userId, catId, threadId).catch(() => {});
+                    deps.sessionSealer.finalize({ sessionId: activeRec.id }).catch(() => {});
+                    log.info(
+                      { catId, threadId, invocationId, sessionId: activeRec.id },
+                      '[F215] Sealed malformed session for fresh-context retry',
+                    );
+                  }
+                }
+              } catch {
+                /* best-effort seal */
+              }
+            }
             shouldRetryWithoutSession = Boolean(
               suppressedMissingSessionError ||
                 suppressedPromptLimitError ||
                 suppressedContextOverflowError ||
-                suppressedTimeoutError,
+                suppressedTimeoutError ||
+                suppressedMalformedError,
             );
             shouldRetryOnTransientCliExit = Boolean(suppressedTransientCliError);
             break;
@@ -1886,6 +2645,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
             }
             suppressedTimeoutError = undefined;
           }
+          // F215: Clear malformed error — will be re-evaluated on retry.
+          if (suppressedMalformedError) {
+            suppressedMalformedError = undefined;
+          }
         }
 
         // F149: Map provider_signal / liveness_signal → system_info for frontend delivery
@@ -1901,9 +2664,19 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           msg.type !== 'done' &&
           msg.type !== 'session_init' &&
           msg.type !== 'provider_signal' &&
-          msg.type !== 'liveness_signal'
+          msg.type !== 'liveness_signal' &&
+          msg.type !== 'status'
         ) {
-          attemptHasContentOutput = true;
+          // F215 hotfix: attemptHasContentOutput must only be set by replay-sensitive types
+          // (text / tool_use / tool_result). system_info (rate_limit_event / agent_loop /
+          // timeout_diagnostics) and other metadata MUST NOT prevent malformed recovery —
+          // they carry no model output that would be duplicated on retry.
+          // Bug: system_info from rate_limit_event precedes malformed turn → sets
+          // attemptHasContentOutput=true → malformed suppress guard !attemptHasContentOutput
+          // fails → seal/fresh-retry/46接力 all skipped → bare malformed error leaks to user.
+          if (isUserVisibleSessionOutput(msg)) {
+            attemptHasContentOutput = true;
+          }
           // Substantive = real model output, excludes system_info (e.g. timeout_diagnostics).
           if (msg.type !== 'system_info') {
             attemptHasSubstantiveOutput = true;
@@ -1933,7 +2706,9 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
             ? 'context_window_overflow'
             : suppressedTimeoutError
               ? 'cli_timeout'
-              : 'missing_session';
+              : suppressedMalformedError
+                ? 'malformed_toolcall'
+                : 'missing_session';
         log.info(
           {
             catId,
@@ -2018,6 +2793,67 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           yield out;
         }
       }
+      // F215 AC-C3/AC-D1: All retries exhausted with malformed result.
+      // BLOCKING 1 fix: emit the relay card as a `text` message (user-visible) THEN emit
+      // the `system_info` signal so route-serial can detect and push opus-4.6 to worklist.
+      // This keeps the user-visible card decoupled from the routing signal.
+      if (suppressedMalformedError) {
+        log.warn(
+          { catId, threadId, invocationId },
+          '[F215] Malformed tool-call recovery exhausted — emitting 46接力 card (AC-C3)',
+        );
+        // 1. User-visible relay card (text type — front-end renders naturally)
+        // BLOCKING 4 fix: removed "请重新发送请求" — relay is automatic.
+        // P2 fix: neutral wording — don't promise relay success before route-serial verifies availability.
+        const cardText = [
+          '🙀 **Opus 4.8 炸毛了** —— 他这次手抖，工具调用格式写歪了，系统读不出来。',
+          '放心，**不是猫咖的问题**，是这只猫在长对话里偶尔会犯的毛病；系统已触发自动恢复，将尝试切换到备用上下文重试（如可用）。',
+          '',
+          '`[展开技术细节 ▾]` 发生了什么：claude-opus-4-8 在长对话后段，偶尔把"工具调用"写成 AI 内部旧格式，Claude Code 识别不了 | 根因：Anthropic 模型的已知问题（#49747），与猫咖无关 | 猫咖怎么兜底：自动检测异常 → 隔离问题对话 → 触发备用恢复路径（如 Opus 4.6 可用则接力）',
+        ].join('\n');
+        for await (const out of streamProcessedOutputs({
+          type: 'text' as const,
+          catId,
+          content: cardText,
+          timestamp: Date.now(),
+        })) {
+          yield out;
+        }
+        // 2. Internal routing signal — route-serial consumes this to push opus-4.6 to worklist.
+        // route-helpers.ts USER_FACING_SYSTEM_INFO_TYPES includes this type so route-serial
+        // won't append a silent_completion after seeing it.
+        for await (const out of streamProcessedOutputs({
+          type: 'system_info' as const,
+          catId,
+          content: JSON.stringify({
+            type: 'malformed_toolcall_relay_46',
+            invocationId,
+          }),
+          timestamp: Date.now(),
+        })) {
+          yield out;
+        }
+        // AC-D1: Explicit final error (not silent empty return)
+        for await (const out of streamProcessedOutputs({
+          type: 'error' as const,
+          catId,
+          error: 'malformed_toolcall: Opus 4.8 炸毛，fresh-context 重试仍失败。系统将用 Opus 4.6 接班（AC-D1）',
+          timestamp: Date.now(),
+        })) {
+          yield out;
+        }
+        // P1 #2 fix: synthesize terminal done — provider's done was consumed by the suppression
+        // path (continue). Without this, route-serial's doneMsg stays null and direct
+        // invokeSingleCat consumers never receive the terminal done/isFinal signal.
+        for await (const out of streamProcessedOutputs({
+          type: 'done' as const,
+          catId,
+          isFinal: isLastCat,
+          timestamp: Date.now(),
+        })) {
+          yield out;
+        }
+      }
       break;
     }
 
@@ -2083,6 +2919,10 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       tracing: { traceId: sc.traceId, spanId: sc.spanId, ...(parentSid ? { parentSpanId: parentSid } : {}) },
     };
   } finally {
+    // F153 Phase J AC-J4: drain any open tool spans whose tool_result never arrived
+    // (abort / error / timeout). Mirrors PR #732 mention_dispatch abort-safety pattern.
+    toolSpanTracker.endAllOrphans('aborted');
+
     // F089: Clear invocation hard timeout
     if (invocationTimer) clearTimeout(invocationTimer);
 
@@ -2143,6 +2983,8 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         deps.agentPaneRegistry.markDone(invocationId, 0);
       }
     }
+    // F198 Phase C P1-1: mark bg carrier done (always, on any terminal state)
+    deps.agentPaneRegistry?.markBgCarrierDone(invocationId);
 
     // F152: End invocation span + emit completion/error log through OTel
     // Three paths: (1) catch already handled, (2) yielded-error, (3) abort, (4) ok

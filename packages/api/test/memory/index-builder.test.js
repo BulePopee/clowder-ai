@@ -637,6 +637,7 @@ describe('IndexBuilder with embedding', () => {
     embedCallCount = 0;
     mockEmbedding = {
       isReady: () => true,
+      reprobeIfNeeded: async () => {},
       embed: async (texts) => {
         embedCallCount++;
         return texts.map(() => new Float32Array([0.5, 0.5, 0.5, 0.5]));
@@ -867,6 +868,32 @@ describe('IndexBuilder thread summary (E1/E2)', () => {
     assert.ok(item.summary.includes('Redis keyPrefix'));
   });
 
+  it('E1: rebuild updates a thread title even when summary is unchanged', async () => {
+    const { IndexBuilder } = await import('../../dist/domains/memory/IndexBuilder.js');
+
+    let title = 'Old thread title';
+    const mockThreads = [
+      {
+        id: 'thread_rename',
+        title,
+        participants: ['opus'],
+        threadMemory: { summary: 'Stable discussion summary.' },
+        lastActiveAt: 1710000000000,
+      },
+    ];
+
+    const builder = new IndexBuilder(store, docsDir, undefined, undefined, () => mockThreads);
+    await builder.rebuild();
+    assert.equal((await store.getByAnchor('thread-thread_rename')).title, 'Old thread title');
+
+    title = 'New thread title';
+    mockThreads[0].title = title;
+    const result = await builder.rebuild();
+
+    assert.equal(result.docsIndexed, 1, 'title-only changes must re-index the thread evidence row');
+    assert.equal((await store.getByAnchor('thread-thread_rename')).title, 'New thread title');
+  });
+
   it('E1: threadListFn error does not delete existing thread anchors', async () => {
     const { IndexBuilder } = await import('../../dist/domains/memory/IndexBuilder.js');
 
@@ -921,6 +948,33 @@ describe('IndexBuilder thread summary (E1/E2)', () => {
 
     const after = await store.getByAnchor('thread-thread_dirty');
     assert.ok(after.summary.includes('v2'), 'summary should be updated to v2');
+  });
+
+  it('E2: flushDirtyThreads updates a thread title even when summary is unchanged', async () => {
+    const { IndexBuilder } = await import('../../dist/domains/memory/IndexBuilder.js');
+
+    let title = 'Original searchable title';
+    const mockThreads = [
+      {
+        id: 'thread_dirty_title',
+        title,
+        participants: ['codex'],
+        threadMemory: { summary: 'Stable thread summary.' },
+        lastActiveAt: 1710000000000,
+      },
+    ];
+    const builder = new IndexBuilder(store, docsDir, undefined, undefined, () => mockThreads);
+
+    await builder.rebuild();
+    assert.equal((await store.getByAnchor('thread-thread_dirty_title')).title, 'Original searchable title');
+
+    title = 'Renamed searchable title';
+    mockThreads[0].title = title;
+    builder.markThreadDirty('thread_dirty_title');
+    const flushed = await builder.flushDirtyThreads();
+
+    assert.equal(flushed, 1, 'title-only dirty threads must be flushed');
+    assert.equal((await store.getByAnchor('thread-thread_dirty_title')).title, 'Renamed searchable title');
   });
 });
 
@@ -1057,6 +1111,121 @@ describe('IndexBuilder passage indexing (E3/E4/E5)', () => {
     assert.ok(results.length >= 1, 'depth=raw search should find thread docs');
     const threadResult = results.find((r) => r.anchor === 'thread-thread_search1');
     assert.ok(threadResult, 'should find the thread doc (via summary or passage match)');
+  });
+
+  it('indexes image contentBlocks and media_gallery alt/caption text into thread passages', async () => {
+    const { IndexBuilder } = await import('../../dist/domains/memory/IndexBuilder.js');
+
+    const mockThreads = [
+      {
+        id: 'thread_visual1',
+        title: 'Visual artifact memory',
+        participants: ['codex'],
+        threadMemory: { summary: '' },
+        lastActiveAt: Date.now(),
+      },
+    ];
+
+    const mockMessages = [
+      {
+        id: 'msg_visual1',
+        content: '',
+        contentBlocks: [{ type: 'image', url: '/uploads/topology.png', alt: 'declarative queue topology' }],
+        richBlocks: [
+          {
+            kind: 'media_gallery',
+            title: 'Architecture diagram',
+            items: [{ url: '/uploads/topology.png', caption: 'Redis stream route lanes' }],
+          },
+        ],
+        catId: 'codex',
+        threadId: 'thread_visual1',
+        timestamp: Date.now(),
+      },
+    ];
+
+    const builder = new IndexBuilder(
+      store,
+      docsDir,
+      undefined,
+      undefined,
+      () => mockThreads,
+      (tid) => {
+        if (tid === 'thread_visual1') return mockMessages;
+        return [];
+      },
+    );
+    await builder.rebuild();
+
+    const passages = store.searchPassages('declarative queue topology');
+    assert.ok(passages.length >= 1, 'image alt text should be searchable as passage content');
+    assert.equal(passages[0].docAnchor, 'thread-thread_visual1');
+
+    const galleryPassages = store.searchPassages('Redis stream route lanes');
+    assert.ok(galleryPassages.length >= 1, 'media_gallery caption text should be searchable as passage content');
+  });
+
+  it('updates existing message passages when visual block text becomes available', async () => {
+    const { IndexBuilder } = await import('../../dist/domains/memory/IndexBuilder.js');
+
+    const mockThreads = [
+      {
+        id: 'thread_visual_backfill',
+        title: 'Visual artifact backfill',
+        participants: ['codex'],
+        threadMemory: { summary: '' },
+        lastActiveAt: Date.now(),
+      },
+    ];
+
+    const baseMessage = {
+      id: 'msg_visual_backfill',
+      content: 'Existing diagram message',
+      catId: 'codex',
+      threadId: 'thread_visual_backfill',
+      timestamp: Date.now(),
+    };
+    let currentMessages = [baseMessage];
+
+    const builder = new IndexBuilder(
+      store,
+      docsDir,
+      undefined,
+      undefined,
+      () => mockThreads,
+      (tid) => {
+        if (tid === 'thread_visual_backfill') return currentMessages;
+        return [];
+      },
+    );
+
+    await builder.rebuild();
+    assert.equal(store.searchPassages('late visual alt text').length, 0, 'initial passage has no visual text');
+
+    currentMessages = [
+      {
+        ...baseMessage,
+        contentBlocks: [{ type: 'image', url: '/uploads/late.png', alt: 'late visual alt text' }],
+        richBlocks: [
+          {
+            kind: 'media_gallery',
+            items: [{ url: '/uploads/late.png', caption: 'late visual caption text' }],
+          },
+        ],
+      },
+    ];
+    await builder.rebuild();
+
+    const passages = store.searchPassages('late visual alt text');
+    assert.ok(passages.length >= 1, 'visual alt text should replace the existing passage content');
+    assert.equal(passages[0].docAnchor, 'thread-thread_visual_backfill');
+
+    const row = store
+      .getDb()
+      .prepare('SELECT content FROM evidence_passages WHERE doc_anchor = ? AND passage_id = ?')
+      .get('thread-thread_visual_backfill', 'msg-msg_visual_backfill');
+    assert.match(row.content, /late visual alt text/);
+    assert.match(row.content, /late visual caption text/);
   });
 
   it('I2: rebuild does not delete existing passages when Redis returns fewer messages', async () => {
@@ -1532,6 +1701,31 @@ Some test content.
     assert.equal(vision.provenance.tier, 'authoritative');
   });
 
+  it('discover() indexes text-bearing SVG architecture assets', async () => {
+    mkdirSync(join(docsDir, 'architecture', 'assets'), { recursive: true });
+    writeFileSync(
+      join(docsDir, 'architecture', 'assets', 'memory-map.svg'),
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400">
+  <title>Memory Recall Architecture</title>
+  <desc>Visual map for searchable diagram assets.</desc>
+  <text x="20" y="40">Capability Graph Resolver</text>
+  <text x="20" y="80"><tspan>Visual Artifact Index</tspan></text>
+</svg>
+`,
+    );
+
+    const { CatCafeScanner } = await import('../../dist/domains/memory/CatCafeScanner.js');
+    const scanner = new CatCafeScanner();
+    const results = scanner.discover(docsDir);
+
+    const svg = results.find((r) => r.item.anchor === 'doc:architecture/assets/memory-map');
+    assert.ok(svg, 'should discover SVG visual asset text');
+    assert.equal(svg.item.sourcePath, 'architecture/assets/memory-map.svg');
+    assert.ok(svg.item.summary.includes('Capability Graph Resolver'));
+    assert.ok(svg.item.summary.includes('Visual Artifact Index'));
+    assert.equal(svg.provenance.tier, 'derived');
+  });
+
   it('discover() splits lessons-learned.md', async () => {
     writeFileSync(
       join(docsDir, 'lessons-learned.md'),
@@ -1586,6 +1780,53 @@ Content for single file parse.
     assert.ok(result, 'should parse single file');
     assert.equal(result.item.anchor, 'F100');
     assert.equal(result.provenance.tier, 'authoritative');
+  });
+
+  it('discover() skips generated thread export dumps under discussion trees', async () => {
+    mkdirSync(join(docsDir, 'discussions', 'exported-threads'), { recursive: true });
+    mkdirSync(join(docsDir, 'archive', '2026-02', 'discussions', 'exported-threads'), { recursive: true });
+    writeFileSync(
+      join(docsDir, 'discussions', 'design-note.md'),
+      `---
+doc_kind: discussion
+---
+
+# Design Note
+
+Human-curated discussion content.
+`,
+    );
+    writeFileSync(
+      join(docsDir, 'discussions', 'exported-threads', 'thread-thread_abc.md'),
+      `# 对话记录: raw export
+
+- **ID**: thread_abc
+
+Raw generated transcript dump.
+`,
+    );
+    writeFileSync(
+      join(docsDir, 'archive', '2026-02', 'discussions', 'exported-threads', 'thread-thread_def.md'),
+      `# 对话记录: archived raw export
+
+- **ID**: thread_def
+
+Raw generated transcript dump.
+`,
+    );
+
+    const { CatCafeScanner } = await import('../../dist/domains/memory/CatCafeScanner.js');
+    const scanner = new CatCafeScanner();
+    const results = scanner.discover(docsDir);
+
+    assert.ok(
+      results.some((r) => r.item.sourcePath === 'discussions/design-note.md'),
+      'curated discussion docs should still be indexed',
+    );
+    assert.ok(
+      results.every((r) => !r.item.sourcePath?.includes('exported-threads/')),
+      'generated thread export dumps must not enter evidence docs',
+    );
   });
 });
 
@@ -1973,6 +2214,15 @@ describe('IndexBuilder indexing version auto-rebuild', () => {
   afterEach(() => {
     store.close();
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('stays at or above 5 to backfill visual artifact searchable text', async () => {
+    const { INDEXING_VERSION } = await import('../../dist/domains/memory/IndexBuilder.js');
+
+    assert.ok(
+      INDEXING_VERSION >= 5,
+      'INDEXING_VERSION must stay at or above 5 so existing visual artifacts get searchable text backfilled',
+    );
   });
 
   it('re-indexes unchanged files when INDEXING_VERSION increases', async () => {

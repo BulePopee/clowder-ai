@@ -1,10 +1,11 @@
 'use client';
 
+import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
 import { HubCallbackAuthPanel } from './HubCallbackAuthPanel';
+import { HubEvalTab } from './HubEvalTab';
 import { TraceBrowser } from './HubTraceTree';
-import { settingsResourceCardClass } from './SettingsResourceCard';
 
 interface HealthData {
   status: 'healthy' | 'degraded';
@@ -22,23 +23,24 @@ interface MetricsSnapshot {
   metrics: Record<string, number>;
 }
 
-type SubTab = 'overview' | 'traces' | 'health' | 'callback-auth';
+type SubTab = 'overview' | 'traces' | 'health' | 'callback-auth' | 'eval';
 
 const SUB_TAB_LABELS: Record<SubTab, string> = {
   overview: '总览',
   traces: 'Traces',
   health: '健康',
   'callback-auth': 'Callback Auth',
+  eval: 'Eval',
 };
 
-const SUB_TABS: SubTab[] = ['overview', 'traces', 'health', 'callback-auth'];
+const SUB_TABS: SubTab[] = ['overview', 'traces', 'health', 'callback-auth', 'eval'];
 
 export interface HubObservabilityTabProps {
   /** F174 D2b-3: open directly into a specific subtab (e.g. when D2b-1 详情 button navigates here). */
   initialSubTab?: SubTab;
   /**
-   * F174 D2b-3 cloud P2 #1403: per-openHub nonce. Bumps on every openHub call,
-   * so a second deep-link with SAME (tab, subTab) still re-syncs subTab. Without
+   * F174 D2b-3 cloud P2 #1403: per-navigation nonce. Bumps on every deep-link,
+   * so a second navigation with SAME (tab, subTab) still re-syncs subTab. Without
    * this, value-only diff in the useEffect below would silently no-op when a
    * user manually navigated away and then re-clicked 详情.
    */
@@ -56,17 +58,17 @@ export function HubObservabilityTab({ initialSubTab = 'overview', subTabNonce }:
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 border-b border-cafe-border pb-2" data-guide-id="observability.subtabs">
+      <div className="flex items-center gap-2" data-guide-id="observability.subtabs">
         {SUB_TABS.map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setSubTab(t)}
             data-guide-id={`observability.${t}`}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`px-3 py-1.5 text-xs transition-colors ${
               subTab === t
-                ? 'bg-[var(--color-cafe-accent)]/10 text-[var(--color-cafe-accent)]'
-                : 'text-cafe-secondary hover:bg-cafe-surface-elevated'
+                ? 'border-b-2 border-[var(--console-button-emphasis)] font-semibold text-[var(--console-button-emphasis)]'
+                : 'font-medium text-cafe-muted hover:text-cafe-secondary'
             }`}
           >
             {SUB_TAB_LABELS[t]}
@@ -78,13 +80,14 @@ export function HubObservabilityTab({ initialSubTab = 'overview', subTabNonce }:
       {subTab === 'traces' && <TraceBrowser />}
       {subTab === 'health' && <HealthPanel />}
       {subTab === 'callback-auth' && <HubCallbackAuthPanel />}
+      {subTab === 'eval' && <HubEvalTab />}
     </div>
   );
 }
 
 function MetricCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className={`${settingsResourceCardClass} px-4 py-3`}>
+    <div className="rounded-lg bg-cafe-surface-elevated px-4 py-3">
       <div className="text-xs text-cafe-muted">{label}</div>
       <div className="mt-1 text-xl font-semibold text-cafe">{value}</div>
       {sub && <div className="text-xs text-cafe-secondary">{sub}</div>}
@@ -168,10 +171,13 @@ function TrendChart({
   const points = values.map((v, i) => `${i * step},${height - (v / max) * height}`).join(' ');
 
   return (
-    <div className={`${settingsResourceCardClass} p-3`}>
+    <div
+      className="rounded-lg bg-cafe-surface-elevated p-3"
+      style={{ '--dataviz-trend-line': 'var(--chart-4)' } as React.CSSProperties}
+    >
       <div className="mb-2 text-xs text-cafe-muted">{label}</div>
       <svg viewBox={`0 0 ${width} ${height}`} className="h-20 w-full" preserveAspectRatio="none">
-        <polyline points={points} fill="none" stroke="#5B9BD5" strokeWidth="2" />
+        <polyline points={points} fill="none" stroke="var(--dataviz-trend-line)" strokeWidth="2" />
       </svg>
     </div>
   );
@@ -212,11 +218,11 @@ function HealthPanel() {
       </div>
 
       {health.readiness && (
-        <div className={`${settingsResourceCardClass} p-3`}>
+        <div className="rounded-lg bg-cafe-surface-elevated p-3">
           <div className="mb-1 text-xs font-medium text-cafe-muted">Readiness Checks</div>
           {Object.entries(health.readiness.checks).map(([name, check]) => (
             <div key={name} className="flex items-center gap-2 text-xs">
-              <span className={check.ok ? 'text-conn-emerald-text' : 'text-conn-red-text'}>{check.ok ? '✓' : '✗'}</span>
+              <span className={check.ok ? 'text-conn-green-text' : 'text-conn-red-text'}>{check.ok ? '✓' : '✗'}</span>
               <span className="text-cafe">{name}</span>
               <span className="text-cafe-muted">{check.ms}ms</span>
               {check.error && <span className="text-conn-red-text">{check.error}</span>}

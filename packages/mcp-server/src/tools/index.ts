@@ -4,6 +4,19 @@
  */
 
 export {
+  audioCaptureStartInputSchema,
+  audioCaptureStatusInputSchema,
+  audioCaptureStopInputSchema,
+  audioListSourcesInputSchema,
+  audioReadTranscriptInputSchema,
+  audioTools,
+  handleAudioCaptureStart,
+  handleAudioCaptureStatus,
+  handleAudioCaptureStop,
+  handleAudioListSources,
+  handleAudioReadTranscript,
+} from './audio-tools.js';
+export {
   callbackEvidenceSearchInputSchema,
   callbackMemoryTools,
   callbackReflectInputSchema,
@@ -52,15 +65,73 @@ export {
   reviewDistillationInputSchema,
 } from './distillation-tools.js';
 export {
+  backfillEventsInputSchema,
+  eventMemoryTools,
+  handleBackfillEvents,
+  handleListEvents,
+  handleTeleport,
+  listEventsInputSchema,
+  teleportInputSchema,
+} from './event-memory-tools.js';
+export {
   evidenceTools,
   handleSearchEvidence,
   searchEvidenceInputSchema,
 } from './evidence-tools.js';
 export {
+  externalRuntimeSessionCallbackTools,
+  externalRuntimeSessionReadTools,
+  externalRuntimeSessionTools,
+  handleListExternalRuntimeSessions,
+  handleReadExternalRuntimeSession,
+  handleRegisterExternalRuntimeSession,
+  listExternalRuntimeSessionsInputSchema,
+  readExternalRuntimeSessionInputSchema,
+  registerExternalRuntimeSessionInputSchema,
+} from './external-runtime-session-tools.js';
+export {
+  fileSliceTools,
+  handleReadFileSlice,
+  readFileSliceInputSchema,
+} from './file-tools.js';
+export {
+  createFinanceQueryHandler,
+  financeQueryInputSchema,
+  financeTools,
+  handleFinanceQuery,
+} from './finance-tools.js';
+export {
   gameActionTools,
   handleSubmitGameAction,
   submitGameActionInputSchema,
 } from './game-action-tools.js';
+export {
+  graphResolveInputSchema,
+  graphTools,
+  handleGraphResolve,
+} from './graph-tools.js';
+export {
+  handlePreviewOpen,
+  handleWorkspaceNavigate,
+  hubActionTools,
+  previewOpenInputSchema,
+  workspaceNavigateInputSchema,
+} from './hub-action-tools.js';
+export {
+  handleLibraryArchive,
+  handleLibraryCreate,
+  handleLibraryDryRun,
+  handleLibraryList,
+  handleLibraryRebuild,
+  handleLibraryVerify,
+  libraryArchiveInputSchema,
+  libraryCreateInputSchema,
+  libraryDryRunInputSchema,
+  libraryLifecycleTools,
+  libraryListInputSchema,
+  libraryRebuildInputSchema,
+  libraryVerifyInputSchema,
+} from './library-lifecycle-tools.js';
 export {
   handleLimbInvoke,
   handleLimbListAvailable,
@@ -69,10 +140,18 @@ export {
   limbTools,
 } from './limb-tools.js';
 export {
-  handleReflect,
-  reflectInputSchema,
-  reflectTools,
-} from './reflect-tools.js';
+  handleRunPerspective,
+  perspectiveTools,
+  runPerspectiveInputSchema,
+} from './perspective-tools.js';
+// F192 Phase H AC-H4: cat_cafe_publish_verdict tool
+export { handlePublishVerdict, publishVerdictInputSchema, publishVerdictTools } from './publish-verdict-tool.js';
+export {
+  handleListRecent,
+  listRecentInputSchema,
+  recentTools,
+} from './recent-tools.js';
+// F193 Phase D AC-D1: reflect-tools removed (deprecated)
 export {
   handleGetRichBlockRules,
   richBlockRulesInputSchema,

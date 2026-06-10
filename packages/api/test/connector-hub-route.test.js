@@ -2,12 +2,34 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import Fastify from 'fastify';
 
 const { connectorHubRoutes } = await import('../dist/routes/connector-hub.js');
 
-const AUTH_HEADERS = { 'x-cat-cafe-user': 'owner-1' };
+const OWNER_ID = 'owner-1';
+const AUTH_HEADERS = { 'x-cat-cafe-user': OWNER_ID, 'x-test-session-user': OWNER_ID };
+const HEADER_ONLY_AUTH = { 'x-cat-cafe-user': OWNER_ID };
+const ORIGINAL_OWNER_ID = process.env.DEFAULT_OWNER_USER_ID;
+
+async function registerConnectorHub(app, opts) {
+  app.addHook('preHandler', async (request) => {
+    const sessionUser = request.headers['x-test-session-user'];
+    if (typeof sessionUser === 'string' && sessionUser.trim()) {
+      request.sessionUserId = sessionUser.trim();
+    }
+  });
+  await app.register(connectorHubRoutes, opts);
+}
+
+beforeEach(() => {
+  process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
+});
+
+afterEach(() => {
+  if (ORIGINAL_OWNER_ID === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+  else process.env.DEFAULT_OWNER_USER_ID = ORIGINAL_OWNER_ID;
+});
 
 async function buildApp(overrides = {}) {
   const listCalls = [];
@@ -37,7 +59,7 @@ async function buildApp(overrides = {}) {
   };
 
   const app = Fastify();
-  await app.register(connectorHubRoutes, { threadStore });
+  await registerConnectorHub(app, { threadStore });
   await app.ready();
   return { app, listCalls };
 }
@@ -45,7 +67,7 @@ async function buildApp(overrides = {}) {
 describe('F134 follow-up — Feishu QR bind routes', () => {
   it('POST /api/connector/feishu/qrcode returns QR payload from bind client', async () => {
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -87,7 +109,7 @@ describe('F134 follow-up — Feishu QR bind routes', () => {
     process.env.FEISHU_CONNECTION_MODE = 'webhook';
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -136,7 +158,7 @@ describe('F134 follow-up — Feishu QR bind routes', () => {
     process.env.FEISHU_VERIFICATION_TOKEN = 'vt_123';
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -180,7 +202,7 @@ describe('POST /api/connector/feishu/disconnect', () => {
     process.env.FEISHU_CONNECTION_MODE = 'websocket';
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -214,6 +236,31 @@ describe('POST /api/connector/feishu/disconnect', () => {
     assert.equal(res.statusCode, 401);
     await app.close();
   });
+
+  it('allows disconnect in single-user mode when DEFAULT_OWNER_USER_ID is not configured (issue #794)', async () => {
+    const tmpDir = mkdtempSync(join(os.tmpdir(), 'feishu-disconnect-owner-'));
+    const envFilePath = join(tmpDir, '.env');
+    writeFileSync(envFilePath, 'FEISHU_APP_ID=cli_old\nFEISHU_APP_SECRET=sec_old\n');
+    process.env.FEISHU_APP_ID = 'cli_old';
+    process.env.FEISHU_APP_SECRET = 'sec_old';
+    delete process.env.DEFAULT_OWNER_USER_ID;
+
+    const app = Fastify();
+    await registerConnectorHub(app, {
+      threadStore: {
+        async list() {
+          return [];
+        },
+      },
+      envFilePath,
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/connector/feishu/disconnect', headers: AUTH_HEADERS });
+    assert.notEqual(res.statusCode, 403, 'should not 403 in single-user mode');
+
+    await app.close();
+  });
 });
 
 describe('GET /api/connector/weixin/qrcode-status — adapter not ready', () => {
@@ -228,7 +275,7 @@ describe('GET /api/connector/weixin/qrcode-status — adapter not ready', () => 
 
     const app = Fastify();
     // Register with weixinAdapter deliberately missing (simulates gateway not started)
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -280,7 +327,7 @@ describe('GET /api/connector/weixin/qrcode-status — adapter not ready', () => 
     };
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -332,7 +379,7 @@ describe('GET /api/connector/weixin/qrcode-status — adapter not ready', () => 
     };
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -377,7 +424,7 @@ describe('POST /api/connector/weixin/disconnect', () => {
 
   it('returns 503 when adapter is not available', async () => {
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -406,7 +453,7 @@ describe('POST /api/connector/weixin/disconnect', () => {
     };
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -442,7 +489,7 @@ describe('POST /api/connector/weixin/disconnect', () => {
     };
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -486,7 +533,7 @@ describe('GET /api/connector/hub-threads', () => {
     assert.match(JSON.parse(res.body).error, /Identity required/i);
   });
 
-  it('trusts localhost origin fallback and serves default-user hub threads', async () => {
+  it('rejects localhost origin fallback without a real session', async () => {
     const { app, listCalls } = await buildApp({
       threads: [
         {
@@ -502,15 +549,12 @@ describe('GET /api/connector/hub-threads', () => {
       headers: { origin: 'http://localhost:3003' },
     });
 
-    assert.equal(res.statusCode, 200);
-    assert.deepEqual(listCalls, ['default-user']);
-    const body = JSON.parse(res.body);
-    assert.equal(body.threads.length, 1);
-    assert.equal(body.threads[0].id, 'thread-hub-browser');
+    assert.equal(res.statusCode, 401);
+    assert.deepEqual(listCalls, []);
     await app.close();
   });
 
-  it('uses the trusted header identity and returns hub threads sorted by createdAt desc', async () => {
+  it('uses the session identity and returns hub threads sorted by createdAt desc', async () => {
     const { app, listCalls } = await buildApp();
     const res = await app.inject({
       method: 'GET',
@@ -541,64 +585,15 @@ describe('GET /api/connector/hub-threads', () => {
 const { WeComBotAdapter } = await import('../dist/infrastructure/connectors/adapters/WeComBotAdapter.js');
 
 describe('GET /api/connector/status — WeCom Bot live health', () => {
-  it('exposes GitHub plugin platform with active fields and category', async () => {
-    const app = Fastify();
-    try {
-      await app.register(connectorHubRoutes, {
-        threadStore: {
-          async list() {
-            return [];
-          },
-        },
-      });
-      await app.ready();
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/connector/status',
-        headers: AUTH_HEADERS,
-      });
-      const body = JSON.parse(res.body);
-      const github = body.platforms.find((p) => p.id === 'github');
-
-      assert.ok(github, 'github platform must exist in status');
-      assert.equal(github.category, 'plugin', 'github must have category=plugin');
-      assert.deepEqual(
-        github.fields.map((field) => field.envName),
-        ['GITHUB_TOKEN', 'GITHUB_SETUP_NOISE_BOT_LOGINS', 'GITHUB_MCP_PAT'],
-      );
-    } finally {
-      await app.close();
-    }
-  });
-
-  it('IM platforms do not have category=plugin', async () => {
-    const app = Fastify();
-    try {
-      await app.register(connectorHubRoutes, {
-        threadStore: {
-          async list() {
-            return [];
-          },
-        },
-      });
-      await app.ready();
-
-      const res = await app.inject({
-        method: 'GET',
-        url: '/api/connector/status',
-        headers: AUTH_HEADERS,
-      });
-      const body = JSON.parse(res.body);
-      const imPlatforms = body.platforms.filter((p) => p.category !== 'plugin');
-
-      assert.ok(imPlatforms.length > 0, 'should have at least one IM platform');
-      for (const p of imPlatforms) {
-        assert.notEqual(p.id, 'github', 'github must not appear in IM-filtered list');
-      }
-    } finally {
-      await app.close();
-    }
+  it('rejects trusted header identity without a real session', async () => {
+    const { app } = await buildApp();
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/connector/status',
+      headers: HEADER_ONLY_AUTH,
+    });
+    assert.equal(res.statusCode, 401);
+    await app.close();
   });
 
   it('P1: shows configured=false when adapter getter returns null (not false green from env)', async () => {
@@ -608,7 +603,7 @@ describe('GET /api/connector/status — WeCom Bot live health', () => {
     process.env.WECOM_BOT_SECRET = 'some-secret';
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -649,6 +644,42 @@ describe('POST /api/connector/wecom-bot/validate', () => {
     await app.close();
   });
 
+  it('rejects trusted header identity without a real session', async () => {
+    const { app } = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/wecom-bot/validate',
+      headers: HEADER_ONLY_AUTH,
+      payload: { botId: 'bot1', secret: 'sec1' },
+    });
+    assert.equal(res.statusCode, 401);
+    await app.close();
+  });
+
+  it('rejects redacted placeholders before validating credentials', async () => {
+    const original = WeComBotAdapter.validateCredentials;
+    let validateCalled = false;
+    WeComBotAdapter.validateCredentials = async () => {
+      validateCalled = true;
+      return { valid: true };
+    };
+
+    const { app } = await buildApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/wecom-bot/validate',
+      headers: { ...AUTH_HEADERS, 'content-type': 'application/json' },
+      payload: JSON.stringify({ botId: 'bot1', secret: '••••••' }),
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.parse(res.body).error, /redacted/i);
+    assert.equal(validateCalled, false, 'redacted placeholder must be rejected before external validation');
+
+    WeComBotAdapter.validateCredentials = original;
+    await app.close();
+  });
+
   it('returns 400 when botId or secret is missing', async () => {
     const { app } = await buildApp();
     const res1 = await app.inject({
@@ -680,7 +711,7 @@ describe('POST /api/connector/wecom-bot/validate', () => {
 
     let streamStarted = false;
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -727,7 +758,7 @@ describe('POST /api/connector/wecom-bot/validate', () => {
     WeComBotAdapter.validateCredentials = async () => ({ valid: true });
 
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -790,7 +821,7 @@ describe('POST /api/connector/wecom-bot/validate', () => {
 
     let stopCalled = false;
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -820,6 +851,131 @@ describe('POST /api/connector/wecom-bot/validate', () => {
   });
 });
 
+describe('P1 — connector writes from non-loopback without configured owner', () => {
+  it('blocks connector secret writes from non-loopback IP when DEFAULT_OWNER_USER_ID is unset', async () => {
+    delete process.env.DEFAULT_OWNER_USER_ID;
+
+    const tmpDir = mkdtempSync(join(os.tmpdir(), 'connector-network-guard-'));
+    const envFilePath = join(tmpDir, '.env');
+    writeFileSync(envFilePath, 'FEISHU_APP_ID=old\nFEISHU_APP_SECRET=old\n');
+
+    const app = Fastify();
+    await registerConnectorHub(app, {
+      threadStore: {
+        async list() {
+          return [];
+        },
+      },
+      envFilePath,
+    });
+    await app.ready();
+
+    // Simulate a non-loopback (LAN) request
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/feishu/disconnect',
+      headers: AUTH_HEADERS,
+      remoteAddress: '192.168.1.100',
+    });
+
+    assert.equal(res.statusCode, 403, 'non-loopback connector write without owner must be 403');
+    const body = JSON.parse(res.body);
+    assert.ok(body.error, 'response should contain error message');
+
+    await app.close();
+  });
+
+  it('allows connector secret writes from non-loopback when DEFAULT_OWNER_USER_ID IS configured', async () => {
+    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
+
+    const tmpDir = mkdtempSync(join(os.tmpdir(), 'connector-network-owner-'));
+    const envFilePath = join(tmpDir, '.env');
+    writeFileSync(envFilePath, 'FEISHU_APP_ID=old\nFEISHU_APP_SECRET=old\n');
+
+    const app = Fastify();
+    await registerConnectorHub(app, {
+      threadStore: {
+        async list() {
+          return [];
+        },
+      },
+      envFilePath,
+    });
+    await app.ready();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/feishu/disconnect',
+      headers: AUTH_HEADERS,
+      remoteAddress: '192.168.1.100',
+    });
+
+    assert.equal(res.statusCode, 200, 'non-loopback connector write with configured owner should pass');
+
+    await app.close();
+  });
+
+  it('blocks proxy-forwarded loopback connector writes when owner is not configured (#794 proxy guard)', async () => {
+    delete process.env.DEFAULT_OWNER_USER_ID;
+
+    const tmpDir = mkdtempSync(join(os.tmpdir(), 'connector-proxy-guard-'));
+    const envFilePath = join(tmpDir, '.env');
+    writeFileSync(envFilePath, 'FEISHU_APP_ID=old\nFEISHU_APP_SECRET=old\n');
+
+    const app = Fastify();
+    await registerConnectorHub(app, {
+      threadStore: {
+        async list() {
+          return [];
+        },
+      },
+      envFilePath,
+    });
+    await app.ready();
+
+    // Loopback IP but with proxy forwarding header → reverse proxy scenario
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/feishu/disconnect',
+      headers: { ...AUTH_HEADERS, 'x-forwarded-for': '203.0.113.50' },
+    });
+
+    assert.equal(res.statusCode, 403, 'proxy-forwarded loopback connector write without owner must be 403');
+
+    await app.close();
+  });
+
+  it('allows connector secret writes from loopback even without configured owner', async () => {
+    delete process.env.DEFAULT_OWNER_USER_ID;
+
+    const tmpDir = mkdtempSync(join(os.tmpdir(), 'connector-loopback-'));
+    const envFilePath = join(tmpDir, '.env');
+    writeFileSync(envFilePath, 'FEISHU_APP_ID=old\nFEISHU_APP_SECRET=old\n');
+
+    const app = Fastify();
+    await registerConnectorHub(app, {
+      threadStore: {
+        async list() {
+          return [];
+        },
+      },
+      envFilePath,
+    });
+    await app.ready();
+
+    // Default remoteAddress in Fastify inject is 127.0.0.1 (loopback)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connector/feishu/disconnect',
+      headers: AUTH_HEADERS,
+    });
+
+    assert.notEqual(res.statusCode, 403, 'loopback connector write without owner should NOT be 403');
+
+    await app.close();
+  });
+});
+
 describe('POST /api/connector/wecom-bot/disconnect', () => {
   it('returns 401 without auth header', async () => {
     const { app } = await buildApp();
@@ -837,7 +993,7 @@ describe('POST /api/connector/wecom-bot/disconnect', () => {
 
     let stopped = false;
     const app = Fastify();
-    await app.register(connectorHubRoutes, {
+    await registerConnectorHub(app, {
       threadStore: {
         async list() {
           return [];
@@ -868,81 +1024,6 @@ describe('POST /api/connector/wecom-bot/disconnect', () => {
     assert.ok(!envContent.includes('WECOM_BOT_SECRET'), 'WECOM_BOT_SECRET cleared from .env');
     assert.match(envContent, /KEEP=yes/, 'Other entries preserved');
 
-    await app.close();
-  });
-});
-
-describe('PUT /api/connector/:connectorId/config — owner guard', () => {
-  const OWNER_ID = 'owner-admin';
-
-  async function buildConfigApp(opts = {}) {
-    const tmpDir = mkdtempSync(join(os.tmpdir(), 'conn-cfg-'));
-    const envFilePath = join(tmpDir, '.env');
-    writeFileSync(envFilePath, 'EXISTING=keep\n');
-    const app = Fastify();
-    await app.register(connectorHubRoutes, {
-      threadStore: {
-        async list() {
-          return [];
-        },
-      },
-      envFilePath,
-      ...opts,
-    });
-    await app.ready();
-    return { app, envFilePath };
-  }
-
-  it('allows saves when DEFAULT_OWNER_USER_ID is not configured (permissive mode)', async () => {
-    delete process.env.DEFAULT_OWNER_USER_ID;
-    const { app, envFilePath } = await buildConfigApp();
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/api/connector/telegram/config',
-      headers: { 'x-cat-cafe-user': 'anyone', 'content-type': 'application/json' },
-      payload: JSON.stringify({
-        secrets: [{ name: 'TELEGRAM_BOT_TOKEN', value: '123456:ABCdefghij_permissive_test' }],
-      }),
-    });
-    assert.equal(res.statusCode, 200);
-    const env = readFileSync(envFilePath, 'utf8');
-    assert.ok(env.includes('TELEGRAM_BOT_TOKEN'), '.env should be mutated in permissive mode');
-    await app.close();
-  });
-
-  it('returns 403 for non-owner user', async () => {
-    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
-    const { app, envFilePath } = await buildConfigApp();
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/api/connector/telegram/config',
-      headers: { 'x-cat-cafe-user': 'attacker', 'content-type': 'application/json' },
-      payload: JSON.stringify({ secrets: [{ name: 'TELEGRAM_BOT_TOKEN', value: '123456:ABC' }] }),
-    });
-    assert.equal(res.statusCode, 403);
-    const env = readFileSync(envFilePath, 'utf8');
-    assert.ok(!env.includes('TELEGRAM_BOT_TOKEN'), '.env must not be mutated');
-    delete process.env.DEFAULT_OWNER_USER_ID;
-    await app.close();
-  });
-
-  it('returns 200 for owner and writes secrets', async () => {
-    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
-    const { app, envFilePath } = await buildConfigApp();
-    const res = await app.inject({
-      method: 'PUT',
-      url: '/api/connector/telegram/config',
-      headers: { 'x-cat-cafe-user': OWNER_ID, 'content-type': 'application/json' },
-      payload: JSON.stringify({ secrets: [{ name: 'TELEGRAM_BOT_TOKEN', value: '123456:ABCdefghij_test' }] }),
-    });
-    assert.equal(res.statusCode, 200);
-    const body = JSON.parse(res.body);
-    assert.equal(body.ok, true);
-    const env = readFileSync(envFilePath, 'utf8');
-    assert.match(env, /TELEGRAM_BOT_TOKEN=123456:ABCdefghij_test/);
-    assert.match(env, /EXISTING=keep/);
-    delete process.env.DEFAULT_OWNER_USER_ID;
-    delete process.env.TELEGRAM_BOT_TOKEN;
     await app.close();
   });
 });

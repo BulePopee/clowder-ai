@@ -25,6 +25,7 @@ NC='\033[0m'
 
 NO_REBASE=false
 SKIP_INSTALL=false
+CAT_CAFE_GATE_TEST_MODE="${CAT_CAFE_GATE_TEST_MODE:-auto}"
 
 usage() {
   cat <<'EOF'
@@ -64,11 +65,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$CAT_CAFE_GATE_TEST_MODE" in
+  auto|full|public)
+    ;;
+  *)
+    echo -e "${RED}❌ CAT_CAFE_GATE_TEST_MODE must be auto, full, or public (got: $CAT_CAFE_GATE_TEST_MODE)${NC}" >&2
+    exit 1
+    ;;
+esac
+
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║       🛡️  Pre-Merge Gate — Latest Main Check        ║"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
+
+# ── Phase timer ──
+GATE_START=$SECONDS
+STEP_TIMES=""
+record_step() {
+  local step_name="$1"
+  local step_start="$2"
+  local elapsed=$((SECONDS - step_start))
+  STEP_TIMES="${STEP_TIMES}${step_name}:${elapsed}\n"
+}
 
 # ── Step 0: 前置检查 ──
 
@@ -122,18 +142,47 @@ if [ "$REPO_ROOT" != "$MAIN_WORKTREE" ]; then
   esac
 fi
 echo -e "${GREEN}✓ Worktree 位置合规${NC}"
+
+GATE_GUARD_SCRIPT="$REPO_ROOT/scripts/pre-merge-gate-guard.mjs"
+GATE_LOCK_DIR="${CAT_CAFE_GATE_LOCK_DIR:-$REPO_ROOT/.cat-cafe/gate/pre-merge-check.lock}"
+node "$GATE_GUARD_SCRIPT" acquire --lock-dir "$GATE_LOCK_DIR" --holder-pid "$$"
+release_gate_guard() {
+  node "$GATE_GUARD_SCRIPT" release --lock-dir "$GATE_LOCK_DIR" --holder-pid "$$" >/dev/null 2>&1 || true
+}
+trap release_gate_guard EXIT
+trap 'release_gate_guard; exit 130' INT
+trap 'release_gate_guard; exit 143' TERM
+echo -e "${GREEN}✓ Gate singleflight + system-pressure preflight${NC}"
 echo ""
 
 # ── Step 1: Fetch + Rebase origin/main ──
 
 REBASE_SUMMARY="skipped (--no-rebase)"
+STEP_START=$SECONDS
 if [ "$NO_REBASE" = "true" ]; then
   echo "── Step 1/6: 跳过 rebase（--no-rebase）──"
   echo -e "${YELLOW}⚠ 已跳过 origin/main rebase，仅用于本地验证${NC}"
+  record_step "rebase" "$STEP_START"
   echo ""
 else
   echo "── Step 1/6: 同步 origin/main 并 rebase ──"
-  git fetch origin main --quiet
+  # git fetch 更新共享的 refs/remotes/origin/main——git worktree 下所有 worktree 共享
+  # 同一个 <main-repo>/.git，remote-tracking ref 的写入受共享 lock 保护
+  # (packed-refs.lock / refs/remotes/origin/main.lock)。并发 gate 同时 fetch 可能撞 ref
+  # lock。concurrent gate 现在降级为 soft-warning 放行（#1937），移除了 HARD_BLOCK 的隐式
+  # fetch 串行化，所以这里 retry 容忍 ref-lock 竞争——窗口极短，2s 间隔几乎必然成功；真失败
+  # （网络/auth）3 次后仍 surface exit 1。rebase 不需要 retry（操作 per-worktree HEAD，不走共享 lock）。
+  for attempt in 1 2 3; do
+    if git fetch origin main --quiet 2>&1; then
+      break
+    fi
+    if [ "$attempt" -eq 3 ]; then
+      echo -e "${RED}❌ git fetch origin main failed after 3 attempts${NC}"
+      exit 1
+    fi
+    echo -e "${YELLOW}⚠ fetch failed (attempt $attempt/3, likely ref-lock contention from concurrent gate), retrying in 2s...${NC}"
+    sleep 2
+  done
   echo -e "${GREEN}✓ fetch origin/main${NC}"
 
   REBASE_RESULT=0
@@ -156,10 +205,12 @@ else
   fi
   REBASE_SUMMARY="rebased onto origin/main"
   echo -e "${GREEN}✓ rebase origin/main 成功${NC}"
+  record_step "rebase" "$STEP_START"
   echo ""
 fi
 
 # ── Step 2: Dependency refresh ──
+STEP_START=$SECONDS
 
 if [ "$SKIP_INSTALL" = "true" ]; then
   echo "── Step 2/6: 跳过依赖刷新（--skip-install）──"
@@ -178,9 +229,10 @@ else
   echo -e "${GREEN}✓ 依赖刷新通过${NC}"
   echo ""
 fi
+record_step "install" "$STEP_START"
 
 # ── Step 3: Build ──
-
+STEP_START=$SECONDS
 echo "── Step 3/6: 全量 build ──"
 if ! pnpm -r --if-present run build; then
   echo ""
@@ -188,9 +240,11 @@ if ! pnpm -r --if-present run build; then
   exit 1
 fi
 echo -e "${GREEN}✓ build 通过${NC}"
+record_step "build" "$STEP_START"
 echo ""
 
 # ── Step 4: TypeScript 全量类型检查（含测试文件） ──
+STEP_START=$SECONDS
 #
 # Next.js build 只对生产代码做 tsc，__tests__/ 目录被跳过。
 # 这导致测试文件的类型错误无法在 gate 阶段被发现——
@@ -207,11 +261,31 @@ if ! pnpm -r exec bash -lc 'if command -v tsc >/dev/null 2>&1; then tsc --noEmit
   exit 1
 fi
 echo -e "${GREEN}✓ tsc --noEmit 通过（含测试文件）${NC}"
+record_step "tsc" "$STEP_START"
 echo ""
 
-# ── Step 5: Test（全量，不是 --filter） ──
+# ── Step 5: Test（按仓库形态选择 full 或 public） ──
+resolve_test_mode() {
+  if [ "$CAT_CAFE_GATE_TEST_MODE" = "full" ] || [ "$CAT_CAFE_GATE_TEST_MODE" = "public" ]; then
+    printf '%s\n' "$CAT_CAFE_GATE_TEST_MODE"
+    return 0
+  fi
 
-echo "── Step 5/6: 全量测试 ──"
+  # Public sync targets intentionally omit source-only governance artifacts
+  # such as .claude/settings.json, while exposing the API public test suite
+  # used by GitHub CI. In that shape, running source full tests is a false red.
+  if [ ! -f "$REPO_ROOT/.claude/settings.json" ] && [ -f "$REPO_ROOT/packages/api/package.json" ]; then
+    if node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.exit(p.scripts && p.scripts["test:public"] ? 0 : 1);' "$REPO_ROOT/packages/api/package.json"; then
+      printf '%s\n' "public"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "full"
+}
+
+STEP_START=$SECONDS
+TEST_MODE="$(resolve_test_mode)"
 # 清除 REDIS_URL 以避免触发 Redis 隔离守卫。
 # Worktree 的 .env.local 设置了 REDIS_URL=6398（用于开发），
 # 但全量测试不应依赖 Redis——Redis 集成测试有专门的 test:redis 命令。
@@ -219,24 +293,42 @@ echo "── Step 5/6: 全量测试 ──"
 #
 # 挂起保护：API test script 配了 --test-timeout=30000，单个测试
 # 超过 30s 会被 node --test 标记为 FAIL 并继续。无需外部 watchdog。
-if ! env -u REDIS_URL pnpm test; then
-  echo ""
-  echo -e "${RED}❌ 全量测试未通过${NC}"
-  echo "   请修复失败的测试后重新执行 pnpm gate"
-  exit 1
+if [ "$TEST_MODE" = "public" ]; then
+  echo "── Step 5/6: Public repo test suite ──"
+  if ! env -u REDIS_URL pnpm --filter @cat-cafe/api run test:public; then
+    echo ""
+    echo -e "${RED}❌ Public 测试未通过${NC}"
+    echo "   请修复失败的测试后重新执行 pnpm gate"
+    exit 1
+  fi
+  echo -e "${GREEN}✓ Public 测试通过${NC}"
+else
+  echo "── Step 5/6: 全量测试 ──"
+  if ! env -u REDIS_URL pnpm test; then
+    echo ""
+    echo -e "${RED}❌ 全量测试未通过${NC}"
+    echo "   请修复失败的测试后重新执行 pnpm gate"
+    exit 1
+  fi
+  echo -e "${GREEN}✓ 全量测试通过${NC}"
 fi
-echo -e "${GREEN}✓ 全量测试通过${NC}"
+record_step "test" "$STEP_START"
 echo ""
 
 # ── Step 6: Lint + Check ──
-
-echo "── Step 6/6: lint + check ──"
-if ! pnpm lint; then
+#
+# Lint dedup: Step 4 already ran tsc --noEmit across ALL packages.
+# api/shared/mcp-server/ppt-forge each define "lint": "tsc --noEmit",
+# so `pnpm lint` (= pnpm -r run lint) would re-run tsc on those 4 packages.
+# Only web's "lint": "next lint" (ESLint) adds value here.
+STEP_START=$SECONDS
+echo "── Step 6/6: lint (web only — tsc deduped from Step 4) + check ──"
+if ! pnpm --filter @cat-cafe/web lint; then
   echo ""
-  echo -e "${RED}❌ lint 失败${NC}"
+  echo -e "${RED}❌ web lint 失败${NC}"
   exit 1
 fi
-echo -e "${GREEN}✓ lint 通过${NC}"
+echo -e "${GREEN}✓ web lint 通过（api/shared/mcp/ppt tsc 已在 Step 4 覆盖）${NC}"
 
 if ! pnpm check; then
   echo ""
@@ -244,10 +336,12 @@ if ! pnpm check; then
   exit 1
 fi
 echo -e "${GREEN}✓ check 通过${NC}"
+record_step "lint+check" "$STEP_START"
 echo ""
 
 # ── 报告 ──
 
+GATE_TOTAL=$((SECONDS - GATE_START))
 FINAL_SHA="$(git rev-parse HEAD)"
 SHORT_SHA="${FINAL_SHA:0:8}"
 
@@ -260,6 +354,13 @@ echo "║  Base   : $REBASE_SUMMARY"
 echo "║  Tests  : all passed"
 echo "║  Lint   : passed"
 echo "║  Check  : passed"
+echo "╠──────────────────────────────────────────────────────╣"
+echo "║  ⏱  Phase Timing:"
+echo -e "$STEP_TIMES" | while IFS=: read -r name secs; do
+  [ -z "$name" ] && continue
+  printf "║    %-14s %3ds\n" "$name" "$secs"
+done
+printf "║    %-14s %3ds\n" "TOTAL" "$GATE_TOTAL"
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
 echo "可以安全执行 merge-gate 的后续步骤了。"

@@ -1,11 +1,16 @@
 /**
  * F102 Phase J: IndexStatus logic tests (AC-J4)
- *
- * Tests parsing of /api/evidence/status response.
+ * F188 Phase A: RebuildJob parsing tests (AC-A3)
  */
 
 import { describe, expect, it } from 'vitest';
-import { filterEvidenceVars, getConfigVars, parseIndexStatus } from '@/components/memory/IndexStatus';
+import {
+  filterEvidenceVars,
+  getConfigVars,
+  isEmbeddingWarmingUp,
+  parseIndexStatus,
+  parseRebuildJob,
+} from '@/components/memory/IndexStatus';
 
 describe('parseIndexStatus', () => {
   it('parses healthy response', () => {
@@ -43,6 +48,22 @@ describe('parseIndexStatus', () => {
     expect(status.embeddingModel).toBeNull();
   });
 
+  it('parses vectors_count regardless of platform support flag', () => {
+    // vector_search_available was removed — install dialog already blocks
+    // unsupported platforms via the matrix 'unsupported' branch, so the UI
+    // just shows the raw count. parseIndexStatus tolerates the field if a
+    // legacy API still emits it (silently ignored).
+    const raw = { backend: 'sqlite', healthy: true, vectors_count: 5 };
+    const status = parseIndexStatus(raw);
+    expect(status.vectorsCount).toBe(5);
+  });
+
+  it('parses vectors_count=0', () => {
+    const raw = { backend: 'sqlite', healthy: true, vectors_count: 0 };
+    const status = parseIndexStatus(raw);
+    expect(status.vectorsCount).toBe(0);
+  });
+
   it('parses threads, passages, and embedding mode (Issue 6)', () => {
     const raw = {
       backend: 'sqlite',
@@ -58,6 +79,47 @@ describe('parseIndexStatus', () => {
     expect(status.threadsCount).toBe(12);
     expect(status.passagesCount).toBe(340);
     expect(status.embeddingModel).toBe('text-embedding-3-small');
+  });
+});
+
+describe('isEmbeddingWarmingUp (F209)', () => {
+  const make = (passages: number, vectors: number, supported = true) =>
+    parseIndexStatus({
+      backend: 'sqlite',
+      healthy: true,
+      passages_count: passages,
+      passage_vectors_count: vectors,
+      passage_vectors_supported: supported,
+    });
+
+  it('parses passage_vectors_count', () => {
+    expect(make(8608, 2368).passageVectorsCount).toBe(2368);
+  });
+
+  it('defaults passageVectorsCount to 0 when the field is absent', () => {
+    expect(parseIndexStatus({ backend: 'sqlite', healthy: true }).passageVectorsCount).toBe(0);
+  });
+
+  it('parses passage_vectors_supported (defaults false when absent)', () => {
+    expect(make(8608, 2368, true).passageVectorsSupported).toBe(true);
+    expect(parseIndexStatus({ backend: 'sqlite', healthy: true }).passageVectorsSupported).toBe(false);
+  });
+
+  it('is warming up when vectors lag behind passages', () => {
+    expect(isEmbeddingWarmingUp(make(8608, 2368))).toBe(true);
+  });
+
+  it('is done once every passage has a vector', () => {
+    expect(isEmbeddingWarmingUp(make(8608, 8608))).toBe(false);
+  });
+
+  it('is not warming up when there are no passages', () => {
+    expect(isEmbeddingWarmingUp(make(0, 0))).toBe(false);
+  });
+
+  it('is NOT warming up when passage vectors are unsupported (embed off / no sqlite-vec)', () => {
+    // codex P2 regression: a missing vec table must NOT render "暖机中" forever and poll every 3s.
+    expect(isEmbeddingWarmingUp(make(8608, 0, false))).toBe(false);
   });
 });
 
@@ -131,5 +193,46 @@ describe('getConfigVars', () => {
 
   it('returns empty for no evidence vars', () => {
     expect(getConfigVars([mkVar('PORT', 'server', '3001')])).toEqual([]);
+  });
+});
+
+describe('parseRebuildJob (F188 AC-A3)', () => {
+  it('parses running job', () => {
+    const raw = { id: 'abc', status: 'running', phase: 'scanning', percent: 42, startedAt: 1000 };
+    const job = parseRebuildJob(raw);
+    expect(job.status).toBe('running');
+    expect(job.phase).toBe('scanning');
+    expect(job.percent).toBe(42);
+  });
+
+  it('parses done job with result', () => {
+    const raw = {
+      id: 'abc',
+      status: 'done',
+      phase: 'done',
+      percent: 100,
+      startedAt: 1000,
+      completedAt: 2000,
+      result: { docsIndexed: 50, docsSkipped: 10, durationMs: 3000 },
+    };
+    const job = parseRebuildJob(raw);
+    expect(job.status).toBe('done');
+    expect(job.result?.docsIndexed).toBe(50);
+    expect(job.result?.durationMs).toBe(3000);
+  });
+
+  it('parses error job', () => {
+    const raw = { id: 'abc', status: 'error', phase: '', percent: 30, startedAt: 1000, error: 'disk full' };
+    const job = parseRebuildJob(raw);
+    expect(job.status).toBe('error');
+    expect(job.error).toBe('disk full');
+  });
+
+  it('handles missing optional fields', () => {
+    const raw = { id: 'x', status: 'pending', phase: '', percent: 0, startedAt: 1000 };
+    const job = parseRebuildJob(raw);
+    expect(job.result).toBeUndefined();
+    expect(job.error).toBeUndefined();
+    expect(job.completedAt).toBeUndefined();
   });
 });

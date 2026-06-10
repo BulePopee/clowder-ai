@@ -69,6 +69,12 @@ export const IRepoScannerSymbol = Symbol.for('IRepoScanner');
 
 // ── Data types ───────────────────────────────────────────────────────
 
+export interface EvidenceDrillDown {
+  tool: string;
+  params: Record<string, string>;
+  hint: string;
+}
+
 export interface EvidenceItem {
   anchor: string;
   kind: EvidenceKind;
@@ -84,11 +90,7 @@ export interface EvidenceItem {
   /** F129: Pack scope — when set, this evidence belongs to a specific pack */
   packId?: string;
   /** G-4: drill-down hint — tells the cat what tool to use to see full details */
-  drillDown?: {
-    tool: string;
-    params: Record<string, string>;
-    hint: string;
-  };
+  drillDown?: EvidenceDrillDown;
   /** F163 Phase A: knowledge authority level */
   authority?: F163Authority;
   /** F163 Phase A: knowledge activation mode */
@@ -115,22 +117,78 @@ export interface EvidenceItem {
   worldId?: string;
   /** F093 Phase A (KD-16): scene scope — derived canon evidence */
   sceneId?: string;
+  /** F200 Phase C: first indexed timestamp (epoch ms) for 14d grace period */
+  firstIndexedAt?: number;
   /** F186: collection-level review status */
   reviewStatus?: ReviewStatus;
+  /** F200 v1.1 DF-3: explains why this result matched (anchor/title/summary/keyword/content) */
+  matchReason?: string;
+  /** F200 v1.1 DF-3: ranking factor breakdown when explain=true */
+  rankingFactors?: { bm25Score?: number; consumptionPrior?: number; mmrPenalty?: number };
+  /** F200 v1.1 DF-7: calibrated relevance confidence [0,1] */
+  confidence?: number;
+  /** F209 Phase B: entity alias / mention explanations for retrieval-anchor hits */
+  entityMatches?: EntityMatch[];
   /** AC-I9: passage-level detail when depth=raw */
   passages?: Array<{
+    docAnchor?: string;
     passageId: string;
     content: string;
     speaker?: string;
     createdAt?: string;
+    threadId?: string;
+    messageId?: string;
     /** AC-I8: surrounding passages when contextWindow is set */
     context?: Array<{
+      docAnchor?: string;
       passageId: string;
       content: string;
       speaker?: string;
       createdAt?: string;
+      threadId?: string;
+      messageId?: string;
     }>;
   }>;
+}
+
+export type EntityType = 'person' | 'cat' | 'feature' | 'concept' | 'external';
+
+export interface EntityProvenance {
+  source: string;
+  anchor?: string;
+  note?: string;
+  date?: string;
+}
+
+export interface EntityRecord {
+  entityId: string;
+  type: EntityType;
+  canonicalName: string;
+  aliases: string[];
+  provenance: EntityProvenance[];
+  createdAt?: string;
+  updatedAt: string;
+}
+
+export interface QueryEntityMatch {
+  entityId: string;
+  type: EntityType;
+  canonicalName: string;
+  matchedAlias: string;
+  provenance: EntityProvenance[];
+}
+
+export interface EntityMatch {
+  entityId: string;
+  type: EntityType;
+  canonicalName: string;
+  matchedAlias: string;
+  surface: string;
+  source: 'doc' | 'passage';
+  docAnchor: string;
+  passageId?: string;
+  provenance: EntityProvenance[];
+  why: string;
 }
 
 export type EdgeRelation =
@@ -140,7 +198,10 @@ export type EdgeRelation =
   | 'related_to'
   | 'supersedes'
   | 'invalidates'
-  | 'promoted_from';
+  | 'promoted_from'
+  | 'wikilink'
+  | 'doc_link'
+  | 'feature_ref';
 
 export interface Edge {
   fromAnchor: string;
@@ -149,7 +210,7 @@ export interface Edge {
   fromCollectionId?: string;
   toCollectionId?: string;
   edgeSensitivity?: CollectionSensitivity;
-  provenance?: 'frontmatter' | 'wikilink' | 'promote' | 'manual';
+  provenance?: 'frontmatter' | 'wikilink' | 'promote' | 'manual' | 'content';
   createdAt?: string;
 }
 
@@ -198,6 +259,25 @@ export interface SearchOptions {
   worldId?: string;
   /** F093 Phase A (KD-16): filter to a specific scene within a world */
   sceneId?: string;
+  /** F200 v1.1 DF-3: include explainability fields in results */
+  explain?: boolean;
+}
+
+export type SearchDegradeReason =
+  | 'passage_embedding_unavailable'
+  | 'passage_vector_search_error'
+  | 'evidence_store_error'
+  | 'raw_lexical_only';
+
+export interface SearchExecutionMeta {
+  degraded: boolean;
+  degradeReason?: SearchDegradeReason;
+  effectiveMode?: 'lexical' | 'semantic' | 'hybrid';
+}
+
+export interface EvidenceSearchExecution {
+  items: EvidenceItem[];
+  meta: SearchExecutionMeta;
 }
 
 export interface MarkerFilter {
@@ -242,6 +322,7 @@ export interface KnowledgeResult {
   results: EvidenceItem[];
   sources: Array<'project' | 'global'>;
   query: string;
+  meta?: SearchExecutionMeta;
   collectionGroups?: CollectionGroup[];
   deprecationWarnings?: string[];
 }
@@ -256,15 +337,23 @@ export interface ReflectionContext {
 
 export interface IEvidenceStore {
   search(query: string, options?: SearchOptions): Promise<EvidenceItem[]>;
+  searchWithMeta?(query: string, options?: SearchOptions): Promise<EvidenceSearchExecution>;
   upsert(items: EvidenceItem[]): Promise<void>;
+  upsertEntities?(entities: EntityRecord[]): Promise<void>;
+  getEntity?(entityId: string): Promise<EntityRecord | null>;
+  resolveEntityAliases?(query: string): Promise<QueryEntityMatch[]>;
+  refreshEntityMentions?(docAnchors?: string[]): Promise<void>;
   deleteByAnchor(anchor: string): Promise<void>;
   getByAnchor(anchor: string): Promise<EvidenceItem | null>;
   health(): Promise<boolean>;
   initialize(): Promise<void>;
 }
 
+export type RebuildProgressCallback = (phase: string, percent: number) => void;
+
 export interface IIndexBuilder {
-  rebuild(options?: { force?: boolean }): Promise<RebuildResult>;
+  rebuild(options?: { force?: boolean; onProgress?: RebuildProgressCallback }): Promise<RebuildResult>;
+  startPassageEmbeddingWarmup(): void;
   incrementalUpdate(changedPaths: string[]): Promise<void>;
   checkConsistency(): Promise<ConsistencyReport>;
 }
@@ -275,8 +364,13 @@ export interface IMarkerQueue {
   transition(id: string, to: MarkerStatus, patch?: Partial<Marker>): Promise<void>;
 }
 
+export interface MaterializeOptions {
+  targetRoot?: string;
+  indexBuilder?: Pick<IIndexBuilder, 'incrementalUpdate'> | null;
+}
+
 export interface IMaterializationService {
-  materialize(markerId: string): Promise<MaterializeResult>;
+  materialize(markerId: string, options?: MaterializeOptions): Promise<MaterializeResult>;
   canMaterialize(markerId: string): Promise<boolean>;
 }
 
@@ -292,7 +386,7 @@ export interface IKnowledgeResolver {
 
 export interface EmbedConfig {
   embedMode: 'off' | 'shadow' | 'on';
-  embedModel: 'qwen3-embedding-0.6b' | 'multilingual-e5-small';
+  embedModel: string;
   embedDim: number;
   maxModelMemMb: number;
   embedTimeoutMs: number;
@@ -308,21 +402,23 @@ export interface IEmbeddingService {
   load(): Promise<void>;
   embed(texts: string[]): Promise<Float32Array[]>;
   isReady(): boolean;
+  reprobeIfNeeded(): Promise<void>;
   getModelInfo(): EmbedModelInfo;
   dispose(): void;
 }
 
 const VALID_EMBED_MODES = new Set(['off', 'shadow', 'on']);
-const VALID_EMBED_MODELS = new Set(['qwen3-embedding-0.6b', 'multilingual-e5-small']);
 
 export function resolveEmbedConfig(partial?: Partial<EmbedConfig>): EmbedConfig {
   const mode = partial?.embedMode ?? 'off';
   if (!VALID_EMBED_MODES.has(mode)) throw new Error(`Invalid embedMode: ${mode}`);
-  const model = partial?.embedModel ?? 'qwen3-embedding-0.6b';
-  if (!VALID_EMBED_MODELS.has(model)) throw new Error(`Invalid embedModel: ${model}`);
+  // The scripted sidecar is the runtime authority for the concrete model
+  // after /health responds. Until then this sentinel keeps local config free
+  // of stale TypeScript-side model whitelists.
+  const model = partial?.embedModel ?? 'unknown';
   return {
     embedMode: mode as EmbedConfig['embedMode'],
-    embedModel: model as EmbedConfig['embedModel'],
+    embedModel: model,
     embedDim: partial?.embedDim ?? 768, // LL-034: 768 is sweet spot for CJK bilingual; 256 too low
     maxModelMemMb: partial?.maxModelMemMb ?? 800,
     embedTimeoutMs: partial?.embedTimeoutMs ?? 3000,

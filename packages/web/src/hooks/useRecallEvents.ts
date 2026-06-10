@@ -8,10 +8,10 @@
  * - tool_result.detail = plain text from evidence-tools.ts, truncated by compactToolResultDetail
  */
 
-import { useMemo } from 'react';
-import { getThreadHref } from '@/components/ThreadSidebar/thread-navigation';
+import { useEffect, useMemo, useState } from 'react';
 import type { ToolEvent } from '@/stores/chat-types';
 import { useChatStore } from '@/stores/chatStore';
+import { apiFetch } from '@/utils/api-client';
 
 export interface RecallResultItem {
   title: string;
@@ -38,7 +38,7 @@ export interface RecallEvent {
 export function anchorToHref(anchor: string | undefined): string | null {
   if (!anchor) return null;
   if (anchor.startsWith('thread-')) {
-    return getThreadHref(anchor.slice('thread-'.length));
+    return `/thread/${anchor.slice('thread-'.length)}`;
   }
   return `/memory/search?q=${encodeURIComponent(anchor)}`;
 }
@@ -144,6 +144,12 @@ function isSearchEvidenceResultText(text: string): boolean {
   return hasLegacyEvidenceMetadata(text);
 }
 
+function isUnknownCountEvidenceFailure(text: string): boolean {
+  return /result exceeds maximum allowed tokens|maximum allowed tokens|Full result saved to|saved to .*\.txt/i.test(
+    text,
+  );
+}
+
 function findPendingSearchIndex(pendingSearches: RecallEvent[], resultQuery: ResultQueryMatch | undefined): number {
   if (resultQuery == null) return 0;
 
@@ -166,7 +172,12 @@ function applyResultToRecall(recall: RecallEvent, text: string, resultQuery?: Re
   if (recall.query === UNKNOWN_QUERY && resultQuery?.kind === 'exact') {
     recall.query = resultQuery.query;
   }
-  recall.resultCount = parseResultCountFromText(text) ?? 0;
+  const resultCount = parseResultCountFromText(text);
+  if (resultCount != null) {
+    recall.resultCount = resultCount;
+  } else if (!isUnknownCountEvidenceFailure(text)) {
+    recall.resultCount = 0;
+  }
   recall.results = parseTextResults(text);
 }
 
@@ -267,12 +278,53 @@ export function filterRecallEvents(events: ToolEvent[]): RecallEvent[] {
 }
 
 /**
- * React hook: returns RecallEvents from the current invocation's ToolEvents.
+ * Deduplicate recall events: live toolEvents take precedence (richer detail)
+ * over API history events. Dedup key = timestamp + query (stable across both sources).
+ */
+export function deduplicateRecallEvents(live: RecallEvent[], history: RecallEvent[]): RecallEvent[] {
+  const seen = new Set(live.map((e) => `${e.timestamp}:${e.query}`));
+  const unique = history.filter((e) => !seen.has(`${e.timestamp}:${e.query}`));
+  return [...live, ...unique].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+/**
+ * React hook: returns RecallEvents from both live ToolEvents (current session)
+ * and persistent recall_events table (survives page refresh / thread switch).
+ *
+ * F102 bugfix: previously, RecallFeed only read from in-memory chat messages
+ * (limited to HISTORY_PAGE_SIZE=50 per API fetch). Old recall events disappeared
+ * after page refresh. Now queries the persistent recall_events table via API.
  */
 export function useRecallEvents(): RecallEvent[] {
   const messages = useChatStore((s) => s.messages);
+  const threadId = useChatStore((s) => s.currentThreadId);
+  const [historyEvents, setHistoryEvents] = useState<RecallEvent[]>([]);
 
-  return useMemo(() => {
+  // Fetch historical recall events from SQLite via API
+  useEffect(() => {
+    // Clear stale history immediately on thread switch / missing threadId
+    setHistoryEvents([]);
+    if (!threadId) return;
+    let cancelled = false;
+    apiFetch(`/api/recall/events?threadId=${encodeURIComponent(threadId)}&limit=100`)
+      .then((res) => {
+        if (!res.ok || cancelled) return;
+        return res.json();
+      })
+      .then((data: { events?: RecallEvent[] } | undefined) => {
+        if (cancelled || !data?.events) return;
+        setHistoryEvents(data.events);
+      })
+      .catch(() => {
+        // Silently degrade — live toolEvents still work
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId]);
+
+  // Extract live recall events from in-memory chat messages
+  const liveEvents = useMemo(() => {
     const allToolEvents: ToolEvent[] = [];
     for (const msg of messages) {
       if (msg.toolEvents) {
@@ -281,4 +333,7 @@ export function useRecallEvents(): RecallEvent[] {
     }
     return filterRecallEvents(allToolEvents);
   }, [messages]);
+
+  // Merge: live events (richer detail) + history (persistence), deduplicated
+  return useMemo(() => deduplicateRecallEvents(liveEvents, historyEvents), [liveEvents, historyEvents]);
 }

@@ -1,7 +1,9 @@
 'use client';
 
+import type { MouseEvent } from 'react';
 import { useMemo } from 'react';
 import type { CapabilityBoardItem, CatFamily } from '../capability-board-ui';
+import { HubIcon } from '../hub-icons';
 import { SettingsResourceToggleSwitch } from '../SettingsResourceCard';
 import { projectDisplayName } from './useCapabilityState';
 
@@ -18,13 +20,17 @@ export function ToggleSwitch({
   busy,
   onClick,
   title,
+  disabled,
 }: {
   enabled: boolean;
   busy: boolean;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   title?: string;
+  disabled?: boolean;
 }) {
-  return <SettingsResourceToggleSwitch enabled={enabled} busy={busy} onClick={onClick} title={title} />;
+  return (
+    <SettingsResourceToggleSwitch enabled={enabled} busy={busy} onClick={onClick} title={title} disabled={disabled} />
+  );
 }
 
 export function ProjectSelector({
@@ -40,8 +46,8 @@ export function ProjectSelector({
 }) {
   const allPaths = useMemo(() => {
     const set = new Set<string>();
-    set.add(resolvedPath);
-    for (const p of knownProjects) set.add(p);
+    if (resolvedPath) set.add(resolvedPath);
+    for (const path of knownProjects) set.add(path);
     return Array.from(set);
   }, [resolvedPath, knownProjects]);
 
@@ -49,18 +55,18 @@ export function ProjectSelector({
 
   return (
     <div className="flex items-center gap-2 text-xs">
-      <label htmlFor="cap-project-select" className="text-cafe-muted whitespace-nowrap">
+      <label htmlFor="cap-project-select" className="whitespace-nowrap text-cafe-muted">
         项目:
       </label>
       <select
         id="cap-project-select"
         value={currentSelection ?? ''}
-        onChange={(e) => onSwitch(e.target.value || null)}
+        onChange={(event) => onSwitch(event.target.value || null)}
         className="min-w-0 flex-1 truncate rounded-lg border border-[var(--console-border-soft)] bg-[var(--console-field-bg)] px-2 py-1.5 text-xs text-cafe-secondary"
       >
         <option value="">{projectDisplayName(resolvedPath)}</option>
         {allPaths
-          .filter((p) => p !== resolvedPath || currentSelection !== null)
+          .filter((path) => path !== resolvedPath || currentSelection !== null)
           .map((path) => (
             <option key={path} value={path}>
               {projectDisplayName(path)}
@@ -71,42 +77,59 @@ export function ProjectSelector({
   );
 }
 
+export function PluginManagedLink({ pluginId }: { pluginId: string }) {
+  return (
+    <a
+      href="/settings?s=plugins"
+      onClick={(event) => event.stopPropagation()}
+      title={`由插件 ${pluginId} 管理，前往插件集成`}
+      className="inline-flex h-[30px] shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+    >
+      <HubIcon name="puzzle" className="h-3.5 w-3.5" />
+      <span className="hidden sm:inline">插件管理</span>
+    </a>
+  );
+}
+
 export function PerCatToggles({
   item,
   catFamilies,
   toggling,
   onToggle,
+  disabled,
 }: {
   item: CapabilityBoardItem;
   catFamilies: CatFamily[];
   toggling: string | null;
   onToggle: (item: CapabilityBoardItem, enabled: boolean, catId?: string) => void;
+  disabled?: boolean;
 }) {
   if (catFamilies.length === 0 || !item.cats) return null;
   const catEntries = Object.entries(item.cats);
   if (catEntries.length === 0) return null;
 
   return (
-    <div className="mt-2 pt-2">
-      <span className="text-[10px] font-medium uppercase tracking-wider text-cafe-muted">按猫开关</span>
+    <div className="px-4 pb-3 pt-2">
+      <span className="text-micro font-medium uppercase tracking-wider text-cafe-muted">按猫开关</span>
       <div className="mt-1.5 space-y-1">
         {catFamilies.map((family) => {
-          const relevantCats = family.catIds.filter((c) => c in item.cats);
+          const relevantCats = family.catIds.filter((catId) => catId in item.cats);
           if (relevantCats.length === 0) return null;
           return (
             <div key={family.id} className="space-y-1">
-              {relevantCats.length > 1 && <span className="text-[10px] text-cafe-muted">{family.name}</span>}
+              {relevantCats.length > 1 && <span className="text-micro text-cafe-muted">{family.name}</span>}
               {relevantCats.map((catId) => {
                 const enabled = item.cats[catId] ?? false;
                 const busy = toggling === `${item.id}:${catId}`;
                 return (
                   <div key={catId} className="flex items-center justify-between">
-                    <span className="text-[11px] text-cafe-secondary">{catId}</span>
+                    <span className="text-xs text-cafe-secondary">{catId}</span>
                     <ToggleSwitch
                       enabled={enabled}
                       busy={busy}
-                      onClick={(e) => {
-                        e.stopPropagation();
+                      disabled={disabled}
+                      onClick={(event) => {
+                        event.stopPropagation();
                         onToggle(item, !enabled, catId);
                       }}
                     />

@@ -126,16 +126,48 @@ describe('resolveAcpMcpServers — builtin auto-provision (F145 Phase C)', () =>
     assert.ok(result[0].args[0].endsWith('packages/mcp-server/dist/collab.js'));
   });
 
-  it('auto-generates all four builtin cat-cafe servers', () => {
+  it('auto-generates cat-cafe-limb from projectRoot (F193 Phase C)', () => {
     const root = makeTempRoot(); // no .mcp.json
-    const result = resolveAcpMcpServers(root, ['cat-cafe', 'cat-cafe-collab', 'cat-cafe-memory', 'cat-cafe-signals']);
+    const result = resolveAcpMcpServers(root, ['cat-cafe-limb']);
 
-    assert.equal(result.length, 4);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].name, 'cat-cafe-limb');
+    assert.equal(result[0].command, 'node');
+    assert.ok(result[0].args[0].endsWith('packages/mcp-server/dist/limb.js'));
+  });
+
+  it('auto-generates cat-cafe-finance from projectRoot (F207 Phase B0)', () => {
+    const root = makeTempRoot(); // no .mcp.json
+    const result = resolveAcpMcpServers(root, ['cat-cafe-finance']);
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0].name, 'cat-cafe-finance');
+    assert.equal(result[0].command, 'node');
+    assert.ok(result[0].args[0].endsWith('packages/mcp-server/dist/finance.js'));
+  });
+
+  it('auto-generates all canonical 5-split builtins (F193/F207)', () => {
+    const root = makeTempRoot(); // no .mcp.json
+    const result = resolveAcpMcpServers(root, [
+      'cat-cafe-collab',
+      'cat-cafe-memory',
+      'cat-cafe-signals',
+      'cat-cafe-limb',
+      'cat-cafe-finance',
+    ]);
+
+    assert.equal(result.length, 5);
     const names = result.map((s) => s.name);
-    assert.deepStrictEqual(names, ['cat-cafe', 'cat-cafe-collab', 'cat-cafe-memory', 'cat-cafe-signals']);
+    assert.deepStrictEqual(names, [
+      'cat-cafe-collab',
+      'cat-cafe-memory',
+      'cat-cafe-signals',
+      'cat-cafe-limb',
+      'cat-cafe-finance',
+    ]);
 
     const entrypoints = result.map((s) => s.args[0].split('/').pop());
-    assert.deepStrictEqual(entrypoints, ['index.js', 'collab.js', 'memory.js', 'signals.js']);
+    assert.deepStrictEqual(entrypoints, ['collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']);
   });
 
   it('falls back to .mcp.json for non-builtin servers', () => {

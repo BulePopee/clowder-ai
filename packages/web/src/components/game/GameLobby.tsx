@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import type { CatData } from '@/hooks/useCatData';
+import { catColorVar } from '@/lib/cat-slug';
 
 /** Available board presets — mirrors WEREWOLF_PRESETS on backend */
 const BOARD_PRESETS = [
@@ -112,7 +113,7 @@ export function GameLobby({ mode, cats, onConfirm, onCancel }: GameLobbyProps) {
                 }`}
               >
                 <div className="text-sm font-semibold">{preset.label}</div>
-                <div className="text-[10px] opacity-70 mt-0.5">{preset.desc}</div>
+                <div className="text-micro opacity-70 mt-0.5">{preset.desc}</div>
               </button>
             ))}
           </div>
@@ -141,7 +142,7 @@ export function GameLobby({ mode, cats, onConfirm, onCancel }: GameLobbyProps) {
                     ? 'border-current bg-cafe-surface/5 font-medium'
                     : 'border-ww-subtle text-ww-dim hover:border-ww-active'
                 }`}
-                style={selectedCats.has(cat.id) ? { color: cat.color.primary } : undefined}
+                style={selectedCats.has(cat.id) ? { color: catColorVar(cat.id, 'primary') } : undefined}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img

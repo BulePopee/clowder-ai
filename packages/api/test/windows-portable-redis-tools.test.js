@@ -119,7 +119,7 @@ test('Windows installer retries with PUPPETEER_SKIP_DOWNLOAD only for Puppeteer 
   assert.match(installScript, /Write-Warn "Bundled Chrome download failed - skipped"/);
   assert.match(
     installScript,
-    /Write-Warn "Thread export \/ screenshot may be unavailable\. To install later: npx puppeteer browsers install chrome"/,
+    /Write-Warn "Thread export \/ screenshot may be unavailable\. Install Chrome\/Chromium or set CHROME_EXECUTABLE_PATH in \.env"/,
   );
   // Step 5 now appends a Windows-only --store-dir suffix to every
   // Invoke-PnpmInstallWithCapturedOutput call, so the args either appear as the
@@ -310,7 +310,7 @@ test('Windows installer uses interactive selectors instead of typed or letter-ba
   assert.match(uiHelpersScript, /Space to toggle, Enter to confirm/);
   assert.match(installScript, /Name = "Claude"; Label = "Claude"; Cmd = "claude"/);
   assert.match(installScript, /Name = "Codex"; Label = "Codex"; Cmd = "codex"/);
-  assert.match(installScript, /Name = "Gemini"; Label = "Gemini"; Cmd = "gemini"/);
+  assert.match(installScript, /Name = "Antigravity"; Label = "Antigravity CLI"; Cmd = "agy"/);
   assert.match(installScript, /Name = "Kimi"; Label = "Kimi"; Cmd = "kimi"/);
   assert.match(installScript, /Select-InstallerMultiChoice -Title "Missing agent CLIs"/);
   assert.doesNotMatch(uiHelpersScript, /Label = "&All"/);

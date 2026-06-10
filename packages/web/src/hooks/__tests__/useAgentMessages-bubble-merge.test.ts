@@ -28,14 +28,26 @@ const mockSetMessageThinking = vi.fn();
 const mockRequestStreamCatchUp = vi.fn();
 const mockReplaceMessageId = vi.fn();
 const mockPatchMessage = vi.fn();
-const mockSetMessageStreamInvocation = vi.fn((messageId: string, invocationId: string) => {
+const mockSetMessageStreamInvocation = vi.fn((messageId: string, invocationId: string, turnInvocationId?: string) => {
   storeState.messages = storeState.messages.map((m) =>
-    m.id === messageId ? { ...m, extra: { ...m.extra, stream: { ...m.extra?.stream, invocationId } } } : m,
+    m.id === messageId
+      ? {
+          ...m,
+          extra: {
+            ...m.extra,
+            stream: { ...m.extra?.stream, invocationId, ...(turnInvocationId ? { turnInvocationId } : {}) },
+          },
+        }
+      : m,
   );
 });
 const mockRemoveActiveInvocation = vi.fn((invocationId: string) => {
   delete storeState.activeInvocations[invocationId];
 });
+const mockAddActiveInvocation = vi.fn((invocationId: string, catId: string, mode: string) => {
+  storeState.activeInvocations[invocationId] = { catId, mode };
+});
+const mockReplaceThreadTargetCats = vi.fn();
 
 const mockAddMessageToThread = vi.fn();
 // F183 B1.2.2: mockReplaceMessages mirrors store API; impl applies new array
@@ -56,7 +68,11 @@ const storeState = {
     content: string;
     isStreaming?: boolean;
     origin?: string;
-    extra?: { stream?: { invocationId?: string }; systemKind?: 'a2a_routing' };
+    extra?: {
+      stream?: { invocationId?: string; turnInvocationId?: string };
+      systemKind?: 'a2a_routing';
+      a2aRouting?: { fromCatId?: string; targetCatId?: string; invocationId?: string };
+    };
     timestamp: number;
   }>,
   addMessage: mockAddMessage,
@@ -86,9 +102,11 @@ const storeState = {
   setThreadMessageStreaming: mockSetThreadMessageStreaming,
   getThreadState: mockGetThreadState,
   currentThreadId: 'thread-1',
-  catInvocations: {} as Record<string, { invocationId?: string }>,
+  catInvocations: {} as Record<string, { invocationId?: string; turnInvocationId?: string }>,
   activeInvocations: {} as Record<string, { catId: string; mode: string }>,
   removeActiveInvocation: mockRemoveActiveInvocation,
+  addActiveInvocation: mockAddActiveInvocation,
+  replaceThreadTargetCats: mockReplaceThreadTargetCats,
 };
 
 let captured: ReturnType<typeof useAgentMessages> | undefined;
@@ -164,6 +182,8 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
           type: 'a2a_handoff',
           catId: 'codex',
           content: '布偶猫 → 缅因猫',
+          invocationId: 'inv-handoff',
+          targetCatId: 'opus-47',
           timestamp: SERVER_TS,
         });
       });
@@ -176,6 +196,11 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
     expect(sysMsg, 'a2a_handoff must produce a system message via addMessage').toBeTruthy();
     expect(sysMsg!.timestamp, 'message timestamp must equal SERVER timestamp, not Date.now()').toBe(SERVER_TS);
     expect(sysMsg!.extra?.systemKind, 'systemKind=a2a_routing marker must be present').toBe('a2a_routing');
+    expect(sysMsg!.extra?.a2aRouting, 'structured handoff ids must survive the live handler').toEqual({
+      fromCatId: 'codex',
+      targetCatId: 'opus-47',
+      invocationId: 'inv-handoff',
+    });
     expect(sysMsg!.id, 'id must include monotonic suffix to avoid same-ms collision').toMatch(
       /^a2a-1700000000123-codex-\d+$/,
     );
@@ -321,6 +346,58 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
           m.origin === 'callback',
       );
     expect(newAddCalls.length + (newReplacedBubble ? 1 : 0)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('stream event with explicit invocationId back-fills the active invocationless bubble', () => {
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    storeState.messages.push({
+      id: 'msg-active-invocationless',
+      type: 'assistant',
+      catId: 'opus',
+      content: 'already streaming',
+      isStreaming: true,
+      origin: 'stream',
+      extra: { stream: {} },
+      timestamp: Date.now() - 1000,
+    });
+
+    // First invocationless chunk recovers the existing bubble and seeds activeRefs.
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'text',
+        catId: 'opus',
+        content: ' already streaming',
+      });
+    });
+
+    vi.clearAllMocks();
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'text',
+        catId: 'opus',
+        content: ' bound continuation',
+        invocationId: 'inv-late-bind',
+      });
+    });
+
+    // F194 Phase Z3 R10: setMessageStreamInvocation accepts a 3rd turnInvocationId arg
+    // (undefined when no per-cat-turn id known — this scenario emits a single-id chunk).
+    expect(mockSetMessageStreamInvocation).toHaveBeenCalledWith(
+      'msg-active-invocationless',
+      'inv-late-bind',
+      undefined,
+    );
+    expect(storeState.messages.find((m) => m.id === 'msg-active-invocationless')?.extra?.stream?.invocationId).toBe(
+      'inv-late-bind',
+    );
+    const newStreamBubbles = mockAddMessage.mock.calls.filter(
+      ([m]) => m.type === 'assistant' && m.catId === 'opus' && m.origin === 'stream',
+    );
+    expect(newStreamBubbles).toHaveLength(0);
   });
 
   it('callback-first with explicit invocationId + activeInvocations slot: late stream chunk is suppressed (branch A)', () => {
@@ -1102,6 +1179,122 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
     expect(newAssistantCalls.length + (replacedNewBubble ? 1 : 0)).toBeGreaterThanOrEqual(1);
   });
 
+  it('parent-only live chunks after invocation_created do not reopen an older same-parent turn', () => {
+    const parentInvocationId = 'parent-chain-f194';
+    const nextTurnInvocationId = 'turn-opus-next';
+    mockAddMessage.mockImplementation((msg) => {
+      storeState.messages.push(msg);
+    });
+    mockAppendToMessage.mockImplementation((messageId: string, content: string) => {
+      storeState.messages = storeState.messages.map((m) =>
+        m.id === messageId ? { ...m, content: `${m.content}${content}` } : m,
+      );
+    });
+    mockPatchMessage.mockImplementation((messageId: string, patch: Record<string, unknown>) => {
+      storeState.messages = storeState.messages.map((m) => (m.id === messageId ? { ...m, ...patch } : m));
+    });
+
+    storeState.messages = [
+      {
+        id: 'msg-opus-previous-parent-only',
+        type: 'assistant',
+        catId: 'opus',
+        content: '啊！你说得对，我之前的 @codex 路由没生效。',
+        isStreaming: false,
+        origin: 'stream',
+        extra: { stream: { invocationId: parentInvocationId } },
+        timestamp: Date.now() - 60_000,
+      },
+    ];
+
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'system_info',
+        catId: 'opus',
+        invocationId: parentInvocationId,
+        content: JSON.stringify({ type: 'invocation_created', invocationId: nextTurnInvocationId }),
+      });
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'text',
+        catId: 'opus',
+        invocationId: parentInvocationId,
+        origin: 'stream',
+        content: '砚砚 APPROVE，双 reviewer 放行。',
+      });
+    });
+
+    const previous = storeState.messages.find((m) => m.id === 'msg-opus-previous-parent-only');
+    expect(previous?.content).toBe('啊！你说得对，我之前的 @codex 路由没生效。');
+    expect(previous?.isStreaming).toBe(false);
+
+    const next = storeState.messages.find(
+      (m) => m.catId === 'opus' && m.extra?.stream?.turnInvocationId === nextTurnInvocationId,
+    );
+    expect(next, 'parent-only live chunk must be projected into the current turn bubble').toBeDefined();
+    expect(next?.content).toContain('砚砚 APPROVE');
+    expect(next?.content).not.toContain('啊！你说得对');
+  });
+
+  it('server stream re-emission upgrades the active parent-only stream bubble to the current turn', () => {
+    const parentInvocationId = 'parent-postmsg-chain';
+    const currentTurnInvocationId = 'turn-opus-postmsg';
+
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'text',
+        catId: 'opus',
+        invocationId: parentInvocationId,
+        origin: 'stream',
+        content: 'Let me check the thread context.',
+      });
+    });
+
+    expect(storeState.messages.filter((m) => m.type === 'assistant' && m.catId === 'opus')).toHaveLength(1);
+    const localBubble = storeState.messages[0]!;
+    expect(localBubble.extra?.stream?.invocationId).toBe(parentInvocationId);
+    expect(localBubble.extra?.stream?.turnInvocationId).toBeUndefined();
+
+    // invocation_created can arrive after the initial active stream bubble was created.
+    // The following persisted stream re-emission carries the same parent plus the
+    // visible turn id. It must upgrade the existing active bubble, not create a
+    // second CLI Output bubble with the same stdout.
+    storeState.catInvocations = {
+      opus: { invocationId: parentInvocationId, turnInvocationId: currentTurnInvocationId },
+    };
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'text',
+        catId: 'opus',
+        invocationId: parentInvocationId,
+        turnInvocationId: currentTurnInvocationId,
+        origin: 'stream',
+        messageId: 'stored-stream-record',
+        textMode: 'replace',
+        content: 'Let me check the thread context. Response posted.',
+      });
+    });
+
+    const streamBubbles = storeState.messages.filter(
+      (m) => m.type === 'assistant' && m.catId === 'opus' && m.origin === 'stream',
+    );
+    expect(streamBubbles, 'same visible turn must keep one stream bubble').toHaveLength(1);
+    expect(streamBubbles[0]?.content).toBe('Let me check the thread context. Response posted.');
+    expect(streamBubbles[0]?.extra?.stream?.invocationId).toBe(parentInvocationId);
+    expect(streamBubbles[0]?.extra?.stream?.turnInvocationId).toBe(currentTurnInvocationId);
+  });
+
   it('P1 regression: stale callback from inv-1 must NOT replace inv-2 active bubble (#266)', () => {
     act(() => {
       root.render(React.createElement(Harness));
@@ -1395,11 +1588,13 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
       ([msg]) => msg.type === 'assistant' && msg.catId === 'opus',
     );
     expect(duplicateCallbacks).toHaveLength(0);
-    // F183 B1.2.4: callback path goes via reducer + replaceMessages instead of patchMessage(content/origin/isStreaming)
+    // Z8 R3 (砚砚): callback path goes via wrapper projection (collapse + concat). Bubble merged
+    // contains stream raw "streaming reply" + callback "final authoritative reply", origin=callback.
     const upgradedViaPatch = mockPatchMessage.mock.calls.some(
       (c) =>
         c[0] === streamBubbleId &&
-        (c[1] as Record<string, unknown>)?.content === 'final authoritative reply' &&
+        typeof (c[1] as Record<string, unknown>)?.content === 'string' &&
+        ((c[1] as Record<string, unknown>).content as string).includes('final authoritative reply') &&
         (c[1] as Record<string, unknown>)?.origin === 'callback',
     );
     const upgradedViaReducer = mockReplaceMessages.mock.calls
@@ -1407,7 +1602,8 @@ describe('useAgentMessages bubble merge prevention (Bug B)', () => {
       .some(
         (m) =>
           m.id === streamBubbleId &&
-          m.content === 'final authoritative reply' &&
+          typeof m.content === 'string' &&
+          m.content.includes('final authoritative reply') &&
           m.origin === 'callback' &&
           m.isStreaming === false,
       );

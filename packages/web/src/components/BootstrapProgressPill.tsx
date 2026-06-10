@@ -16,10 +16,10 @@ export function BootstrapProgressPill({ progress, expanded: defaultExpanded }: B
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="inline-flex items-center gap-2 rounded-full border border-[var(--console-border-soft)] bg-[var(--console-card-soft-bg)] px-3 py-1.5 text-xs shadow-[var(--console-shadow-soft)] transition-colors hover:bg-[var(--console-hover-bg)]"
+        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-cafe-accent/20 bg-cafe-surface/50 hover:bg-cafe-surface transition-colors text-xs"
       >
-        <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-cafe-accent" />
-        <span className="font-medium text-cafe-black">建立记忆索引…</span>
+        <span className="inline-block w-3 h-3 rounded-full bg-cafe-accent animate-pulse" />
+        <span className="text-cafe-interactive font-medium">建立记忆索引…</span>
         <span className="text-cafe-muted">
           {PHASE_LABELS[progress.phaseIndex] ?? ''} ({progress.phaseIndex + 1}/{progress.totalPhases})
         </span>
@@ -27,7 +27,7 @@ export function BootstrapProgressPill({ progress, expanded: defaultExpanded }: B
       </button>
 
       {expanded && (
-        <div className="absolute z-10 mt-9 w-64 rounded-lg border border-[var(--console-border-soft)] bg-[var(--console-panel-bg)] p-3 shadow-[var(--console-shadow-soft)]">
+        <div className="absolute mt-9 z-10 w-64 rounded-lg border border-cafe-accent/20 bg-cafe-surface-canvas shadow-lg p-3">
           <div className="space-y-2">
             {PHASE_LABELS.map((label, i) => {
               const isDone = i < progress.phaseIndex;
@@ -35,19 +35,19 @@ export function BootstrapProgressPill({ progress, expanded: defaultExpanded }: B
               return (
                 <div key={label} className="flex items-center gap-2 text-xs">
                   <span
-                    className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] ${
+                    className={`w-4 h-4 rounded-full flex items-center justify-center text-micro ${
                       isDone
                         ? 'bg-cafe-accent text-[var(--cafe-surface)]'
                         : isActive
-                          ? 'bg-[var(--console-active-bg)] text-cafe-accent'
-                          : 'bg-[var(--console-card-soft-bg)] text-cafe-muted'
+                          ? 'bg-cafe-accent/20 text-cafe-accent'
+                          : 'bg-cafe-surface-elevated text-cafe-muted'
                     }`}
                   >
                     {isDone ? '\u2713' : i + 1}
                   </span>
                   <span
                     className={
-                      isDone ? 'text-cafe-black' : isActive ? 'font-medium text-cafe-black' : 'text-cafe-muted'
+                      isDone ? 'text-cafe-interactive' : isActive ? 'text-cafe-black font-medium' : 'text-cafe-muted'
                     }
                   >
                     {label}
@@ -59,13 +59,13 @@ export function BootstrapProgressPill({ progress, expanded: defaultExpanded }: B
           </div>
           {progress.docsTotal > 0 && (
             <div className="mt-2 pt-2 border-t border-[var(--console-border-soft)]">
-              <div className="h-1 rounded-full bg-[var(--console-card-soft-bg)] overflow-hidden">
+              <div className="h-1 rounded-full bg-cafe-surface-elevated overflow-hidden">
                 <div
                   className="h-full rounded-full bg-cafe-accent transition-all duration-300"
                   style={{ width: `${Math.min(100, (progress.docsProcessed / progress.docsTotal) * 100)}%` }}
                 />
               </div>
-              <p className="text-[10px] text-cafe-muted mt-1">
+              <p className="text-micro text-cafe-muted mt-1">
                 {progress.docsProcessed} / {progress.docsTotal} 文档
               </p>
             </div>

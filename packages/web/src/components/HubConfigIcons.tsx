@@ -1,6 +1,7 @@
 import Image from 'next/image';
 import type { ReactNode } from 'react';
 
+// F206 exempt: connector/icon palette colors — fixed per platform identity, not theme-dependent
 // ── Per-platform visual config (matches .pen wireframe Screen C) ──
 
 export interface PlatformVisual {
@@ -18,45 +19,45 @@ const SVG_PROPS = {
 
 export const PLATFORM_VISUALS: Record<string, PlatformVisual> = {
   feishu: {
-    iconBg: '#DBEAFE',
-    iconColor: '#2563EB',
+    iconBg: 'var(--conn-blue-bg)',
+    iconColor: 'var(--conn-blue-text)',
     icon: <Image src="/images/connectors/feishu.png" alt="Feishu" width={18} height={18} />,
   },
   telegram: {
-    iconBg: '#E0F2FE',
-    iconColor: '#0284C7',
+    iconBg: 'var(--conn-sky-bg)',
+    iconColor: 'var(--conn-sky-text)',
     icon: <Image src="/images/connectors/telegram.png" alt="Telegram" width={18} height={18} />,
   },
   weixin: {
-    iconBg: '#D1FAE5',
-    iconColor: '#07C160',
+    iconBg: 'var(--conn-emerald-bg)',
+    iconColor: 'var(--conn-weixin-bg)',
     icon: <Image src="/images/connectors/weixin.png" alt="WeChat" width={18} height={18} />,
   },
   dingtalk: {
-    iconBg: '#CFFAFE',
-    iconColor: '#3296FA',
+    iconBg: 'var(--conn-cyan-bg)',
+    iconColor: 'var(--conn-dingtalk-fg)',
     icon: <Image src="/images/connectors/dingtalk.png" alt="DingTalk" width={18} height={18} />,
   },
   'wecom-bot': {
-    iconBg: '#E0E7FF',
-    iconColor: '#4F46E5',
+    iconBg: 'var(--conn-indigo-bg)',
+    iconColor: 'var(--conn-indigo-text)',
     icon: <Image src="/images/connectors/wecom-bot.png" alt="WeCom" width={18} height={18} />,
   },
   'wecom-agent': {
-    iconBg: '#EDE9FE',
-    iconColor: '#7C3AED',
+    iconBg: 'var(--conn-violet-bg)',
+    iconColor: 'var(--conn-violet-text)',
     icon: <Image src="/images/connectors/wecom-agent.png" alt="WeCom Agent" width={18} height={18} />,
   },
   xiaoyi: {
-    iconBg: '#FEE2E2',
-    iconColor: '#E11D48',
+    iconBg: 'var(--conn-red-bg)',
+    iconColor: 'var(--conn-xiaoyi-fg)',
     icon: <Image src="/images/connectors/xiaoyi.png" alt="XiaoYi" width={18} height={18} />,
   },
 };
 
 export const DEFAULT_VISUAL: PlatformVisual = {
-  iconBg: '#F3F4F6',
-  iconColor: 'var(--cafe-text-muted)',
+  iconBg: 'var(--conn-gray-bg)',
+  iconColor: 'var(--conn-icon-default)',
   icon: (
     <svg className="w-[18px] h-[18px]" viewBox="0 0 24 24" stroke="currentColor" {...SVG_PROPS}>
       <path d="M12 12m-10 0a10 10 0 1 0 20 0a10 10 0 1 0-20 0" />
@@ -66,7 +67,7 @@ export const DEFAULT_VISUAL: PlatformVisual = {
 
 export function StepBadge({ num }: { num: number }) {
   return (
-    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[var(--color-cafe-accent)] text-[var(--cafe-surface)] text-[11px] font-bold flex-shrink-0">
+    <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-conn-blue-text text-[var(--cafe-surface)] text-xs font-bold flex-shrink-0">
       {num}
     </span>
   );
@@ -128,7 +129,7 @@ export function TriangleAlertIcon() {
 export function StatusDotConnected() {
   return (
     <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 10 10">
-      <circle cx="5" cy="5" r="5" fill="var(--console-status-connected)" />
+      <circle cx="5" cy="5" r="5" fill="var(--semantic-success)" />
     </svg>
   );
 }
@@ -137,7 +138,7 @@ export function StatusDotConnected() {
 export function StatusDotIdle() {
   return (
     <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 10 10">
-      <circle cx="5" cy="5" r="4" fill="none" stroke="var(--console-status-idle)" strokeWidth="2" />
+      <circle cx="5" cy="5" r="4" fill="none" stroke="var(--neutral-400)" strokeWidth="2" />
     </svg>
   );
 }
@@ -183,4 +184,55 @@ export function LockIcon() {
       <path d="M7 11V7a5 5 0 0 1 10 0v4" />
     </svg>
   );
+}
+
+// ── Connector config types & helpers ──
+
+export interface PlatformFieldStatus {
+  envName: string;
+  label: string;
+  sensitive: boolean;
+  currentValue: string | null;
+}
+
+export interface PlatformStepStatus {
+  text: string;
+  mode?: string;
+}
+
+export interface PlatformStatus {
+  id: string;
+  name: string;
+  nameEn: string;
+  category?: 'im' | 'plugin';
+  configured: boolean;
+  connectionState?: 'connected' | 'disconnected' | 'reconnecting' | 'unknown';
+  lastHeartbeat?: number | null;
+  fields: PlatformFieldStatus[];
+  docsUrl: string;
+  steps: PlatformStepStatus[];
+}
+
+export const PERMISSION_CONNECTORS: Record<string, string> = {
+  feishu: '飞书',
+  'wecom-bot': '企业微信',
+  dingtalk: '钉钉',
+};
+
+export function connStatePill(p: PlatformStatus): { label: string; className: string } {
+  if (p.connectionState === 'connected')
+    return { label: '已连接', className: 'bg-conn-emerald-bg text-conn-emerald-text' };
+  if (p.connectionState === 'reconnecting')
+    return { label: '重连中', className: 'bg-conn-amber-bg text-conn-amber-text' };
+  if (p.connectionState === 'disconnected' && p.configured)
+    return { label: '已配置', className: 'bg-conn-amber-bg text-conn-amber-text' };
+  if (p.configured) return { label: '已配置', className: 'bg-conn-amber-bg text-conn-amber-text' };
+  return { label: '未配置', className: 'bg-cafe-surface-sunken text-cafe-muted' };
+}
+
+export function formatHeartbeat(ts: number): string {
+  const ago = Math.floor((Date.now() - ts) / 1000);
+  if (ago < 60) return `${ago}s ago`;
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  return `${Math.floor(ago / 3600)}h ago`;
 }

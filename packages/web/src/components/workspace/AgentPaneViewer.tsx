@@ -3,7 +3,9 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
+import typographyTokens from '@/styles/typography-tokens.json';
 import { API_URL } from '@/utils/api-client';
+import { TERMINAL_THEME } from './terminal-theme';
 
 interface AgentPaneViewerProps {
   worktreeId: string;
@@ -20,14 +22,10 @@ export function AgentPaneViewer({ worktreeId, paneId, onBack }: AgentPaneViewerP
 
     const term = new Terminal({
       cursorBlink: false,
-      fontSize: 13,
+      fontSize: typographyTokens.fontSizePx.compact,
       fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
       disableStdin: true,
-      theme: {
-        background: '#1a1b26',
-        foreground: '#a9b1d6',
-        cursor: '#c0caf5',
-      },
+      theme: TERMINAL_THEME,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -75,9 +73,9 @@ export function AgentPaneViewer({ worktreeId, paneId, onBack }: AgentPaneViewerP
           alignItems: 'center',
           gap: 8,
           padding: '4px 8px',
-          fontSize: 12,
+          fontSize: typographyTokens.fontSizePx.xs,
           color: 'var(--terminal-text-muted)',
-          borderBottom: '1px solid var(--terminal-selected-bg)',
+          borderBottom: '1px solid var(--terminal-chrome)',
         }}
       >
         <button
@@ -85,12 +83,12 @@ export function AgentPaneViewer({ worktreeId, paneId, onBack }: AgentPaneViewerP
           onClick={onBack}
           style={{
             background: 'none',
-            border: '1px solid var(--terminal-button-border)',
-            color: 'var(--terminal-button-text)',
+            border: '1px solid var(--terminal-btn-border)',
+            color: 'var(--terminal-text)',
             padding: '2px 8px',
             borderRadius: 4,
             cursor: 'pointer',
-            fontSize: 11,
+            fontSize: typographyTokens.fontSizePx.label,
           }}
         >
           Back to shell
@@ -102,16 +100,24 @@ export function AgentPaneViewer({ worktreeId, paneId, onBack }: AgentPaneViewerP
             borderRadius: '50%',
             background:
               status === 'watching'
-                ? 'var(--terminal-text)'
+                ? 'var(--terminal-status-info)'
                 : status === 'connecting'
-                  ? 'var(--terminal-text-warn)'
-                  : 'var(--terminal-text-error)',
+                  ? 'var(--terminal-status-warn)'
+                  : 'var(--terminal-status-error)',
           }}
         />
         <span>
           {status === 'watching' ? `Watching ${paneId}` : status === 'connecting' ? 'Connecting\u2026' : 'Disconnected'}
         </span>
-        <span style={{ fontSize: 10, color: 'var(--terminal-text-dim)', marginLeft: 'auto' }}>read-only</span>
+        <span
+          style={{
+            fontSize: typographyTokens.fontSizePx.micro,
+            color: 'var(--terminal-text-faint)',
+            marginLeft: 'auto',
+          }}
+        >
+          read-only
+        </span>
       </div>
       <div ref={containerRef} style={{ flex: 1, overflow: 'hidden' }} />
     </div>

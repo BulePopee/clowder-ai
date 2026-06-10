@@ -12,9 +12,8 @@ export function ArtifactCard({
 }) {
   return (
     <button
-      type="button"
       onClick={() => onSelect(result)}
-      className="w-full console-list-card rounded-xl p-4 text-left shadow-[0_4px_16px_rgba(43,33,26,0.06)] transition-shadow hover:shadow-[0_6px_20px_rgba(43,33,26,0.1)]"
+      className="w-full rounded-xl bg-[var(--console-card-bg)] p-4 text-left shadow-[0_8px_22px_rgba(43,33,26,0.04)] transition-shadow hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-2">
         <span className="text-sm font-semibold text-cafe">{result.displayName}</span>
@@ -26,8 +25,8 @@ export function ArtifactCard({
 
       <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-cafe-secondary">{result.componentSummary}</p>
 
-      <div className="mt-2 flex items-center justify-between text-[10px] text-cafe-muted">
-        <span className="font-mono">{result.sourceLocator}</span>
+      <div className="mt-2 flex items-center justify-between text-micro text-cafe-muted">
+        <span>{result.sourceLocator}</span>
         {result.publisherIdentity && <span>{result.publisherIdentity}</span>}
       </div>
     </button>

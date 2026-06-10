@@ -17,6 +17,8 @@ import type { GitHubRepoInboxConfig, RepoInboxSignal } from './types.js';
 import { verifyGitHubSignature } from './verify-signature.js';
 
 const CONNECTOR_ID = 'github-repo-event';
+/** Repo owner's own PRs/issues should not trigger community intake. */
+const SKIP_AUTHOR_ASSOCIATIONS = new Set(['OWNER']);
 
 const ALLOWED_EVENTS: Record<string, readonly string[]> = {
   pull_request: ['opened', 'ready_for_review'],
@@ -30,7 +32,13 @@ export interface GitHubRepoHandlerDeps {
   };
   readonly deliverFn: (deps: ConnectorDeliveryDeps, input: ConnectorDeliveryInput) => Promise<ConnectorDeliveryResult>;
   readonly invokeTrigger: {
-    trigger(threadId: string, catId: CatId, userId: string, message: string, messageId: string): void;
+    trigger(
+      threadId: string,
+      catId: CatId,
+      userId: string,
+      message: string,
+      messageId: string,
+    ): void | Promise<unknown>;
   };
   readonly dedup: RedisDeliveryDedup;
   readonly deliveryDeps?: ConnectorDeliveryDeps;
@@ -80,6 +88,12 @@ export class GitHubRepoWebhookHandler {
     // 5. Skip draft PRs on opened
     if (eventType === 'pull_request' && action === 'opened' && subject.draft) {
       return { kind: 'skipped', reason: 'Skipping draft PR opened event' };
+    }
+
+    // 5.5. Skip repo owner's own PRs/issues — not community contributions
+    const authorAssociation = (subject.author_association as string) ?? '';
+    if (SKIP_AUTHOR_ASSOCIATIONS.has(authorAssociation)) {
+      return { kind: 'skipped', reason: `Skipping ${authorAssociation} event` };
     }
 
     // 6. Delivery ID dedup (KD-13) — reject empty/missing delivery ID
@@ -134,13 +148,15 @@ export class GitHubRepoWebhookHandler {
       });
 
       // 12. Trigger cat (KD-17)
-      this.deps.invokeTrigger.trigger(
-        threadId,
-        this.config.inboxCatId as CatId,
-        this.config.defaultUserId,
-        content,
-        delivered.messageId,
-      );
+      void Promise.resolve(
+        this.deps.invokeTrigger.trigger(
+          threadId,
+          this.config.inboxCatId as CatId,
+          this.config.defaultUserId,
+          content,
+          delivered.messageId,
+        ),
+      ).catch(() => {});
     } catch (err) {
       // Safe rollback: message not delivered — allow GitHub retry
       await this.deps.dedup.rollback(deliveryId);

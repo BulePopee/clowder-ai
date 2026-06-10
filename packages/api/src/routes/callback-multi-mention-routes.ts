@@ -10,6 +10,7 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { InvocationQueue } from '../domains/cats/services/agents/invocation/InvocationQueue.js';
 import type { InvocationTracker } from '../domains/cats/services/agents/invocation/InvocationTracker.js';
+import { stampVisibleTurn } from '../domains/cats/services/agents/invocation/visible-turn.js';
 import { resolveCatTarget } from '../domains/cats/services/agents/routing/cat-target-resolver.js';
 import {
   type MultiMentionCreateParams,
@@ -240,7 +241,13 @@ async function dispatchToTarget(
         invocationId,
         [targetCatId],
         intent,
-        { signal: controller.signal, parentInvocationId: invocationId },
+        {
+          signal: controller.signal,
+          parentInvocationId: invocationId,
+          // F222 P1: Multi-mention fallback dispatch is callback-authenticated cat-to-cat
+          // work (callerCatId = record.catId), consistent with queue path source:'agent'.
+          frustrationAutoIssueEligible: false,
+        },
       )) {
         // #768: Broadcast intent_mode on first CLI event — proves CLI is alive.
         if (!intentModeBroadcast) {
@@ -266,7 +273,8 @@ async function dispatchToTarget(
           governanceErrorCode = msg.errorCode;
         }
 
-        socketManager.broadcastAgentMessage({ ...msg, invocationId }, threadId);
+        // F194 Phase Z9 (砚砚 R1 P1-2): unified visible turn stamp via helper.
+        socketManager.broadcastAgentMessage({ ...msg, ...stampVisibleTurn(invocationId, msg.invocationId) }, threadId);
       }
 
       const finalInvocationStatus = controller.signal.aborted

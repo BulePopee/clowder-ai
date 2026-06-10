@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
 import {
   computeBarWidth,
   computeDonutSegments,
@@ -6,6 +8,8 @@ import {
   type HealthReportData,
   sortedEntries,
 } from '../HealthReport';
+
+Object.assign(globalThis as Record<string, unknown>, { React });
 
 describe('sortedEntries', () => {
   it('sorts by value descending', () => {
@@ -84,17 +88,17 @@ describe('getActionItems', () => {
 
   it('suggests seeding when all docs are observed', () => {
     const items = getActionItems(baseReport);
-    expect(items.some((i) => i.includes('constitutional'))).toBe(true);
+    expect(items.some((i) => i.includes('宪法播种'))).toBe(true);
   });
 
   it('flags unresolved contradictions', () => {
     const items = getActionItems({ ...baseReport, contradictions: { total: 3, unresolved: 2 } });
-    expect(items.some((i) => i.includes('contradiction'))).toBe(true);
+    expect(items.some((i) => i.includes('未解决矛盾'))).toBe(true);
   });
 
   it('flags overdue reviews', () => {
     const items = getActionItems({ ...baseReport, staleReview: { warning: 1, overdue: 3 } });
-    expect(items.some((i) => i.includes('overdue'))).toBe(true);
+    expect(items.some((i) => i.includes('逾期'))).toBe(true);
   });
 
   it('returns empty when everything is healthy', () => {
@@ -103,6 +107,76 @@ describe('getActionItems', () => {
       byAuthority: { observed: 100, candidate: 50, validated: 30, constitutional: 20 },
     };
     const items = getActionItems(healthy);
-    expect(items.some((i) => i.includes('constitutional'))).toBe(false);
+    expect(items.some((i) => i.includes('宪法播种'))).toBe(false);
+  });
+
+  it('flags stale anchors', () => {
+    const items = getActionItems({
+      ...baseReport,
+      staleAnchors: { count: 3, items: [] },
+    });
+    expect(items.some((i) => i.includes('过期锚点'))).toBe(true);
+  });
+
+  it('flags orphan edges', () => {
+    const items = getActionItems({
+      ...baseReport,
+      orphanEdges: { count: 5 },
+    });
+    expect(items.some((i) => i.includes('孤立边'))).toBe(true);
+  });
+
+  it('flags knowledge feed pending', () => {
+    const items = getActionItems({
+      ...baseReport,
+      knowledgeFeed: { pendingCount: 7, needsReviewCount: 2 },
+    });
+    expect(items.some((i) => i.includes('待处理知识动态'))).toBe(true);
+  });
+});
+
+describe('HealthReport render', () => {
+  it('includes Eval Hub backlink', async () => {
+    vi.mock('@/utils/api-client', () => ({
+      apiFetch: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            totalDocs: 100,
+            byKind: { thread: 50 },
+            byAuthority: { observed: 80, constitutional: 20 },
+            contradictions: { total: 0, unresolved: 0 },
+            staleReview: { warning: 0, overdue: 0 },
+            unverified: 0,
+            backstopRatio: 0,
+            compressionRatio: 0,
+            generatedAt: '2026-05-24T00:00:00Z',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
+    }));
+
+    const { HealthReport } = await import('../HealthReport');
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(React.createElement(HealthReport));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const backlink = container.querySelector('[data-testid="eval-hub-backlink"]') as HTMLAnchorElement | null;
+    expect(backlink).toBeTruthy();
+    expect(backlink?.getAttribute('href')).toBe('/settings?ops=observability&obs=eval');
+    expect(backlink?.textContent).toContain('Eval Hub');
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    vi.restoreAllMocks();
   });
 });

@@ -2,25 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
-
-interface TraceSpan {
-  traceId: string;
-  spanId: string;
-  parentSpanId?: string;
-  name: string;
-  durationMs: number;
-  status: { code: number; message?: string };
-  attributes: Record<string, unknown>;
-  startTimeMs: number;
-  endTimeMs: number;
-  events: ReadonlyArray<{ name: string; timeMs: number; attributes?: Record<string, unknown> }>;
-}
-
-interface SpanNode {
-  span: TraceSpan;
-  children: SpanNode[];
-  depth: number;
-}
+import { buildForest, flattenForest, type SpanNode, type TraceSpan } from './trace-tree-utils';
 
 interface TraceGroup {
   traceId: string;
@@ -31,38 +13,6 @@ interface TraceGroup {
   startTime: number;
   spanCount: number;
   hasError: boolean;
-}
-
-function buildForest(spans: TraceSpan[]): SpanNode[] {
-  const byId = new Map(spans.map((s) => [s.spanId, s]));
-  const childMap = new Map<string, TraceSpan[]>();
-  const roots: TraceSpan[] = [];
-  for (const span of spans) {
-    if (span.parentSpanId && byId.has(span.parentSpanId)) {
-      const arr = childMap.get(span.parentSpanId) ?? [];
-      arr.push(span);
-      childMap.set(span.parentSpanId, arr);
-    } else {
-      roots.push(span);
-    }
-  }
-  function build(s: TraceSpan, depth: number): SpanNode {
-    const children = (childMap.get(s.spanId) ?? [])
-      .sort((a, b) => a.startTimeMs - b.startTimeMs)
-      .map((c) => build(c, depth + 1));
-    return { span: s, children, depth };
-  }
-  return roots.sort((a, b) => a.startTimeMs - b.startTimeMs).map((r) => build(r, 0));
-}
-
-function flattenForest(nodes: SpanNode[]): SpanNode[] {
-  const result: SpanNode[] = [];
-  function walk(node: SpanNode) {
-    result.push(node);
-    for (const child of node.children) walk(child);
-  }
-  for (const root of nodes) walk(root);
-  return result;
 }
 
 function groupByTrace(spans: TraceSpan[]): TraceGroup[] {
@@ -134,12 +84,13 @@ export function TraceBrowser() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="traceId or catId..."
-          className="flex-1 rounded-lg border border-cafe-border bg-cafe-surface px-3 py-1.5 text-sm text-cafe placeholder:text-cafe-muted focus:border-[var(--color-cafe-accent)] focus:outline-none"
+          className="flex-1 rounded-lg bg-[var(--console-field-bg)] px-3 py-1.5 text-xs text-cafe placeholder:text-cafe-muted outline-none transition focus:ring-1 focus:ring-[var(--console-input-stroke)]"
         />
         <button
           type="button"
           onClick={fetchTraces}
-          className="rounded-lg bg-[var(--color-cafe-accent)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-cafe-accent)] hover:opacity-90"
+          disabled={!search.trim()}
+          className="rounded-lg bg-cafe-accent px-3 py-1.5 text-xs font-semibold text-[var(--cafe-surface)] transition-colors hover:bg-cafe-accent-hover disabled:opacity-50"
         >
           Search
         </button>
@@ -167,6 +118,8 @@ export function TraceBrowser() {
 
 function TraceCard({ trace, expanded, onToggle }: { trace: TraceGroup; expanded: boolean; onToggle: () => void }) {
   const [selectedSpan, setSelectedSpan] = useState<string | null>(null);
+  const selectedSpanData = selectedSpan ? trace.spans.find((s) => s.spanId === selectedSpan) : undefined;
+  const selectedRouteSpanId = selectedSpanData?.name === 'cat_cafe.route' ? selectedSpanData.spanId : undefined;
 
   return (
     <div className="rounded-lg border border-cafe-border bg-cafe-surface">
@@ -175,23 +128,24 @@ function TraceCard({ trace, expanded, onToggle }: { trace: TraceGroup; expanded:
         onClick={onToggle}
         className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-cafe-surface-elevated/50"
       >
-        <span className="text-[10px] text-cafe-muted">{expanded ? '▼' : '▶'}</span>
+        <span className="text-micro text-cafe-muted">{expanded ? '▼' : '▶'}</span>
         <span className="flex-1 truncate text-xs font-medium text-cafe">{trace.rootName}</span>
-        <span className="rounded bg-cafe-surface-elevated px-1.5 py-0.5 text-[10px] text-cafe-muted">
+        <span className="rounded bg-cafe-surface-elevated px-1.5 py-0.5 text-micro text-cafe-muted">
           {trace.spanCount} span{trace.spanCount > 1 ? 's' : ''}
         </span>
-        <span className="text-[10px] tabular-nums text-cafe-secondary">{trace.totalDurationMs.toFixed(0)}ms</span>
+        <span className="text-micro tabular-nums text-cafe-secondary">{trace.totalDurationMs.toFixed(0)}ms</span>
         {trace.hasError && (
-          <span className="rounded bg-conn-red-bg px-1.5 py-0.5 text-[10px] font-medium text-conn-red-text">error</span>
+          <span className="rounded bg-conn-red-bg px-1.5 py-0.5 text-micro font-medium text-conn-red-text">error</span>
         )}
-        <span className="text-[10px] text-cafe-muted">{new Date(trace.startTime).toLocaleTimeString()}</span>
+        <span className="text-micro text-cafe-muted">{new Date(trace.startTime).toLocaleTimeString()}</span>
       </button>
 
       {expanded && (
         <div className="border-t border-cafe-border px-3 pb-3 pt-2 space-y-2">
-          <div className="text-[10px] text-cafe-muted font-mono">traceId: {trace.traceId}</div>
+          <div className="text-micro text-cafe-muted font-mono">traceId: {trace.traceId}</div>
+          <StepSummaryPanel traceId={trace.traceId} routeSpanId={selectedRouteSpanId} />
           <TreeWaterfall trace={trace} selectedSpan={selectedSpan} onSelectSpan={setSelectedSpan} />
-          {selectedSpan && <SpanDetail span={trace.spans.find((s) => s.spanId === selectedSpan)} />}
+          {selectedSpan && <SpanDetail span={selectedSpanData} />}
         </div>
       )}
     </div>
@@ -223,10 +177,10 @@ function TreeWaterfall({
           <div
             key={node.span.spanId}
             onClick={() => onSelectSpan(selected ? null : node.span.spanId)}
-            className={`flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-cafe-surface-elevated ${selected ? 'bg-[var(--color-cafe-accent)]/10' : ''}`}
+            className={`flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-cafe-surface-elevated ${selected ? 'bg-conn-blue-bg/70' : ''}`}
           >
             <div
-              className="flex items-center gap-1 truncate text-[10px]"
+              className="flex items-center gap-1 truncate text-micro"
               style={{ paddingLeft: `${node.depth * 16}px`, width: '160px', flexShrink: 0 }}
             >
               {node.depth > 0 && <span className="text-cafe-muted/50">{'└'}</span>}
@@ -238,17 +192,17 @@ function TreeWaterfall({
               </span>
             </div>
             {catId ? (
-              <span className="w-14 flex-shrink-0 truncate text-[10px] text-cafe-muted">{catId}</span>
+              <span className="w-14 flex-shrink-0 truncate text-micro text-cafe-muted">{catId}</span>
             ) : (
               <span className="w-14 flex-shrink-0" />
             )}
             <div className="relative h-3 flex-1 rounded bg-cafe-surface-elevated">
               <div
-                className={`absolute h-full rounded ${statusOk ? 'bg-[var(--color-cafe-accent)]' : 'bg-[var(--color-conn-red-text)]'}`}
+                className={`absolute h-full rounded ${statusOk ? 'bg-conn-blue-text' : 'bg-conn-red-text'}`}
                 style={{ left: `${left}%`, width: `${width}%` }}
               />
             </div>
-            <span className="w-14 flex-shrink-0 text-right text-[10px] tabular-nums text-cafe-muted">
+            <span className="w-14 flex-shrink-0 text-right text-micro tabular-nums text-cafe-muted">
               {node.span.durationMs.toFixed(0)}ms
             </span>
           </div>
@@ -277,9 +231,9 @@ function SpanDetail({ span }: { span: TraceSpan | undefined }) {
             <button
               type="button"
               onClick={() => setXrayOpen(!xrayOpen)}
-              className="rounded-md bg-[var(--console-xray-btn-bg)] px-2 py-0.5 text-[10px] font-medium text-[var(--console-xray-text)] transition-colors hover:bg-[var(--console-xray-btn-hover)]"
+              className="rounded-md bg-conn-purple-bg px-2 py-0.5 text-micro font-medium text-conn-purple-text transition-colors hover:bg-conn-purple-hover hover:text-[var(--cafe-surface)]"
             >
-              {xrayOpen ? '✕ Close' : '🔬 X-Ray'}
+              {xrayOpen ? 'Close' : 'X-Ray'}
             </button>
           )}
         </div>
@@ -321,7 +275,7 @@ function SpanDetail({ span }: { span: TraceSpan | undefined }) {
   );
 }
 
-// ── F153: Prompt X-Ray Inspector ──────────────────────────────────
+// -- F153: Prompt X-Ray Inspector --
 
 interface PromptCaptureData {
   captureId: string;
@@ -341,6 +295,12 @@ interface PromptCaptureData {
   };
   promptBytes: number;
   tokenEstimate: number;
+  // AC-G10 (Phase G native L0 closure / KD-44)
+  nativeSystemPrompt?: string;
+  nativeSystemPromptSource?: 'f203-l0';
+  nativeSystemTokenEstimate?: number;
+  totalTokenEstimate?: number;
+  captureDiagnostics?: readonly string[];
 }
 
 type InspectorTab = 'system' | 'user' | 'effective' | 'meta';
@@ -383,27 +343,30 @@ function PromptInspector({ invocationId, catId }: { invocationId?: string; catId
     load();
   }, [invocationId, catId]);
 
-  if (loading) return <div className="mt-2 text-[10px] text-cafe-muted">Loading prompt capture...</div>;
-  if (error) return <div className="mt-2 text-[10px] text-cafe-secondary">{error}</div>;
+  if (loading) return <div className="mt-2 text-micro text-cafe-muted">Loading prompt capture...</div>;
+  if (error) return <div className="mt-2 text-micro text-cafe-secondary">{error}</div>;
   if (!selected) return null;
 
   const tabs: { key: InspectorTab; label: string; color: string }[] = [
-    { key: 'system', label: 'System', color: 'text-blue-600' },
-    { key: 'user', label: 'User', color: 'text-green-600' },
-    { key: 'effective', label: 'Full Prompt', color: 'text-purple-600' },
-    { key: 'meta', label: 'Meta', color: 'text-amber-600' },
+    { key: 'system', label: 'System', color: 'text-conn-blue-text' },
+    { key: 'user', label: 'User', color: 'text-conn-green-text' },
+    { key: 'effective', label: 'Full Prompt', color: 'text-conn-purple-text' },
+    { key: 'meta', label: 'Meta', color: 'text-conn-amber-text' },
   ];
 
   return (
-    <div className="mt-3 rounded-lg border border-[var(--console-xray-border)] bg-[var(--console-xray-bg)] p-3">
+    <div className="mt-3 rounded-lg border border-conn-purple-ring bg-cafe-surface p-3">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-[11px] font-medium text-[var(--console-xray-text)]">Prompt X-Ray</span>
-        <div className="flex items-center gap-2 text-[10px] text-cafe-muted">
+        <span className="text-xs font-medium text-conn-purple-text">Prompt X-Ray</span>
+        <div className="flex items-center gap-2 text-micro text-cafe-muted">
           <span>{selected.model}</span>
           <span>·</span>
           <span>{(selected.promptBytes / 1024).toFixed(1)} KB</span>
           <span>·</span>
-          <span>~{selected.tokenEstimate} tokens</span>
+          {/* AC-G10: prefer totalTokenEstimate (msg + native L0) so F203
+              providers no longer silently under-count. Pre-AC-G10 captures
+              omit totalTokenEstimate → fallback to tokenEstimate (msg only). */}
+          <span>~{selected.totalTokenEstimate ?? selected.tokenEstimate} tokens</span>
         </div>
       </div>
 
@@ -415,7 +378,7 @@ function PromptInspector({ invocationId, catId }: { invocationId?: string; catId
             key={t.key}
             type="button"
             onClick={() => setTab(t.key)}
-            className={`rounded-t px-2 py-0.5 text-[10px] font-medium transition-colors ${
+            className={`rounded-t px-2 py-0.5 text-micro font-medium transition-colors ${
               tab === t.key ? `${t.color} bg-cafe-surface-elevated` : 'text-cafe-muted hover:text-cafe-secondary'
             }`}
           >
@@ -427,15 +390,49 @@ function PromptInspector({ invocationId, catId }: { invocationId?: string; catId
       <div className="mt-2 max-h-[300px] overflow-y-auto">
         {tab === 'system' && (
           <>
+            {/* AC-G10 (砚砚 Design Gate position 3): zoned display. Native L0
+                section first (provider's actual system-role channel), then
+                message-system / pack appendix. Resume amber banner only
+                applies to the message-system path — native L0 is sent every
+                turn for F203 providers regardless of `injected` flag. */}
+            {selected.nativeSystemPrompt && (
+              <PromptSection
+                content={selected.nativeSystemPrompt}
+                label={`Native L0 (system role)${
+                  selected.nativeSystemPromptSource ? ` · ${selected.nativeSystemPromptSource}` : ''
+                }`}
+                className="mb-2"
+              />
+            )}
             {!selected.injectionDecision.injected && (
-              <div className="mb-2 rounded bg-[var(--semantic-warning-bg)] px-2 py-1 text-[10px] text-[var(--semantic-warning-text)]">
-                Resume — system prompt was not injected this turn
+              <div className="mb-2 rounded bg-conn-amber-bg px-2 py-1 text-micro text-conn-amber-text">
+                {selected.nativeSystemPrompt
+                  ? 'Resume — message-system pack not appended this turn (Native L0 still sent via system-role channel)'
+                  : 'Resume — system prompt was not injected this turn'}
               </div>
             )}
             <PromptSection
               content={selected.systemPrompt}
-              label={selected.injectionDecision.injected ? 'System Prompt' : 'System Prompt (not sent)'}
+              label={
+                selected.nativeSystemPrompt
+                  ? selected.injectionDecision.injected
+                    ? 'Message system prompt (pack appendix)'
+                    : 'Message system prompt (pack appendix · not sent this turn)'
+                  : selected.injectionDecision.injected
+                    ? 'System Prompt'
+                    : 'System Prompt (not sent)'
+              }
             />
+            {selected.captureDiagnostics && selected.captureDiagnostics.length > 0 && (
+              <div className="mt-2 rounded border border-conn-amber-ring bg-conn-amber-bg p-2 text-micro text-conn-amber-text">
+                <div className="mb-1 font-medium">Capture diagnostics</div>
+                <ul className="ml-3 list-disc space-y-0.5">
+                  {selected.captureDiagnostics.map((d, i) => (
+                    <li key={`${d}-${i}`}>{d}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </>
         )}
         {tab === 'user' && (
@@ -455,11 +452,15 @@ function PromptInspector({ invocationId, catId }: { invocationId?: string; catId
 
 function PromptTokenBar({ capture }: { capture: PromptCaptureData }) {
   const injected = capture.injectionDecision.injected;
+  // AC-G10: include native L0 length when present so F203 providers no
+  // longer silently under-display total prompt size in the bar.
+  const nativeLen = capture.nativeSystemPrompt?.length ?? 0;
   const sysLen = injected ? capture.systemPrompt.length : 0;
   const userLen = capture.userPrompt.length;
   const missionLen = capture.missionPrefix?.length ?? 0;
-  const total = capture.effectivePrompt.length || 1;
+  const total = nativeLen + capture.effectivePrompt.length || 1;
 
+  const nativePct = (nativeLen / total) * 100;
   const sysPct = (sysLen / total) * 100;
   const missionPct = (missionLen / total) * 100;
   const userPct = (userLen / total) * 100;
@@ -467,38 +468,41 @@ function PromptTokenBar({ capture }: { capture: PromptCaptureData }) {
   return (
     <div>
       <div className="flex h-2 overflow-hidden rounded-full bg-cafe-surface-elevated">
-        <div
-          className="bg-[var(--console-chart-system)]"
-          style={{ width: `${sysPct}%` }}
-          title={`System: ${sysPct.toFixed(0)}%`}
-        />
+        {nativePct > 0 && (
+          <div
+            className="bg-conn-purple-text"
+            style={{ width: `${nativePct}%` }}
+            title={`Native L0: ${nativePct.toFixed(0)}%`}
+          />
+        )}
+        <div className="bg-conn-blue-text" style={{ width: `${sysPct}%` }} title={`System: ${sysPct.toFixed(0)}%`} />
         {missionPct > 0 && (
           <div
-            className="bg-[var(--console-chart-mission)]"
+            className="bg-conn-amber-text"
             style={{ width: `${missionPct}%` }}
             title={`Mission: ${missionPct.toFixed(0)}%`}
           />
         )}
-        <div
-          className="bg-[var(--console-chart-user)]"
-          style={{ width: `${userPct}%` }}
-          title={`User: ${userPct.toFixed(0)}%`}
-        />
+        <div className="bg-conn-green-text" style={{ width: `${userPct}%` }} title={`User: ${userPct.toFixed(0)}%`} />
       </div>
-      <div className="mt-0.5 flex gap-3 text-[9px] text-cafe-muted">
+      <div className="mt-0.5 flex gap-3 text-micro text-cafe-muted">
+        {nativePct > 0 && (
+          <span>
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-conn-purple-text" /> Native L0{' '}
+            {nativePct.toFixed(0)}%
+          </span>
+        )}
         <span>
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--console-chart-system)]" /> System{' '}
-          {sysPct.toFixed(0)}%
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-conn-blue-text" /> System {sysPct.toFixed(0)}%
         </span>
         {missionPct > 0 && (
           <span>
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--console-chart-mission)]" /> Mission{' '}
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-conn-amber-text" /> Mission{' '}
             {missionPct.toFixed(0)}%
           </span>
         )}
         <span>
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--console-chart-user)]" /> User{' '}
-          {userPct.toFixed(0)}%
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-conn-green-text" /> User {userPct.toFixed(0)}%
         </span>
       </div>
     </div>
@@ -506,11 +510,11 @@ function PromptTokenBar({ capture }: { capture: PromptCaptureData }) {
 }
 
 function PromptSection({ content, label, className = '' }: { content: string; label: string; className?: string }) {
-  if (!content) return <div className="text-[10px] text-cafe-muted">Empty</div>;
+  if (!content) return <div className="text-micro text-cafe-muted">Empty</div>;
   return (
     <div className={className}>
-      <div className="mb-1 text-[10px] font-medium text-cafe-muted">{label}</div>
-      <pre className="whitespace-pre-wrap break-words rounded bg-cafe-surface p-2 font-mono text-[10px] leading-relaxed text-cafe">
+      <div className="mb-1 text-micro font-medium text-cafe-muted">{label}</div>
+      <pre className="whitespace-pre-wrap break-words rounded bg-cafe-surface p-2 font-mono text-micro leading-relaxed text-cafe">
         {content}
       </pre>
     </div>
@@ -520,7 +524,7 @@ function PromptSection({ content, label, className = '' }: { content: string; la
 function PromptMeta({ capture }: { capture: PromptCaptureData }) {
   const { injectionDecision } = capture;
   return (
-    <div className="space-y-2 text-[10px]">
+    <div className="space-y-2 text-micro">
       <div>
         <div className="font-medium text-cafe-muted">Capture Info</div>
         <div className="ml-2 space-y-0.5">
@@ -547,11 +551,7 @@ function PromptMeta({ capture }: { capture: PromptCaptureData }) {
         <div className="ml-2 space-y-0.5">
           <div>
             <span className="text-cafe-muted">injected:</span>{' '}
-            <span
-              className={
-                injectionDecision.injected ? 'text-[var(--semantic-success-text)]' : 'text-[var(--semantic-error-text)]'
-              }
-            >
+            <span className={injectionDecision.injected ? 'text-conn-green-text' : 'text-conn-red-text'}>
               {String(injectionDecision.injected)}
             </span>
           </div>
@@ -573,10 +573,131 @@ function PromptMeta({ capture }: { capture: PromptCaptureData }) {
             <span className="text-cafe-muted">bytes:</span> {capture.promptBytes.toLocaleString()}
           </div>
           <div>
-            <span className="text-cafe-muted">tokens (est):</span> ~{capture.tokenEstimate.toLocaleString()}
+            <span className="text-cafe-muted">tokens · message (est):</span> ~{capture.tokenEstimate.toLocaleString()}
           </div>
+          {/* AC-G10 (砚砚 立场 4): split token breakdown — Hub showed
+              tokenEstimate as if it were total before, which silently
+              under-counted F203 providers. Now native L0 + total are
+              shown separately so the gap is visible. */}
+          {capture.nativeSystemTokenEstimate !== undefined && (
+            <div>
+              <span className="text-cafe-muted">tokens · native L0 (est):</span> ~
+              {capture.nativeSystemTokenEstimate.toLocaleString()}
+              {capture.nativeSystemPromptSource ? (
+                <span className="ml-1 text-cafe-muted">({capture.nativeSystemPromptSource})</span>
+              ) : null}
+            </div>
+          )}
+          {capture.totalTokenEstimate !== undefined && capture.totalTokenEstimate !== capture.tokenEstimate && (
+            <div>
+              <span className="text-cafe-muted">tokens · total (est):</span> ~
+              {capture.totalTokenEstimate.toLocaleString()}
+            </div>
+          )}
         </div>
       </div>
+      {capture.captureDiagnostics && capture.captureDiagnostics.length > 0 && (
+        <div>
+          <div className="font-medium text-cafe-muted">Capture Diagnostics</div>
+          <ul className="ml-3 list-disc space-y-0.5">
+            {capture.captureDiagnostics.map((d, i) => (
+              <li key={`${d}-${i}`}>{d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── F153 Phase I: Step Summary panel ──────────────────────────────
+
+interface StepSummaryData {
+  traceId: string;
+  routeSpanId?: string;
+  agent_loop_count: number | null;
+  tool_call_count: number | null;
+  a2a_dispatch_count: number | null;
+  duration_ms: number;
+  token_total: number;
+  error_count: number;
+  is_restored: boolean;
+  width_avg_tools_per_loop: number | null;
+  agent_loop_partial: boolean;
+}
+
+function StepSummaryPanel({ traceId, routeSpanId }: { traceId: string; routeSpanId?: string }) {
+  const [data, setData] = useState<StepSummaryData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setData(null);
+    const qs = new URLSearchParams({ traceId });
+    if (routeSpanId) qs.set('routeSpanId', routeSpanId);
+    apiFetch(`/api/telemetry/step-summary?${qs.toString()}`)
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setData(null);
+          return;
+        }
+        const json = (await res.json()) as StepSummaryData;
+        setData(json);
+      })
+      .catch(() => {
+        /* ignore */
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [traceId, routeSpanId]);
+
+  if (loading) {
+    return <div className="text-micro text-cafe-muted">Loading Step Summary…</div>;
+  }
+  if (!data) return null;
+
+  // '—' for null (AC-I4 / AC-I7 non-degradation — never render 0 for unknown).
+  const fmt = (n: number | null): string => (n === null ? '—' : n.toString());
+
+  return (
+    <div className="rounded-lg border border-cafe-border bg-cafe-surface-elevated p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-medium text-cafe">Step Summary</span>
+        {data.is_restored && (
+          <span className="rounded bg-cafe-surface px-1.5 py-0.5 text-micro text-cafe-muted">Restored (history)</span>
+        )}
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <StepCell
+          label="Agent loops"
+          value={data.agent_loop_partial ? `${fmt(data.agent_loop_count)}+` : fmt(data.agent_loop_count)}
+          primary
+        />
+        <StepCell label="Tool calls" value={fmt(data.tool_call_count)} />
+        <StepCell label="A2A dispatch" value={fmt(data.a2a_dispatch_count)} />
+        <StepCell label="Duration" value={`${data.duration_ms.toFixed(0)} ms`} />
+        <StepCell label="Tokens" value={data.token_total.toLocaleString()} />
+        <StepCell label="Errors" value={data.error_count.toString()} />
+      </div>
+      <div className="mt-2 border-t border-cafe-border pt-2 text-micro text-cafe-muted">
+        Length × Width = {fmt(data.agent_loop_count)} loop ×{' '}
+        {data.width_avg_tools_per_loop != null ? `${data.width_avg_tools_per_loop.toFixed(1)} tools/loop` : '—'}
+      </div>
+    </div>
+  );
+}
+
+function StepCell({ label, value, primary }: { label: string; value: string; primary?: boolean }) {
+  return (
+    <div>
+      <div className="text-micro text-cafe-muted">{label}</div>
+      <div className={`font-mono text-xs ${primary ? 'font-semibold text-cafe' : 'text-cafe'}`}>{value}</div>
     </div>
   );
 }

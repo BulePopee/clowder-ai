@@ -10,13 +10,14 @@
  *   cat-cafe:tasks:kind:{kind}          → Sorted Set (按类型索引, score=createdAt)
  *   cat-cafe:tasks:subject:{subjectKey} → String (subject→taskId 唯一映射)
  *
- * TTL: 30 days default. pr_tracking tasks with status!=done have no TTL.
+ * TTL: 30 days default. Tracking tasks (pr_tracking/issue_tracking) with status!=done have no TTL.
  */
 
 import type { AutomationState, CatId, CreateTaskInput, TaskItem, TaskKind, UpdateTaskInput } from '@cat-cafe/shared';
+import { isTrackingKind } from '@cat-cafe/shared';
 import type { RedisClient } from '@cat-cafe/shared/utils';
 import { generateSortableId } from '../ports/MessageStore.js';
-import { createSubjectOwnershipConflict, type ITaskStore } from '../ports/TaskStore.js';
+import { assertSubjectUpdateOwnership, type ITaskStore } from '../ports/TaskStore.js';
 import { TaskKeys } from '../redis-keys/task-keys.js';
 
 const DEFAULT_TTL = 0; // persistent — set >0 via env to enable expiry
@@ -76,6 +77,10 @@ export class RedisTaskStore implements ITaskStore {
       updatedAt: now,
       automationState: input.automationState,
       userId: input.userId,
+      // F193 Phase E (dispatch gate)
+      ...(input.relatedFeatureId ? { relatedFeatureId: input.relatedFeatureId } : {}),
+      ...(input.detectedFeatureIds?.length ? { detectedFeatureIds: input.detectedFeatureIds } : {}),
+      ...(input.dispatchGate ? { dispatchGate: input.dispatchGate } : {}),
     };
 
     await this.writeTask(task);
@@ -192,19 +197,19 @@ export class RedisTaskStore implements ITaskStore {
       return task;
     }
 
-    if (existing.userId && input.userId && existing.userId !== input.userId) {
-      throw createSubjectOwnershipConflict(sk, existing.userId, input.userId);
-    }
+    assertSubjectUpdateOwnership(sk, existing, input);
 
     const updated: TaskItem = {
       ...existing,
       threadId: input.threadId,
       title: input.title,
       ownerCatId: input.ownerCatId ?? existing.ownerCatId,
-      status: existing.kind === 'pr_tracking' && existing.status === 'done' ? 'todo' : existing.status,
+      status: isTrackingKind(existing.kind) && existing.status === 'done' ? 'todo' : existing.status,
       why: input.why,
       userId: input.userId ?? existing.userId,
-      automationState: input.automationState ?? existing.automationState,
+      automationState: input.automationState
+        ? this.mergeAutomationState(existing.automationState, input.automationState)
+        : existing.automationState,
       updatedAt: now,
     };
 
@@ -263,6 +268,8 @@ export class RedisTaskStore implements ITaskStore {
       ...(input.status !== undefined ? { status: input.status } : {}),
       ...(input.why !== undefined ? { why: input.why } : {}),
       ...(input.automationState !== undefined ? { automationState: input.automationState } : {}),
+      // F193-E1 P1-4: allow patching dispatchGate
+      ...(input.dispatchGate !== undefined ? { dispatchGate: input.dispatchGate } : {}),
       updatedAt: Date.now(),
     };
 
@@ -369,13 +376,13 @@ export class RedisTaskStore implements ITaskStore {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  /** pr_tracking tasks with status!=done never expire; others get default TTL. */
+  /** Tracking tasks (pr_tracking/issue_tracking) with status!=done never expire; others get default TTL. */
   private async applyTtl(task: TaskItem): Promise<void> {
     if (this.ttlSeconds === null) return;
     const key = TaskKeys.detail(task.id);
 
-    if (task.kind === 'pr_tracking' && task.status !== 'done') {
-      // Active PR tracking tasks don't expire
+    if (isTrackingKind(task.kind) && task.status !== 'done') {
+      // Active tracking tasks don't expire
       await this.redis.persist(key);
     } else {
       await this.redis.expire(key, this.ttlSeconds);
@@ -388,10 +395,10 @@ export class RedisTaskStore implements ITaskStore {
     if (this.ttlSeconds === null) return;
     const threadKey = TaskKeys.thread(threadId);
 
-    // A thread index shared with any active PR-tracking task must remain durable.
+    // A thread index shared with any active tracking task must remain durable.
     const threadTasks = await this.listByThread(threadId);
-    const hasActivePrTracking = threadTasks.some((item) => item.kind === 'pr_tracking' && item.status !== 'done');
-    if (hasActivePrTracking) {
+    const hasActiveTracking = threadTasks.some((item) => isTrackingKind(item.kind) && item.status !== 'done');
+    if (hasActiveTracking) {
       await this.redis.persist(threadKey);
     } else {
       await this.redis.expire(threadKey, this.ttlSeconds);
@@ -407,15 +414,6 @@ export class RedisTaskStore implements ITaskStore {
     );
   }
 
-  private async removeTaskArtifacts(task: TaskItem): Promise<void> {
-    const cleanup = this.redis.multi();
-    cleanup.del(TaskKeys.detail(task.id));
-    cleanup.zrem(TaskKeys.thread(task.threadId), task.id);
-    cleanup.zrem(TaskKeys.kind(task.kind), task.id);
-    await cleanup.exec();
-    await this.applyThreadTtl(task.threadId);
-  }
-
   private mergeAutomationState(
     existing: AutomationState | undefined,
     patch: Partial<AutomationState>,
@@ -427,6 +425,7 @@ export class RedisTaskStore implements ITaskStore {
       ci: patch.ci ? { ...existing?.ci, ...patch.ci } : existing?.ci,
       conflict: patch.conflict ? { ...existing?.conflict, ...patch.conflict } : existing?.conflict,
       review: patch.review ? { ...existing?.review, ...patch.review } : existing?.review,
+      issue: patch.issue ? { ...existing?.issue, ...patch.issue } : existing?.issue,
     };
   }
 
@@ -480,6 +479,10 @@ export class RedisTaskStore implements ITaskStore {
     if (task.automationState) {
       out.automationState = JSON.stringify(task.automationState);
     }
+    // F193 Phase E (dispatch gate)
+    if (task.relatedFeatureId) out.relatedFeatureId = task.relatedFeatureId;
+    if (task.detectedFeatureIds?.length) out.detectedFeatureIds = JSON.stringify(task.detectedFeatureIds);
+    if (task.dispatchGate) out.dispatchGate = JSON.stringify(task.dispatchGate);
     return out;
   }
 
@@ -498,13 +501,31 @@ export class RedisTaskStore implements ITaskStore {
       updatedAt: parseInt(data.updatedAt ?? '0', 10),
       userId: data.userId || undefined,
     };
+    // Hydrate JSON-serialized nested objects
+    let hydrated = base;
     if (data.automationState) {
       try {
-        return { ...base, automationState: JSON.parse(data.automationState) };
+        hydrated = { ...hydrated, automationState: JSON.parse(data.automationState) };
       } catch {
-        return base;
+        /* ignore */
       }
     }
-    return base;
+    // F193 Phase E (dispatch gate)
+    if (data.relatedFeatureId) hydrated = { ...hydrated, relatedFeatureId: data.relatedFeatureId };
+    if (data.detectedFeatureIds) {
+      try {
+        hydrated = { ...hydrated, detectedFeatureIds: JSON.parse(data.detectedFeatureIds) };
+      } catch {
+        /* ignore */
+      }
+    }
+    if (data.dispatchGate) {
+      try {
+        hydrated = { ...hydrated, dispatchGate: JSON.parse(data.dispatchGate) };
+      } catch {
+        /* ignore */
+      }
+    }
+    return hydrated;
   }
 }

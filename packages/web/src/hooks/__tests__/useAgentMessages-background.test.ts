@@ -199,6 +199,57 @@ describe('background thread socket handling', () => {
     // F183 Phase B1.7 (砚砚 R1 P1) regression: 重复同 invocation error 走
     // stable-key dedup（reducer 内部 update existing），messages.length 不变，
     // 不应再 +1 unread。
+    // F212 Phase B 云端 codex P2-4 (2026-05-27): bg-thread error must also propagate
+    // metadata.cliDiagnostics into bubble.extra so the folded panel renders. Without
+    // this fix, CLI failures in a non-foreground thread fall back to legacy red-pill.
+    it('F212 Phase B (P2-4): bg error wires metadata.cliDiagnostics into bubble.extra', () => {
+      const diag = {
+        reasonCode: 'auth_failed' as const,
+        publicSummary: 'API 认证失败',
+        publicHint: '检查 API key',
+        debugRef: { command: 'codex', exitCode: 1, signal: null, invocationId: 'inv-bg-cli' },
+      };
+      simulateBackgroundMessage({
+        type: 'error',
+        catId: 'opus',
+        threadId: 'thread-bg-cli',
+        invocationId: 'inv-bg-cli',
+        error: 'CLI exit 1',
+        timestamp: Date.now(),
+        isFinal: true,
+        metadata: { provider: 'anthropic', model: 'claude-opus', cliDiagnostics: diag },
+      });
+      const ts = useChatStore.getState().getThreadState('thread-bg-cli');
+      const errBubble = ts.messages.find((m) => m.type === 'system' && (m as { variant?: string }).variant === 'error');
+      expect(errBubble).toBeTruthy();
+      expect(errBubble?.extra?.cliDiagnostics).toEqual(diag);
+    });
+
+    // F212 Phase B 云端 codex P2-4 fallback path: invocationless bg error (no reducer
+    // route) uses legacy addMessageToThread — that path must also include extra.cliDiagnostics.
+    it('F212 Phase B (P2-4): bg error fallback path also wires cliDiagnostics into extra', () => {
+      const diag = {
+        reasonCode: 'network_error' as const,
+        publicSummary: '网络连接失败',
+        publicHint: '检查代理 / VPN',
+        debugRef: { command: 'codex', exitCode: 1, signal: null },
+      };
+      simulateBackgroundMessage({
+        type: 'error',
+        catId: 'opus',
+        threadId: 'thread-bg-cli-2',
+        // no invocationId — forces legacy addMessageToThread path
+        error: 'CLI exit 1',
+        timestamp: Date.now(),
+        isFinal: true,
+        metadata: { provider: 'anthropic', model: 'claude-opus', cliDiagnostics: diag },
+      });
+      const ts = useChatStore.getState().getThreadState('thread-bg-cli-2');
+      const errBubble = ts.messages.find((m) => m.type === 'system' && (m as { variant?: string }).variant === 'error');
+      expect(errBubble).toBeTruthy();
+      expect(errBubble?.extra?.cliDiagnostics).toEqual(diag);
+    });
+
     it('B1.7 砚砚 R1 P1: bg duplicate error same invocation does NOT double-increment unread', () => {
       simulateBackgroundMessage({
         type: 'error',
@@ -497,14 +548,15 @@ describe('background thread socket handling', () => {
         timestamp: now + 3,
       });
 
-      expect(useChatStore.getState().getThreadState('thread-bg').messages).toEqual([
-        expect.objectContaining({
-          id: 'bg-callback-deferred',
-          origin: 'callback',
-          content: 'authoritative callback',
-          isStreaming: false,
-        }),
-      ]);
+      // Z11 correction: stream work-log remains separate from callback post_message speech.
+      const bgDeferMsgs = useChatStore.getState().getThreadState('thread-bg').messages;
+      expect(bgDeferMsgs).toHaveLength(2);
+      const stream1 = bgDeferMsgs.find((m) => m.origin === 'stream')!;
+      const callback1 = bgDeferMsgs.find((m) => m.origin === 'callback')!;
+      expect(stream1.content).toContain('stream head + late tail');
+      expect(callback1.id).toBe('bg-callback-deferred');
+      expect(callback1.isStreaming).toBe(false);
+      expect(callback1.content).toContain('authoritative callback');
     });
 
     it('drains deferred background callback when that cat emits non-final done', () => {
@@ -540,14 +592,15 @@ describe('background thread socket handling', () => {
         timestamp: now + 2,
       });
 
-      expect(useChatStore.getState().getThreadState('thread-bg').messages).toEqual([
-        expect.objectContaining({
-          id: 'bg-callback-nonfinal-done',
-          origin: 'callback',
-          content: 'authoritative callback from opus',
-          isStreaming: false,
-        }),
-      ]);
+      // Z11 correction: stream work-log remains separate from callback post_message speech.
+      const bgNonFinalMsgs = useChatStore.getState().getThreadState('thread-bg').messages;
+      expect(bgNonFinalMsgs).toHaveLength(2);
+      const stream2 = bgNonFinalMsgs.find((m) => m.origin === 'stream')!;
+      const callback2 = bgNonFinalMsgs.find((m) => m.origin === 'callback')!;
+      expect(stream2.content).toContain('stream head');
+      expect(callback2.id).toBe('bg-callback-nonfinal-done');
+      expect(callback2.isStreaming).toBe(false);
+      expect(callback2.content).toContain('authoritative callback from opus');
     });
 
     it('unlabeled background late chunk fails open after invocation gone — callback bubble preserved (砚砚 A.12)', () => {
@@ -2112,16 +2165,17 @@ describe('background thread socket handling', () => {
       });
 
       const ts = useChatStore.getState().getThreadState('thread-bg');
-      // Single bubble, content/origin/isStreaming patched by reducer after done.
-      expect(ts.messages).toHaveLength(1);
-      expect(ts.messages[0]).toMatchObject({
-        id: 'bg-cb-canon-1',
-        catId: 'opus',
-        content: 'final canonical answer',
-        origin: 'callback',
-        isStreaming: false,
-        extra: { stream: { invocationId: 'inv-canon-1' } },
-      });
+      // Z11 correction: stream raw stays in the CLI bubble, callback speech gets its own bubble.
+      expect(ts.messages).toHaveLength(2);
+      const stream3 = ts.messages.find((m) => m.origin === 'stream')!;
+      const callback3 = ts.messages.find((m) => m.origin === 'callback')!;
+      expect(stream3.catId).toBe('opus');
+      expect(stream3.content).toContain('streaming...');
+      expect(callback3.id).toBe('bg-cb-canon-1');
+      expect(callback3.catId).toBe('opus');
+      expect(callback3.isStreaming).toBe(false);
+      expect(callback3.extra?.stream?.invocationId).toBe('inv-canon-1');
+      expect(callback3.content).toContain('final canonical answer');
     });
 
     it('bg callback with canonical invocationId without replacementTarget creates new bubble via reducer', () => {
@@ -2326,12 +2380,19 @@ describe('background thread socket handling', () => {
       });
 
       const ts = useChatStore.getState().getThreadState('thread-bg-coexist');
-      const thinkingBubble = ts.messages.find((m) => m.id === 'msg-inv-coexist-opus-thinking');
-      const textBubble = ts.messages.find((m) => m.id === 'msg-inv-coexist-opus');
-      // P1 不变量: thinking bubble 必须保持 streaming（reducer 没写它），text bubble 必须 finalized
-      expect(thinkingBubble?.isStreaming).toBe(true);
-      expect(textBubble?.isStreaming).toBe(false);
-      expect(textBubble?.content).toBe('streaming text end');
+      // F194 Phase Z8 (KD-27 + 砚砚 R1 OQ-1): thinking + assistant_text 同 invocation
+      // 在 reducer 内部仍是 2 个 sub-bubble (kind separation 保留)，但 writer boundary
+      // projection 把它们 collapse 成 1 个 canonical bubble — 同时携带 thinking + content
+      // 字段。canonical id 由 ts asc 的 first record 提供（tie 用 id asc tiebreak）。
+      // 原 P1 不变量"thinking bubble 必须保持 streaming"已被 Z8 contract 替代为
+      // "thinking content 保留在合并 bubble 的 thinking 字段，content 也在"。
+      const opusBubbles = ts.messages.filter((m) => m.catId === 'opus' && m.type === 'assistant');
+      expect(opusBubbles).toHaveLength(1); // collapsed by Z8 projection
+      const merged = opusBubbles[0]!;
+      expect(merged.thinking).toContain('思考中...'); // thinking 字段保留
+      expect(merged.content).toBe('streaming text end'); // content 完整 (text final 后)
+      // R1 P1#1: callback-aware/last-record isStreaming — 最后 ts 的 record (text) finalized → false
+      expect(merged.isStreaming).toBe(false);
     });
 
     it('bgStreamRefs ledger captures reducer-created bubble id for canonical stream chunks', () => {

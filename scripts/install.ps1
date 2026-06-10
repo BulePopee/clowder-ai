@@ -45,7 +45,7 @@ function Test-PuppeteerBrowserDownloadFailure {
 }
 function Write-PuppeteerSkipWarning {
     Write-Warn "Bundled Chrome download failed - skipped"
-    Write-Warn "Thread export / screenshot may be unavailable. To install later: npx puppeteer browsers install chrome"
+    Write-Warn "Thread export / screenshot may be unavailable. Install Chrome/Chromium or set CHROME_EXECUTABLE_PATH in .env"
 }
 function Test-LockfileMismatchFailure {
     param([string]$OutputText)
@@ -427,9 +427,25 @@ REDIS_PORT=6399
 # Apply-InstallerRedisPlan in Step 3) into .env BEFORE we load it. We no
 # longer write Claude/Codex/Gemini/Kimi auth from the installer, but the
 # Redis env state still flows through the same EnvSetMap/EnvDeleteMap and
-# this is the only call that persists it to disk (codex review P1 on
-# 3fa55b5c).
+# this is the only call that persists it to disk.
 Apply-InstallerAuthEnv -State $authState -EnvFile $envFile
+
+# #675/#705: Generate TELEMETRY_HMAC_SALT if missing, quoted-empty, or whitespace-only
+if (Test-Path $envFile) {
+    $needsSalt = $true
+    $saltLine = Select-String -Path $envFile -Pattern "^TELEMETRY_HMAC_SALT=" | Select-Object -First 1
+    if ($saltLine) {
+        $val = ($saltLine.Line -replace '^TELEMETRY_HMAC_SALT=', '').Trim().Trim('"', "'").Trim()
+        if ($val.Length -gt 0) { $needsSalt = $false }
+    }
+    if ($needsSalt) {
+        $bytes = [byte[]]::new(32)
+        [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+        $salt = -join ($bytes | ForEach-Object { "{0:x2}" -f $_ })
+        Add-Content -Path $envFile -Value "TELEMETRY_HMAC_SALT=$salt"
+        Write-Ok "Generated TELEMETRY_HMAC_SALT"
+    }
+}
 
 # Load .env into current session so NEXT_PUBLIC_* vars are available at build time
 if (Test-Path $envFile) {
@@ -519,10 +535,24 @@ Mount-InstallerSkills -ProjectRoot $ProjectRoot
 
 Write-Step "Step 7/8 - AI CLI tools"
 
+function Install-AntigravityCli {
+    $installerUrl = "https://antigravity.google/cli/install.cmd"
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) "antigravity-cli-install.cmd"
+    try {
+        Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing -TimeoutSec 120
+        & $installerPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Antigravity CLI installer exited with code $LASTEXITCODE"
+        }
+    } finally {
+        Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $cliTools = @(
     @{ Name = "Claude"; Label = "Claude"; Cmd = "claude"; Pkg = "@anthropic-ai/claude-code" },
     @{ Name = "Codex"; Label = "Codex"; Cmd = "codex"; Pkg = "@openai/codex" },
-    @{ Name = "Gemini"; Label = "Gemini"; Cmd = "gemini"; Pkg = "@google/gemini-cli" },
+    @{ Name = "Antigravity"; Label = "Antigravity CLI"; Cmd = "agy"; InstallKind = "antigravity-native" },
     @{ Name = "Kimi"; Label = "Kimi"; Cmd = "kimi"; Pkg = "kimi-cli"; InstallKind = "python" }
 )
 
@@ -542,7 +572,9 @@ if (-not $SkipCli) {
         } else {
             Write-Host "  Installing $($tool.Name) CLI..."
             try {
-                if ($tool.InstallKind -eq "python") {
+                if ($tool.InstallKind -eq "antigravity-native") {
+                    Install-AntigravityCli
+                } elseif ($tool.InstallKind -eq "python") {
                     $uvCommand = Resolve-ToolCommand -Name "uv"
                     if ($uvCommand) {
                         & $uvCommand tool install --python 3.13 $tool.Pkg 2>$null
@@ -564,7 +596,11 @@ if (-not $SkipCli) {
                 }
             } catch {
                 Exit-InstallerIfCancelled -ErrorRecord $_ -Context "$($tool.Name) CLI install"
-                Write-Warn "Could not install $($tool.Name) CLI: npm install -g $($tool.Pkg)"
+                if ($tool.InstallKind -eq "antigravity-native") {
+                    Write-Warn "Could not install $($tool.Name) CLI: download and run https://antigravity.google/cli/install.cmd"
+                } else {
+                    Write-Warn "Could not install $($tool.Name) CLI: npm install -g $($tool.Pkg)"
+                }
             }
         }
     }
@@ -575,7 +611,7 @@ if (-not $SkipCli) {
 
 $hasClaude = $null -ne (Resolve-ToolCommandWithRetry -Name "claude" -Attempts 6)
 $hasCodex = $null -ne (Resolve-ToolCommandWithRetry -Name "codex" -Attempts 6)
-$hasGemini = $null -ne (Resolve-ToolCommandWithRetry -Name "gemini" -Attempts 6)
+$hasAgy = $null -ne (Resolve-ToolCommandWithRetry -Name "agy" -Attempts 6)
 $hasKimi = $null -ne (Resolve-ToolCommandWithRetry -Name "kimi" -Attempts 6)
 
 Write-Step "Step 8/8 - Verify and launch"
@@ -602,7 +638,7 @@ Write-Host "  Node:    $(node --version)"
 Write-Host "  Redis:   $(if ($hasRedis) { 'available' } else { 'not configured' })"
 Write-Host "  Claude:  $(if ($hasClaude) { 'ready' } else { 'not installed' })"
 Write-Host "  Codex:   $(if ($hasCodex) { 'ready' } else { 'not installed' })"
-Write-Host "  Gemini:  $(if ($hasGemini) { 'ready' } else { 'not installed' })"
+Write-Host "  AGY:     $(if ($hasAgy) { 'ready' } else { 'not installed' })"
 Write-Host "  Kimi:    $(if ($hasKimi) { 'ready' } else { 'not installed' })"
 Write-Host ""
 Write-Host "  Start the app:" -ForegroundColor Cyan

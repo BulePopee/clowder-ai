@@ -15,12 +15,12 @@
  * F088 Multi-Platform Chat Gateway
  */
 
-import type { CatId, ConnectorSource, MessageContent } from '@cat-cafe/shared';
+import type { CatId, ConnectorDefinition, ConnectorSource, MessageContent } from '@cat-cafe/shared';
 import { catRegistry, getConnectorDefinition } from '@cat-cafe/shared';
 import type { FastifyBaseLogger } from 'fastify';
 import { findMonorepoRoot } from '../../utils/monorepo-root.js';
 import type { ConnectorCommandLayer } from './ConnectorCommandLayer.js';
-import { ConnectorMessageFormatter } from './ConnectorMessageFormatter.js';
+import { type CardAction, ConnectorMessageFormatter, DEFAULT_QUICK_ACTIONS } from './ConnectorMessageFormatter.js';
 import type { IConnectorPermissionStore } from './ConnectorPermissionStore.js';
 import type { IConnectorThreadBindingStore } from './ConnectorThreadBindingStore.js';
 import type { InboundMessageDedup } from './InboundMessageDedup.js';
@@ -44,6 +44,11 @@ function emitConnectorMessage(
       timestamp: msg.timestamp,
     },
   });
+}
+
+function connectorSourceIcon(def: ConnectorDefinition | undefined): string {
+  if (!def) return 'message';
+  return def.icon.type === 'png' ? def.icon.src : def.icon.iconId;
 }
 
 export type RouteResult =
@@ -71,6 +76,7 @@ export interface ConnectorRouterOptions {
       threadId: string,
       state: { v: 1; connectorId: string; externalChatId: string; createdAt: number; lastCommandAt?: number } | null,
     ): void | Promise<void>;
+    updateSystemKind?(threadId: string, kind: 'connector_hub' | 'eval_domain' | null): void | Promise<void>;
     get?(threadId: string):
       | {
           projectPath?: string;
@@ -110,7 +116,7 @@ export interface ConnectorRouterOptions {
       contentBlocks?: readonly MessageContent[],
       policy?: unknown,
       sender?: { id: string; name?: string },
-    ): 'dispatched' | 'enqueued' | 'full';
+    ): Promise<'dispatched' | 'enqueued' | 'full'>;
   };
   readonly socketManager?:
     | {
@@ -187,7 +193,7 @@ export class ConnectorRouter {
 
     // F157: Fire-and-forget emoji reaction as instant ack (< 500ms)
     const ackAdapter = this.opts.adapters?.get(connectorId);
-    if (ackAdapter?.addReaction && externalMessageId) {
+    if (ackAdapter?.addReaction && externalMessageId && !externalMessageId.startsWith('card-action-')) {
       ackAdapter.addReaction(externalMessageId, 'HEART').catch((err) => {
         log.warn({ err, connectorId, externalMessageId }, '[ConnectorRouter] addReaction failed (non-fatal)');
       });
@@ -254,7 +260,10 @@ export class ConnectorRouter {
         const adapter = this.opts.adapters?.get(connectorId);
         if (adapter) {
           if (adapter.sendFormattedReply) {
-            const envelope = this.formatter.formatCommand(cmdResult.response);
+            const envelope = this.formatter.formatCommand(
+              cmdResult.response,
+              cmdResult.cardActions ?? DEFAULT_QUICK_ACTIONS,
+            );
             await adapter.sendFormattedReply(externalChatId, envelope);
           } else {
             await adapter.sendReply(externalChatId, cmdResult.response);
@@ -284,7 +293,7 @@ export class ConnectorRouter {
           const fwdSource: ConnectorSource = {
             connector: connectorId,
             label: def2?.displayName ?? connectorId,
-            icon: def2?.icon ?? 'message',
+            icon: connectorSourceIcon(def2),
           };
           const mentionPatterns = this.getMentionPatterns();
           const { targetCatId } = parseMentions(fwdText, mentionPatterns, this.opts.defaultCatId);
@@ -304,7 +313,7 @@ export class ConnectorRouter {
             source: fwdSource,
             timestamp: fwdTimestamp,
           });
-          const triggerOutcome = invokeTrigger.trigger(
+          const triggerOutcome = await invokeTrigger.trigger(
             fwdThreadId,
             targetCatId,
             this.opts.defaultUserId,
@@ -337,7 +346,7 @@ export class ConnectorRouter {
             const askSource: ConnectorSource = {
               connector: connectorId,
               label: def2?.displayName ?? connectorId,
-              icon: def2?.icon ?? 'message',
+              icon: connectorSourceIcon(def2),
               ...(sender ? { sender } : {}),
             };
             const askCatId = cmdResult.targetCatId as CatId;
@@ -357,7 +366,7 @@ export class ConnectorRouter {
               source: askSource,
               timestamp: askTimestamp,
             });
-            const triggerOutcome = invokeTrigger.trigger(
+            const triggerOutcome = await invokeTrigger.trigger(
               askThreadId,
               askCatId,
               this.opts.defaultUserId,
@@ -427,7 +436,7 @@ export class ConnectorRouter {
         chatType === 'group'
           ? `${def?.displayName ?? connectorId}群聊 · ${chatName || externalChatId.slice(-8)}`
           : (def?.displayName ?? connectorId),
-      icon: def?.icon ?? 'message',
+      icon: connectorSourceIcon(def),
       ...(sender ? { sender } : {}),
     };
 
@@ -466,7 +475,7 @@ export class ConnectorRouter {
     });
 
     // 5. Trigger cat invocation (use parsed targetCatId)
-    invokeTrigger.trigger(
+    await invokeTrigger.trigger(
       binding.threadId,
       targetCatId,
       this.opts.defaultUserId,
@@ -525,7 +534,7 @@ export class ConnectorRouter {
           }
         } else if (att.type === 'image') {
           parts.push(`${originalText} ${downloaded.localUrl}`);
-          contentBlocks.push({ type: 'image', url: downloaded.absPath });
+          contentBlocks.push({ type: 'image', url: downloaded.localUrl });
         } else {
           parts.push(`${originalText} ${downloaded.localUrl}`);
         }
@@ -583,6 +592,8 @@ export class ConnectorRouter {
       externalChatId,
       createdAt: Date.now(),
     });
+    // F192 livefix: Set systemKind for unified sidebar "系统" section visibility
+    await threadStore.updateSystemKind?.(hubThread.id, 'connector_hub');
     await bindingStore.setHubThread(connectorId, externalChatId, hubThread.id);
     log.info({ connectorId, externalChatId, hubThreadId: hubThread.id }, '[ConnectorRouter] Hub thread created');
     return hubThread.id;
@@ -605,7 +616,7 @@ export class ConnectorRouter {
       userId: this.opts.defaultUserId,
       catId: null,
       content: commandText,
-      source: { connector: connectorId, label: def?.displayName ?? connectorId, icon: def?.icon ?? 'message' },
+      source: { connector: connectorId, label: def?.displayName ?? connectorId, icon: connectorSourceIcon(def) },
       mentions: [],
       timestamp: now,
     });
@@ -625,7 +636,7 @@ export class ConnectorRouter {
     emitConnectorMessage(socketManager, threadId, {
       id: cmdMsg.id,
       content: commandText,
-      source: { connector: connectorId, label: def?.displayName ?? connectorId, icon: def?.icon ?? 'message' },
+      source: { connector: connectorId, label: def?.displayName ?? connectorId, icon: connectorSourceIcon(def) },
       timestamp: now,
     });
     emitConnectorMessage(socketManager, threadId, {

@@ -11,19 +11,20 @@ type CatStatus = 'spawning' | 'pending' | 'streaming' | 'done' | 'error' | 'aliv
 export type CallbackAuthStatus = 'healthy' | 'degraded' | 'broken' | 'unknown';
 
 const CALLBACK_AUTH_STATUS_COLOR: Record<CallbackAuthStatus, string> = {
-  healthy: 'var(--conn-emerald-text)',
-  degraded: 'var(--conn-amber-text)',
-  broken: 'var(--conn-red-text)',
-  unknown: 'var(--cafe-text-muted)',
+  healthy: 'var(--semantic-success)',
+  degraded: 'var(--semantic-warning)',
+  broken: 'var(--semantic-critical)',
+  unknown: 'var(--neutral-400)',
 };
 
 interface CatAvatarProps {
   catId: string;
   size?: number;
   status?: CatStatus;
+  onClick?: () => void;
   /** F174 D2b-2: corner status dot for callback-auth health surface (明厨亮灶 实体层). */
   callbackAuthStatus?: CallbackAuthStatus;
-  /** Optional aria-label / hover hint for the status dot (e.g. "broken · 12 fails"). */
+  /** Optional aria-label / hover hint for the status dot (e.g."broken · 12 fails"). */
   callbackAuthLabel?: string;
   /**
    * F174 D2b-2 AC-D7: rich popover rendered on dot hover. When provided
@@ -39,6 +40,7 @@ export function CatAvatar({
   catId,
   size = 32,
   status,
+  onClick,
   callbackAuthStatus,
   callbackAuthLabel,
   callbackAuthPopover,
@@ -59,16 +61,19 @@ export function CatAvatar({
   const dotSize = Math.max(8, Math.round(size * 0.28));
   const dotBorder = Math.max(1, Math.round(dotSize * 0.18));
 
+  const Wrapper = onClick ? 'button' : 'div';
+
   return (
     <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
-      <div
+      <Wrapper
+        {...(onClick ? { type: 'button' as const, onClick, 'aria-label': `${cat?.displayName ?? catId}` } : {})}
         className={`rounded-full ring-2 overflow-hidden bg-cafe-surface-elevated flex items-center justify-center transition-shadow duration-300 ${
           isStreaming ? 'animate-pulse' : ''
-        }`}
+        } ${onClick ? 'cursor-pointer hover:ring-[var(--cafe-accent)] transition-[box-shadow,--tw-ring-color]' : ''}`}
         style={{
           width: size,
           height: size,
-          ['--tw-ring-color' as string]: isError ? 'var(--console-stop)' : ringColor,
+          ['--tw-ring-color' as string]: isError ? 'var(--semantic-critical)' : ringColor,
           boxShadow: glowShadow,
         }}
       >
@@ -85,7 +90,7 @@ export function CatAvatar({
             onError={() => setImgError(true)}
           />
         )}
-      </div>
+      </Wrapper>
       {callbackAuthStatus && (
         <span
           className="absolute"
@@ -135,7 +140,7 @@ export function CatAvatar({
           {popoverOpen && callbackAuthPopover && (
             <div
               data-testid="callback-auth-popover"
-              className="absolute z-50 mt-1 rounded-lg border border-cafe-border bg-cafe-surface p-3 text-xs shadow-xl"
+              className="absolute z-50 mt-1 rounded-lg border border-cafe-border bg-cafe-surface-elevated p-3 text-xs shadow-xl"
               style={{ top: dotSize + dotBorder, right: 0, minWidth: 200, maxWidth: 280 }}
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
