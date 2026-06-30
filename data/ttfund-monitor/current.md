@@ -1,0 +1,22 @@
+# ttfund-monitor 最新报告
+
+- 最新 runId: 20260630-1412-ragdoll-vzes
+- 报告时间: 2026-06-30 14:20 CST
+- 轮次: 常规轮 (routine)
+- 框架: v2.5.0
+- 覆盖: 54 attempted | fresh:42 staleGap:4 missing:2
+- 派生: 15/15 derived
+- 采集器: collector/index.cjs + WebSearch + portfolio/collect.cjs
+- Reason: A-layer build-evidence-packet.cjs ✅ + B-layer 3 blueprints rendered ✅ + validator 0/0
+- Guard: 0 blockers / 2 warnings (G008, G009) → action_advice_allowed=true
+- 置信度: 中等 (S2/S3 不可用降低组合分析置信度)
+- 操作建议: HOLD — 仅 1/5 防御触发，不满足防御切换条件
+- 宏观判定: Policy Divergence — 美紧缩·中宽松，US 10Y-2Y 非倒挂化 (late-cycle)
+- 黄金判定: 不建议行动 — 加权评分 -0.53 中等偏空，结构性支撑 vs 拥挤持仓矛盾
+- 黄金门禁: action_allowed=false — 持有不动，回调后重新评估
+- A股独立强势: 沪深300 +1.71% 20d, 中证500 +6.73% — 与美股走势分化
+- 组合状态: 总资产 ¥3,425.07，MMF 59.3%（非现金基金持仓，不抵 HQB 缺口）
+- HQB: ¥0（严重偏离目标，但信号不清晰时不应行动）
+- 下一检查点: 2026-07-29（FOMC 后）
+- 前置检查: ttfund=available Wind=available iFinD=available mx-data=available
+- 完整报告: runs/20260630-1412-ragdoll-vzes/report.md

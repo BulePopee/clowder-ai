@@ -1,0 +1,44 @@
+[
+  {
+    "indicator": "E2",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "M3",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "B10",
+    "status": "staleGap",
+    "ageDays": 4,
+    "maxAgeDays": 1,
+    "date": "2026-06-26",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N6",
+    "status": "staleGap",
+    "ageDays": 4,
+    "maxAgeDays": 1,
+    "date": "2026-06-26",
+    "source": "ifind"
+  },
+  {
+    "indicator": "R3",
+    "status": "staleGap",
+    "ageDays": 30,
+    "maxAgeDays": 7,
+    "date": "2026-05-31",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N2",
+    "status": "staleGap",
+    "ageDays": 4,
+    "maxAgeDays": 1,
+    "date": "2026-06-26",
+    "source": "wind"
+  }
+]

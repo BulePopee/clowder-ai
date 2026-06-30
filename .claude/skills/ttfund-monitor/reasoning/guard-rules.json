@@ -1,0 +1,119 @@
+{
+  "version": "1.0.0",
+  "description": "Static guard rules for Reason stage — checked by build-evidence-packet.cjs before LLM rendering. blocker = report MUST say 'unable to give action advice'. warning = allowed but confidence downgraded. info = note only.",
+
+  "rules": [
+    {
+      "id": "G001",
+      "tier": "blocker",
+      "check": "portfolio_missing",
+      "description": "Portfolio snapshot (S1) missing or failed — cannot recommend any portfolio action",
+      "condition": "!snapshots.portfolio || snapshots.portfolio.sources.S1_holding.status === 'failed'",
+      "message": "持仓数据缺失，无法给出任何组合行动建议，需人工确认持仓状态后判断。"
+    },
+    {
+      "id": "G002",
+      "tier": "blocker",
+      "check": "core_indicator_stale_blocker",
+      "description": "Critical core indicator (B2 US 10Y, F2 PCE, G4 COMEX gold, etc.) is staleGap — cannot make strong directional claims",
+      "condition": "anyCriticalStaleGap",
+      "message": "核心指标 {indicators} 数据过期（staleGap），当前无法给出强方向性结论，需等待数据更新。"
+    },
+    {
+      "id": "G003",
+      "tier": "blocker",
+      "status": "planned",
+      "status_note": "Enforced at B-layer (LLM blueprint guard), not in A-layer builder — no MMF/cash claim detection in CJS",
+      "check": "mmf_as_cash",
+      "description": "Money market fund holdings counted as 'cash position' — prohibited. MMF is a fund holding, not cash.",
+      "condition": "packet.portfolio_claims.cash_pct_claimed && !packet.portfolio_claims.cash_from_hqb_only",
+      "message": "报告中不得将货币基金归类为现金。货基是基金持仓而非现金等价物，只有活期宝可以视为类现金。"
+    },
+    {
+      "id": "G004",
+      "tier": "blocker",
+      "status": "planned",
+      "status_note": "Enforced at B-layer (LLM blueprint guard) — no backtest-origin detection in A-layer CJS",
+      "check": "backtest_as_real",
+      "description": "Backtest returns presented as real account returns — prohibited",
+      "condition": "packet.portfolio_claims.returns_from_backtest",
+      "message": "报告中不得将回测收益作为真实收益呈现。回测≠实盘，必须区分来源后呈现。"
+    },
+    {
+      "id": "G005",
+      "tier": "blocker",
+      "status": "planned",
+      "status_note": "Enforced at B-layer (LLM blueprint guard) — A-layer passes action_advice_allowed but single-indicator trade logic is in blueprint",
+      "check": "single_indicator_trade",
+      "description": "Trading recommendation based on a single indicator change — insufficient evidence",
+      "condition": "packet.action_signals && packet.action_signals.length === 1 && packet.action_signals[0].type === 'single_indicator'",
+      "message": "单一指标变化不足以支撑交易建议。所有行动建议必须基于因果链分析（≥2个独立信号源互相印证）。"
+    },
+    {
+      "id": "G006",
+      "tier": "blocker",
+      "status": "planned",
+      "status_note": "Enforced at B-layer (LLM blueprint guard) — portfolio source provenance checked in blueprint, not CJS",
+      "check": "memory_as_current_holding",
+      "description": "Current holdings inferred from memory instead of portfolio-snapshot",
+      "condition": "packet.portfolio_claims.source === 'memory'",
+      "message": "当前持仓必须从 portfolio-snapshot 读取，不得依赖 memory 推断。memory 可能过期。"
+    },
+    {
+      "id": "G007",
+      "tier": "blocker",
+      "status": "planned",
+      "status_note": "Enforced at B-layer (LLM blueprint guard) — evidence source tracking present in packet but news detection is semantic, not mechanical",
+      "check": "news_as_indicator",
+      "description": "News article price used as indicator value — prohibited. Must use indicator source (ttfund/iFinD/Wind/WebSearch).",
+      "condition": "anyEvidenceFromNews",
+      "message": "报告中不得使用新闻文章中的价格替代指标数据。所有精确值必须标明指标来源。"
+    },
+    {
+      "id": "G008",
+      "tier": "warning",
+      "check": "stale_auxiliary",
+      "description": "Non-critical auxiliary indicator is staleGap — confidence downgrade",
+      "condition": "anyNonCriticalStaleGap",
+      "message": "辅助指标 {indicators} 数据过期（staleGap），相关分析的置信度已降低。"
+    },
+    {
+      "id": "G009",
+      "tier": "warning",
+      "check": "partial_portfolio",
+      "description": "Portfolio data partially available (e.g., S2 empty, S3 unavailable) — confidence downgrade",
+      "condition": "snapshots.portfolio && (snapshots.portfolio.sources.S2_profit.status === 'empty' || snapshots.portfolio.sources.S3_analysis.status === 'unavailable')",
+      "message": "组合收益/分析数据部分缺失，基于组合的分析置信度已降低。"
+    },
+    {
+      "id": "G010",
+      "tier": "warning",
+      "status": "planned",
+      "status_note": "A-layer tracks source per indicator in evidence entries; semantic secondary-source judgment (e.g. WebSearch for a core indicator) left to B-layer blueprint",
+      "check": "non_primary_source",
+      "description": "Evidence uses non-primary source (e.g., WebSearch instead of iFinD for critical indicator)",
+      "condition": "anyEvidenceFromSecondarySource",
+      "message": "部分证据使用了非主数据源（WebSearch 补采），其值可能与主源存在口径差异。"
+    },
+    {
+      "id": "G011",
+      "tier": "info",
+      "check": "freshness_note_weekend",
+      "description": "Data from previous trading day on weekend/Monday — normal lag",
+      "condition": "allStaleGapWeekendLag",
+      "message": "部分数据为上交易日数据（周末/周一正常滞后），非数据源异常。"
+    },
+    {
+      "id": "G012",
+      "tier": "info",
+      "status": "planned",
+      "status_note": "Cross-source comparison logic not implemented in A-layer; B-layer may flag discrepancies when same indicator appears from multiple sources",
+      "check": "source_difference",
+      "description": "Same indicator has different values from different sources — note the discrepancy",
+      "condition": "anySourceDiscrepancy",
+      "message": "以下指标在不同数据源之间存在口径差异：{discrepancies}。报告中已标注具体来源。"
+    }
+  ],
+
+  "criticalIds": ["B1", "B2", "B3", "B6", "B8", "B9", "F1", "F2", "O1", "G2", "G4", "X1", "X3", "X4", "E1", "E2", "E3"]
+}

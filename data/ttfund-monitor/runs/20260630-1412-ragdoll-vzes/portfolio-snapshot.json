@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "runId": "20260630-1412-ragdoll-vzes",
+    "version": "2.4.0",
+    "collectedAt": "2026-06-30T06:18:28.956Z"
+  },
+  "sources": {
+    "S1_holding": {
+      "status": "ok",
+      "error": null,
+      "data": {
+        "total": {
+          "total": "3425.07",
+          "hqb": "0.00",
+          "fund": "3425.07",
+          "tg": "0.00",
+          "gdlc": "0.00",
+          "pension": "0.00",
+          "gold": "0.00"
+        },
+        "list": [
+          {
+            "fundName": "长城收益宝货币C",
+            "fundCode": "016778",
+            "assetValue": "2031.11",
+            "holdProfit": "0.30",
+            "holdProfitRate": "0.01%",
+            "constantProfit": "0.30",
+            "constantProfitRate": "0.01%",
+            "dailyProfit": "0.09",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "博时黄金ETF联接C",
+            "fundCode": "002611",
+            "assetValue": "350.49",
+            "holdProfit": "-49.27",
+            "holdProfitRate": "-12.32%",
+            "constantProfit": "-15.61",
+            "constantProfitRate": "-4.26%",
+            "dailyProfit": "1.38",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "广发中债7-10年国开债指数C",
+            "fundCode": "003377",
+            "assetValue": "311.04",
+            "holdProfit": "-8.92",
+            "holdProfitRate": "-2.79%",
+            "constantProfit": "0.91",
+            "constantProfitRate": "0.29%",
+            "dailyProfit": "0.47",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "南方纳斯达克100指数发起(QDII)C",
+            "fundCode": "016453",
+            "assetValue": "217.04",
+            "holdProfit": "-12.68",
+            "holdProfitRate": "-5.52%",
+            "constantProfit": "-5.82",
+            "constantProfitRate": "-2.61%",
+            "dailyProfit": "-2.51",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "易方达沪深300ETF联接C",
+            "fundCode": "007339",
+            "assetValue": "207.42",
+            "holdProfit": "16.05",
+            "holdProfitRate": "8.39%",
+            "constantProfit": "0.50",
+            "constantProfitRate": "0.24%",
+            "dailyProfit": "2.45",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "宝盈转型动力混合C",
+            "fundCode": "015389",
+            "assetValue": "205.98",
+            "holdProfit": "1096.79",
+            "holdProfitRate": "--",
+            "constantProfit": "50.33",
+            "constantProfitRate": "32.34%",
+            "dailyProfit": "-1.73",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "长城中证500指数增强C",
+            "fundCode": "007413",
+            "assetValue": "101.99",
+            "holdProfit": "7.50",
+            "holdProfitRate": "7.94%",
+            "constantProfit": "-1.46",
+            "constantProfitRate": "-1.41%",
+            "dailyProfit": "0.35",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "活期宝",
+            "fundCode": "hqb",
+            "assetValue": "0.00",
+            "holdProfit": "--",
+            "holdProfitRate": "--",
+            "constantProfit": "--",
+            "constantProfitRate": "--",
+            "dailyProfit": "--",
+            "ptype": "hqb"
+          }
+        ],
+        "hqb": {
+          "totalCount": 0,
+          "holds": []
+        },
+        "gold": {
+          "amount": "0.00",
+          "buildDate": null,
+          "buildDays": 0,
+          "calcDate": "2026-06-30",
+          "expectedBuyCount": null,
+          "expectedSellCount": null,
+          "firstTradeDate": null,
+          "holdCost": "0.00",
+          "holdProfit": "0.00",
+          "holdProfitRate": "0.00",
+          "onUpdate": false,
+          "positionCost": "0.00",
+          "positionProfit": "0.00",
+          "positionProfitRate": "0.00",
+          "todayProfit": "0.00",
+          "todayProfitRate": "0.00",
+          "totalProfit": "0.00",
+          "totalProfitRate": "0.00",
+          "totalProfitThisRound": "0.00",
+          "weight": 0,
+          "expectedSellPriceDiff": "0.00",
+          "currentGoldPrice": "869.47"
+        },
+        "pension": {
+          "totalAssetValue": 0,
+          "totalDailyProfit": 0,
+          "totalHoldProfit": 0,
+          "totalProfitValue": 0,
+          "isTodayProfit": false,
+          "details": null,
+          "multiBanks": false
+        }
+      }
+    },
+    "S2_profit": {
+      "status": "empty",
+      "error": null,
+      "data": {
+        "total": null,
+        "funds": null
+      }
+    },
+    "S3_analysis": {
+      "status": "unavailable",
+      "error": null,
+      "data": {
+        "asset_type_pct": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "fund_type_pct": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "hold_perform": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "bull_bear": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "capm": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "irr": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        }
+      }
+    },
+    "S4_trade": {
+      "status": "empty",
+      "error": "null value",
+      "data": {}
+    }
+  }
+}

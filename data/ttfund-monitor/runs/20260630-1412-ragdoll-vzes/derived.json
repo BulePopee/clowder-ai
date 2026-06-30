@@ -1,0 +1,178 @@
+{
+  "runId": "20260630-1412-ragdoll-vzes",
+  "computedAt": "2026-06-30T06:20:54.696Z",
+  "status": "degraded",
+  "yieldCurves": {
+    "us10y2y": {
+      "value": 28,
+      "unit": "bp",
+      "components": [
+        "B2",
+        "B3"
+      ],
+      "status": "staleDerived",
+      "note": "B2/B3 from 2026-06-29 (staleGap 1d)"
+    },
+    "us30y10y": {
+      "value": 48,
+      "unit": "bp",
+      "components": [
+        "B1",
+        "B2"
+      ],
+      "status": "staleDerived",
+      "note": "B1/B2 from 2026-06-29 (staleGap 1d)"
+    },
+    "us30y2y": {
+      "value": 76,
+      "unit": "bp",
+      "components": [
+        "B1",
+        "B3"
+      ],
+      "status": "staleDerived",
+      "note": "B1/B3 from 2026-06-29 (staleGap 1d)"
+    },
+    "cnus10y": {
+      "value": -266,
+      "unit": "bp",
+      "components": [
+        "B6",
+        "B2"
+      ],
+      "status": "staleDerived",
+      "note": "CN-US 10Y spread. B6/B2 from 2026-06-29 (staleGap 1d)"
+    },
+    "cn10y2y": {
+      "value": 48,
+      "unit": "bp",
+      "components": [
+        "B6",
+        "B7"
+      ],
+      "status": "staleDerived",
+      "note": "B6/B7 from 2026-06-29 (staleGap 1d)"
+    },
+    "cn30y10y": {
+      "value": 49,
+      "unit": "bp",
+      "components": [
+        "B5",
+        "B6"
+      ],
+      "status": "staleDerived",
+      "note": "B5/B6 from 2026-06-29 (staleGap 1d)"
+    },
+    "cn30y2y": {
+      "value": 97,
+      "unit": "bp",
+      "components": [
+        "B5",
+        "B7"
+      ],
+      "status": "staleDerived",
+      "note": "B5/B7 from 2026-06-29 (staleGap 1d)"
+    }
+  },
+  "liquidity": {
+    "dr007omo": {
+      "value": 5,
+      "unit": "bp",
+      "components": [
+        "M2",
+        "M2a"
+      ],
+      "status": "staleDerived"
+    },
+    "r007dr007": {
+      "value": 5,
+      "unit": "bp",
+      "components": [
+        "M4",
+        "M2"
+      ],
+      "status": "staleDerived"
+    },
+    "sofrIorb": {
+      "value": -3,
+      "unit": "bp",
+      "components": [
+        "N2",
+        "N4"
+      ],
+      "status": "staleDerived"
+    }
+  },
+  "goldRatios": {
+    "g9_goldOil": {
+      "value": "57.4",
+      "unit": "ratio",
+      "components": [
+        "G4",
+        "O1"
+      ],
+      "status": "staleDerived"
+    },
+    "g10_goldSilver": {
+      "value": "72.1",
+      "unit": "ratio",
+      "components": [
+        "G4",
+        "AG"
+      ],
+      "status": "staleDerived"
+    },
+    "g11_domesticPremium": {
+      "value": "-3.68%",
+      "unit": "pct",
+      "components": [
+        "G2",
+        "X3",
+        "G4"
+      ],
+      "status": "staleDerived"
+    }
+  },
+  "fx": {
+    "cnhCny": {
+      "value": -0.018506049047048556,
+      "unit": "bp",
+      "components": [
+        "X4",
+        "X3"
+      ],
+      "status": "staleDerived",
+      "note": "-0.0185 (CNY=6.8175, CNH=6.798993950952951)"
+    }
+  },
+  "movingAverages": {
+    "e1_nasdaq100": {
+      "sma": "29751.85",
+      "latest": 29774.75,
+      "change20d": "-2.42%",
+      "n": 20,
+      "status": "staleDerived"
+    },
+    "e2_csi300": {
+      "sma": "4878.47",
+      "latest": 4926.921,
+      "change20d": "1.71%",
+      "n": 20,
+      "status": "staleDerived"
+    },
+    "e3_csi500": {
+      "sma": "4079.42",
+      "latest": 4216.6985,
+      "change20d": "6.73%",
+      "n": 20,
+      "status": "staleDerived"
+    }
+  },
+  "summary": {
+    "totalFormulas": 15,
+    "freshDerived": 0,
+    "staleDerived": 15,
+    "missingDerived": 0,
+    "note": "All derived values computed from staleGap components (data from 2026-06-29, 1d lag). No critical component null."
+  }
+}

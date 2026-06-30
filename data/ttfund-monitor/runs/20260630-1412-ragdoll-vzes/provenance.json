@@ -1,0 +1,100 @@
+{
+  "runId": "20260630-1412-ragdoll-vzes",
+  "round": "routine",
+  "startTime": "2026-06-30T06:12:47.467Z",
+  "sources": {
+    "ttfund": {
+      "calls": [
+        {
+          "call": "GOLD_INFO",
+          "durationMs": 2995,
+          "extracted": 12,
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "INDEX_INFO_000300",
+          "durationMs": 3003,
+          "extracted": 1,
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "HUOQIBAO_LIST",
+          "durationMs": 2810,
+          "extracted": 1,
+          "attempts": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    "ifind": {
+      "totalCalls": 32,
+      "success": 32,
+      "failed": 0,
+      "retried": 1,
+      "batchCount": 7
+    },
+    "wind": {
+      "calls": [
+        {
+          "call": "F1",
+          "durationMs": 3392,
+          "indicator": "F1",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "F2",
+          "durationMs": 3897,
+          "indicator": "F2",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "N2",
+          "durationMs": 3871,
+          "indicator": "N2",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "X2",
+          "durationMs": 4553,
+          "indicator": "X2",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "E1",
+          "durationMs": 3229,
+          "indicator": "E1",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "M4",
+          "durationMs": 3198,
+          "indicator": "M4",
+          "attempts": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    "mxdata": {
+      "status": "skipped",
+      "note": "A3 via WebSearch (EastMoney primary)"
+    }
+  },
+  "endTime": "2026-06-30T06:16:45.961Z",
+  "summary": {
+    "totalItems": 54,
+    "activeItems": 19,
+    "fresh": 18,
+    "staleSuccess": 1,
+    "staleGap": 30,
+    "invalidDate": 0,
+    "missing": 2,
+    "websearchPending": 5
+  }
+}

@@ -1,0 +1,1255 @@
+{
+  "meta": {
+    "runId": "20260630-1412-ragdoll-vzes",
+    "builtAt": "2026-06-30T07:59:06.590Z",
+    "version": "1.0.0",
+    "inputs": {
+      "raw": "54 indicators",
+      "derived": "15 derived",
+      "portfolio": "S1=ok S2=empty S3=unavailable S4=empty",
+      "provenance": "available",
+      "gaps": "6 gaps"
+    }
+  },
+  "freshness": {
+    "fresh": 42,
+    "staleSuccess": 1,
+    "staleGap": 4,
+    "no_date": 2,
+    "invalid_date": 0,
+    "missing": 2
+  },
+  "evidence": [
+    {
+      "indicator": "B1",
+      "name": "US 30Y",
+      "value": 4.86,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "B2",
+      "name": "US 10Y",
+      "value": 4.38,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "B3",
+      "name": "US 2Y",
+      "value": 4.1,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "B6",
+      "name": "CN 10Y",
+      "value": 1.717,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "S1",
+      "name": "VIX",
+      "value": 17.65,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "X1",
+      "name": "DXY",
+      "value": 101.1156,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "X3",
+      "name": "USD/CNY即期",
+      "value": 6.8175,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "G1_am",
+      "name": "SGE基准价(上午)",
+      "value": null,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "元/克",
+      "freshness": "missing",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G1_pm",
+      "name": "SGE基准价(下午)",
+      "value": null,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "元/克",
+      "freshness": "missing",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G2",
+      "name": "Au99.99",
+      "value": 886.74,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "元/克",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "G3",
+      "name": "Au(T+D)",
+      "value": 887.2,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "元/克",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G5",
+      "name": "期货主力",
+      "value": 888.72,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "元/克",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G6",
+      "name": "央行黄金储备",
+      "value": 7496,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "万盎司",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "CPI",
+      "name": "CPI同比",
+      "value": 4.2,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "E2",
+      "name": "沪深300",
+      "value": 4963.86,
+      "date": null,
+      "ageDays": null,
+      "source": "ttfund",
+      "unit": "",
+      "freshness": "no_date",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "M3",
+      "name": "货基7日年化",
+      "value": 2.972,
+      "date": null,
+      "ageDays": null,
+      "source": "ttfund",
+      "unit": "%",
+      "freshness": "no_date",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G4",
+      "name": "COMEX黄金",
+      "value": 4200,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "$",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "G4b",
+      "name": "LBMA午盘定盘价",
+      "value": 4026.45,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "$",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "AG",
+      "name": "COMEX白银",
+      "value": 58.29,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "$",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "O1",
+      "name": "Brent",
+      "value": 73.15,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "$",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "O2",
+      "name": "WTI",
+      "value": 70.42,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "$",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G7",
+      "name": "SPDR持仓",
+      "value": 32314227.65,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "oz",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G8l",
+      "name": "CFTC多头",
+      "value": 131102,
+      "date": "2026-06-23",
+      "ageDays": 7,
+      "source": "ifind",
+      "unit": "万张",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "G8s",
+      "name": "CFTC空头",
+      "value": 15707,
+      "date": "2026-06-23",
+      "ageDays": 7,
+      "source": "ifind",
+      "unit": "张",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "A2a",
+      "name": "AAA企业债3Y",
+      "value": 1.6053,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "A2g",
+      "name": "国债3Y",
+      "value": 1.2734,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "N4",
+      "name": "IORB",
+      "value": 3.65,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "X4",
+      "name": "USD/CNH离岸",
+      "value": 6.798993950952951,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "B8",
+      "name": "10Y TIPS real yield",
+      "value": 2.16,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "B9",
+      "name": "10Y breakeven inflation",
+      "value": 2.22,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "M1",
+      "name": "SHIBOR 3M",
+      "value": 1.438,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "M2",
+      "name": "DR007",
+      "value": 1.4531,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "M2a",
+      "name": "OMO 7D",
+      "value": 1.4,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "N1",
+      "name": "US 3M T-Bill",
+      "value": 3.87,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "B5",
+      "name": "CN 30Y",
+      "value": 2.209,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "B7",
+      "name": "CN 2Y",
+      "value": 1.2362,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "E1_kl",
+      "name": "Nasdaq 100 K线",
+      "value": [
+        [
+          "2026-06-29",
+          29774.75
+        ],
+        [
+          "2026-06-26",
+          29118.24
+        ],
+        [
+          "2026-06-25",
+          29440.32
+        ],
+        [
+          "2026-06-24",
+          29220.06
+        ],
+        [
+          "2026-06-23",
+          29347.27
+        ],
+        [
+          "2026-06-22",
+          30347.08
+        ],
+        [
+          "2026-06-18",
+          30406.19
+        ],
+        [
+          "2026-06-17",
+          29670.95
+        ],
+        [
+          "2026-06-16",
+          29968.13
+        ],
+        [
+          "2026-06-15",
+          30543.92
+        ],
+        [
+          "2026-06-12",
+          29635.95
+        ],
+        [
+          "2026-06-11",
+          29446.18
+        ],
+        [
+          "2026-06-10",
+          28508.03
+        ],
+        [
+          "2026-06-09",
+          29084.5
+        ],
+        [
+          "2026-06-08",
+          29414.26
+        ],
+        [
+          "2026-06-05",
+          28957.6
+        ],
+        [
+          "2026-06-04",
+          30407.81
+        ],
+        [
+          "2026-06-03",
+          30571.24
+        ],
+        [
+          "2026-06-02",
+          30660.6
+        ],
+        [
+          "2026-06-01",
+          30513.86
+        ]
+      ],
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "unknown",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "E2_kl",
+      "name": "沪深300 K线",
+      "value": [
+        [
+          "2026-06-29",
+          4926.921
+        ],
+        [
+          "2026-06-26",
+          4868.2205
+        ],
+        [
+          "2026-06-25",
+          5020.1038
+        ],
+        [
+          "2026-06-24",
+          4943.0197
+        ],
+        [
+          "2026-06-23",
+          4919.386
+        ],
+        [
+          "2026-06-22",
+          5059.6582
+        ],
+        [
+          "2026-06-18",
+          4941.5986
+        ],
+        [
+          "2026-06-17",
+          4931.3861
+        ],
+        [
+          "2026-06-16",
+          4884.2322
+        ],
+        [
+          "2026-06-15",
+          4891.7126
+        ],
+        [
+          "2026-06-12",
+          4777.3206
+        ],
+        [
+          "2026-06-11",
+          4722.4122
+        ],
+        [
+          "2026-06-10",
+          4748.5932
+        ],
+        [
+          "2026-06-09",
+          4801.8106
+        ],
+        [
+          "2026-06-08",
+          4713.6358
+        ],
+        [
+          "2026-06-05",
+          4816.9199
+        ],
+        [
+          "2026-06-04",
+          4904.7454
+        ],
+        [
+          "2026-06-03",
+          4938.8091
+        ],
+        [
+          "2026-06-02",
+          4914.5591
+        ],
+        [
+          "2026-06-01",
+          4844.2556
+        ]
+      ],
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "unknown",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "E3_kl",
+      "name": "创业板指 K线",
+      "value": [
+        [
+          "2026-06-29",
+          4216.6985
+        ],
+        [
+          "2026-06-26",
+          4194.2089
+        ],
+        [
+          "2026-06-25",
+          4371.9891
+        ],
+        [
+          "2026-06-24",
+          4251.4244
+        ],
+        [
+          "2026-06-23",
+          4192.1945
+        ],
+        [
+          "2026-06-22",
+          4359.392
+        ],
+        [
+          "2026-06-18",
+          4252.3903
+        ],
+        [
+          "2026-06-17",
+          4167.0478
+        ],
+        [
+          "2026-06-16",
+          4102.9421
+        ],
+        [
+          "2026-06-15",
+          4033.5349
+        ],
+        [
+          "2026-06-12",
+          3830.353
+        ],
+        [
+          "2026-06-11",
+          3811.246
+        ],
+        [
+          "2026-06-10",
+          3854.7935
+        ],
+        [
+          "2026-06-09",
+          3961.7493
+        ],
+        [
+          "2026-06-08",
+          3811.7854
+        ],
+        [
+          "2026-06-05",
+          3957.935
+        ],
+        [
+          "2026-06-04",
+          4088.884
+        ],
+        [
+          "2026-06-03",
+          4122.987
+        ],
+        [
+          "2026-06-02",
+          4055.8709
+        ],
+        [
+          "2026-06-01",
+          3950.9432
+        ]
+      ],
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "unknown",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "B10",
+      "name": "HY OAS",
+      "value": 2.83,
+      "date": "2026-06-26",
+      "ageDays": 4,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "staleGap",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "N6",
+      "name": "FRA-OIS利差",
+      "value": -0.03,
+      "date": "2026-06-26",
+      "ageDays": 4,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "staleGap",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "N7",
+      "name": "TED利差",
+      "value": 0.504,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "S3",
+      "name": "AAII sentiment",
+      "value": 36.1233,
+      "date": "2026-06-26",
+      "ageDays": 4,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "S2",
+      "name": "CNN F&G",
+      "value": 27.1714285714286,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "M5",
+      "name": "货基AUM",
+      "value": 16.265090999999998,
+      "date": "2026-05-31",
+      "ageDays": 30,
+      "source": "ifind",
+      "unit": "万亿元",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "N5",
+      "name": "MMF AUM",
+      "value": 7.9001209999999995,
+      "date": "2026-06-24",
+      "ageDays": 6,
+      "source": "ifind",
+      "unit": "T",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "R3",
+      "name": "IG OAS",
+      "value": 79,
+      "date": "2026-05-31",
+      "ageDays": 30,
+      "source": "ifind",
+      "unit": "bp",
+      "freshness": "staleGap",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "R4",
+      "name": "CBOE put/call ratio",
+      "value": 0.95,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "ifind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "F1",
+      "name": "联邦基金利率上限",
+      "value": 3.75,
+      "date": "2025-12-11",
+      "ageDays": 201,
+      "source": "wind",
+      "unit": "%",
+      "freshness": "staleSuccess",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "F2",
+      "name": "核心PCE YoY",
+      "value": 3.3654,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "wind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "N2",
+      "name": "SOFR",
+      "value": 3.62,
+      "date": "2026-06-26",
+      "ageDays": 4,
+      "source": "wind",
+      "unit": "%",
+      "freshness": "staleGap",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "X2",
+      "name": "PBOC中间价",
+      "value": 6.8109,
+      "date": "2026-06-30",
+      "ageDays": 0,
+      "source": "wind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    },
+    {
+      "indicator": "E1",
+      "name": "Nasdaq 100",
+      "value": 29774.75,
+      "date": "20260629 16:00:10",
+      "ageDays": 1,
+      "source": "wind",
+      "unit": "",
+      "freshness": "fresh",
+      "critical": true,
+      "error": null
+    },
+    {
+      "indicator": "M4",
+      "name": "R007",
+      "value": 1.5023,
+      "date": "2026-06-29",
+      "ageDays": 1,
+      "source": "wind",
+      "unit": "%",
+      "freshness": "fresh",
+      "critical": false,
+      "error": null
+    }
+  ],
+  "derived": [
+    {
+      "indicator": "D_us10y2y",
+      "category": "yieldCurves",
+      "name": "us10y2y",
+      "value": 28,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B2/B3 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_us30y10y",
+      "category": "yieldCurves",
+      "name": "us30y10y",
+      "value": 48,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B1/B2 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_us30y2y",
+      "category": "yieldCurves",
+      "name": "us30y2y",
+      "value": 76,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B1/B3 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_cnus10y",
+      "category": "yieldCurves",
+      "name": "cnus10y",
+      "value": -266,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "CN-US 10Y spread. B6/B2 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_cn10y2y",
+      "category": "yieldCurves",
+      "name": "cn10y2y",
+      "value": 48,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B6/B7 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_cn30y10y",
+      "category": "yieldCurves",
+      "name": "cn30y10y",
+      "value": 49,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B5/B6 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_cn30y2y",
+      "category": "yieldCurves",
+      "name": "cn30y2y",
+      "value": 97,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "B5/B7 from 2026-06-29 (staleGap 1d)"
+    },
+    {
+      "indicator": "D_dr007omo",
+      "category": "liquidity",
+      "name": "dr007omo",
+      "value": 5,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_r007dr007",
+      "category": "liquidity",
+      "name": "r007dr007",
+      "value": 5,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_sofrIorb",
+      "category": "liquidity",
+      "name": "sofrIorb",
+      "value": -3,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_g9_goldOil",
+      "category": "goldRatios",
+      "name": "g9_goldOil",
+      "value": "57.4",
+      "unit": "ratio",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_g10_goldSilver",
+      "category": "goldRatios",
+      "name": "g10_goldSilver",
+      "value": "72.1",
+      "unit": "ratio",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_g11_domesticPremium",
+      "category": "goldRatios",
+      "name": "g11_domesticPremium",
+      "value": "-3.68%",
+      "unit": "pct",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_cnhCny",
+      "category": "fx",
+      "name": "cnhCny",
+      "value": -0.018506049047048556,
+      "unit": "bp",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": "-0.0185 (CNY=6.8175, CNH=6.798993950952951)"
+    },
+    {
+      "indicator": "D_e1_nasdaq100",
+      "category": "movingAverages",
+      "name": "e1_nasdaq100",
+      "value": 29774.75,
+      "unit": "",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_e2_csi300",
+      "category": "movingAverages",
+      "name": "e2_csi300",
+      "value": 4926.921,
+      "unit": "",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    },
+    {
+      "indicator": "D_e3_csi500",
+      "category": "movingAverages",
+      "name": "e3_csi500",
+      "value": 4216.6985,
+      "unit": "",
+      "freshness": "fresh_derived",
+      "critical": false,
+      "note": ""
+    }
+  ],
+  "portfolio": {
+    "available": true,
+    "statuses": {
+      "S1_holding": "ok",
+      "S2_profit": "empty",
+      "S3_analysis": "unavailable",
+      "S4_trade": "empty"
+    },
+    "summary": {
+      "total_assets": 3425.07,
+      "fund_assets": 3425.07,
+      "hqb_assets": 0,
+      "gold_assets": 350.49,
+      "pension_assets": 0,
+      "mmf_assets": 2031.11,
+      "mmf_names": [
+        "长城收益宝货币C"
+      ],
+      "holding_count": 7,
+      "holdings": [
+        {
+          "name": "长城收益宝货币C",
+          "code": "016778",
+          "pType": "fund",
+          "assetValue": 2031.11,
+          "holdProfit": 0.3,
+          "holdProfitRate": "0.01%",
+          "dailyProfit": 0.09,
+          "isMMF": true
+        },
+        {
+          "name": "博时黄金ETF联接C",
+          "code": "002611",
+          "pType": "fund",
+          "assetValue": 350.49,
+          "holdProfit": -49.27,
+          "holdProfitRate": "-12.32%",
+          "dailyProfit": 1.38,
+          "isMMF": false
+        },
+        {
+          "name": "广发中债7-10年国开债指数C",
+          "code": "003377",
+          "pType": "fund",
+          "assetValue": 311.04,
+          "holdProfit": -8.92,
+          "holdProfitRate": "-2.79%",
+          "dailyProfit": 0.47,
+          "isMMF": false
+        },
+        {
+          "name": "南方纳斯达克100指数发起(QDII)C",
+          "code": "016453",
+          "pType": "fund",
+          "assetValue": 217.04,
+          "holdProfit": -12.68,
+          "holdProfitRate": "-5.52%",
+          "dailyProfit": -2.51,
+          "isMMF": false
+        },
+        {
+          "name": "易方达沪深300ETF联接C",
+          "code": "007339",
+          "pType": "fund",
+          "assetValue": 207.42,
+          "holdProfit": 16.05,
+          "holdProfitRate": "8.39%",
+          "dailyProfit": 2.45,
+          "isMMF": false
+        },
+        {
+          "name": "宝盈转型动力混合C",
+          "code": "015389",
+          "pType": "fund",
+          "assetValue": 205.98,
+          "holdProfit": 1096.79,
+          "holdProfitRate": "--%",
+          "dailyProfit": -1.73,
+          "isMMF": false
+        },
+        {
+          "name": "长城中证500指数增强C",
+          "code": "007413",
+          "pType": "fund",
+          "assetValue": 101.99,
+          "holdProfit": 7.5,
+          "holdProfitRate": "7.94%",
+          "dailyProfit": 0.35,
+          "isMMF": false
+        }
+      ]
+    }
+  },
+  "gaps": {
+    "staleGap": [
+      {
+        "indicator": "B10",
+        "status": "staleGap",
+        "ageDays": 4,
+        "maxAgeDays": 1,
+        "date": "2026-06-26",
+        "source": "ifind"
+      },
+      {
+        "indicator": "N6",
+        "status": "staleGap",
+        "ageDays": 4,
+        "maxAgeDays": 1,
+        "date": "2026-06-26",
+        "source": "ifind"
+      },
+      {
+        "indicator": "R3",
+        "status": "staleGap",
+        "ageDays": 30,
+        "maxAgeDays": 7,
+        "date": "2026-05-31",
+        "source": "ifind"
+      },
+      {
+        "indicator": "N2",
+        "status": "staleGap",
+        "ageDays": 4,
+        "maxAgeDays": 1,
+        "date": "2026-06-26",
+        "source": "wind"
+      }
+    ],
+    "missing": [],
+    "no_date": [
+      {
+        "indicator": "E2",
+        "status": "no_date",
+        "source": "ttfund"
+      },
+      {
+        "indicator": "M3",
+        "status": "no_date",
+        "source": "ttfund"
+      }
+    ],
+    "invalid_date": [],
+    "total_gaps": 6
+  },
+  "guard_results": {
+    "blockers": [],
+    "warnings": [
+      {
+        "rule": "G008",
+        "message": "辅助指标 B10, N6, R3, N2 数据过期（staleGap），相关分析的置信度已降低。",
+        "indicators": [
+          "B10",
+          "N6",
+          "R3",
+          "N2"
+        ]
+      },
+      {
+        "rule": "G009",
+        "message": "组合收益/分析数据部分缺失，基于组合的分析置信度已降低。"
+      }
+    ],
+    "infos": [],
+    "reasoning_allowed": true,
+    "action_advice_allowed": true
+  },
+  "critical_stale_indicators": [],
+  "data_as_of": "2026-06-30"
+}
