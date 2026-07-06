@@ -1,6 +1,29 @@
 # Module: Pipeline
 # Role: Stage Orchestrator
 
+## Entry Point
+
+```bash
+# 启动新监测报告（自动生成 runId，运行 collect + portfolio 后暂停在 Compute）
+node .claude/skills/ttfund-monitor/pipeline/run.cjs --mode report --round routine
+
+# 从指定阶段重建下游产物（不重采数据）
+node .claude/skills/ttfund-monitor/pipeline/run.cjs --runId 20260701-1017-auto --from evidence
+node .claude/skills/ttfund-monitor/pipeline/run.cjs --runId 20260701-1017-auto --from reason
+node .claude/skills/ttfund-monitor/pipeline/run.cjs --runId 20260701-1017-auto --from report
+```
+
+`--from` 语义（管道中 LLM 阶段不可自动执行，遇手动阶段且产物不存在时自动停止）：
+- `collect`（默认）— 运行 collect + portfolio → 停：Compute（需 LLM 计算衍生指标）
+- `evidence` — 运行 evidence builder + reasoning validator → 停：B-layer（需 LLM 推理）
+- `reason` — 验证 B-layer 产物已存在 → 停：Report（需 LLM 组装报告）
+- `report` — 运行一致性校验 → 完成
+
+当前自动阶段覆盖：collect, portfolio, evidence, validate-reasoning, validate-report, consistency。
+Compute 阶段无确定性脚本（LLM 按 `compute/index.md` 执行），run.cjs 会在此停。
+
+单阶段脚本（`collector/index.cjs`, `portfolio/collect.cjs`, `reasoning/build-evidence-packet.cjs` 等）保留为 debug/补救入口，日常通过 `run.cjs` 调用。
+
 ## RunMode Resolution
 
 - 用户说"验证/测试/验收/全覆盖" → `validation`
@@ -27,9 +50,9 @@ Stage 5  Report
 
 ### Stage 2: Collect & Snapshot
 - Input: `roundType`, `runMode`
-- Output: `{runtimeRoot}/runs/{runId}/raw-snapshot.md` + `provenance.md` + `portfolio-snapshot.md`（可选，由 `portfolio/collect.cjs` 独立采集）
+- Output: `{runtimeRoot}/runs/{runId}/raw-snapshot.md` + `provenance.md` + `portfolio-snapshot.md`（硬步骤，不可跳过。由 `portfolio/collect.cjs` 采集，失败不阻塞 macro 管道但触发 G001 blocker）
 - Module: `collect/index.md`
-- Portfolio: 与 macro collector 并行独立运行，失败不阻塞 macro 管道。缺失时 Stage 4 第 5 章降级为 degraded
+- Portfolio: 与 macro collector 并行独立运行。失败/缺失 → G001 blocker → Report 第5-6章只能输出"无法给出行动建议"，禁止输出 HOLD 或调仓建议
 - **runMode 含义**：
   - `validation`: 全量尝试 + 全部直接指标不齐 STOP
   - `report`: **全量尝试** + 尝试后仍缺可带缺口继续报告
@@ -51,9 +74,10 @@ Stage 5  Report
 ### Stage 4: Reason
 - Input: `raw-snapshot.md` + `derived-snapshot.md` + `portfolio-snapshot.md` + `provenance.md` + `gaps.json`
 - Output: `{runtimeRoot}/runs/{runId}/evidence-packet.json` + `reasoning-snapshot.json` + `reasoning-snapshot.md`
+- Contract: `reasoning/schema.json` (JSON Schema — B-layer output must conform)
 - Module: `reasoning/README.md`
 - A-layer: 运行 `reasoning/build-evidence-packet.cjs`（确定性脚本）
-- B-layer: LLM 按 blueprint 模板执行推理（不访问外部数据源）
+- B-layer: LLM 按 blueprint 模板执行推理（不访问外部数据源），输出必须通过 `reasoning/validate-reasoning-snapshot.cjs` 的结构+语义校验
 - Fail:
   - `fatal` — raw-snapshot 缺失 / build-evidence-packet 脚本错误 → **STOP**
   - `degraded` — 某蓝图因数据不足无法完成 → 对应蓝图输出标 degraded，继续
@@ -61,9 +85,11 @@ Stage 5  Report
 ### Stage 5: Report
 - Input: `raw-snapshot.md` + `derived-snapshot.md` + `evidence-packet.json` + `reasoning-snapshot.json`
 - Output: `{runtimeRoot}/runs/{runId}/report.md`
+- Contract: `report/schema.json` (report structure — section presence, content markers, blocker semantics)
 - Module: `report/index.md`
 - 成功时: 更新 `{runtimeRoot}/current.md`
 - 第 5-6 章引用 Reason 输出，不自由发挥
+- 输出后运行 `report/validate-report.cjs` 进行结构校验
 - Fail:
   - `fatal` — 两份 snapshot 均不可读 / runId 丢失 → **STOP**
   - `degraded` — 部分章节数据不足 → 对应章节标缺口，0.5 章更新置信度

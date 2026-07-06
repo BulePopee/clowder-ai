@@ -1,12 +1,13 @@
-// reasoning/validate-reasoning-snapshot.cjs — ttfund-monitor v2.5.0
-// Recursively validates reasoning-snapshot.json AND reasoning-snapshot.md
+// reasoning/validate-reasoning-snapshot.cjs — ttfund-monitor v2.5.1
+// Structural + semantic validation of reasoning-snapshot.json AND reasoning-snapshot.md.
 // Usage: node reasoning/validate-reasoning-snapshot.cjs --runId 20260630-1412-ragdoll-vzes
 // Exit code 0 = pass, 1 = blocked issues
+// P2-B: structural pass via reasoning/schema.json runs before semantic checks.
 
 const fs = require('fs');
 const path = require('path');
 
-const RUNTIME = 'D:/clowder-ai/packages/api/data/ttfund-monitor';
+const { runtimeRoot: RUNTIME, skillRoot } = require('../lib/workspace.cjs');
 const args = process.argv.slice(2);
 const runIdIdx = args.indexOf('--runId');
 if (runIdIdx === -1) { console.error('ERROR: --runId required'); process.exit(1); }
@@ -17,6 +18,7 @@ function readJSON(p) { try { return JSON.parse(fs.readFileSync(p,'utf8')); } cat
 
 const snapshot = readJSON(path.join(RUN_DIR, 'reasoning-snapshot.json'));
 const evidence = readJSON(path.join(RUN_DIR, 'evidence-packet.json'));
+const schema = readJSON(path.join(skillRoot, 'reasoning', 'schema.json'));
 const mdPath = path.join(RUN_DIR, 'reasoning-snapshot.md');
 const mdText = fs.existsSync(mdPath) ? fs.readFileSync(mdPath, 'utf8') : null;
 
@@ -24,6 +26,85 @@ if (!snapshot) { console.error('FATAL: reasoning-snapshot.json not found'); proc
 
 const errors = [];
 const warnings = [];
+let schemaErrors = 0;
+let schemaWarnings = 0;
+
+// ── Structural validation (P2-B: reasoning/schema.json) ────────
+function validateSchemaNode(schemaNode, data, jsonPath) {
+  if (!schemaNode || typeof schemaNode !== 'object') return;
+  if (schemaNode.type === 'array') {
+    if (!Array.isArray(data)) {
+      errors.push(`SCHEMA(${jsonPath}): expected array, got ${typeof data}`);
+      schemaErrors++;
+      return;
+    }
+    if (schemaNode.items && typeof schemaNode.items === 'object') {
+      data.forEach((item, i) => validateSchemaNode(schemaNode.items, item, `${jsonPath}[${i}]`));
+    }
+    return;
+  }
+  if (schemaNode.type === 'object') {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      const label = data === null ? 'null' : Array.isArray(data) ? 'array' : typeof data;
+      errors.push(`SCHEMA(${jsonPath}): expected object, got ${label}`);
+      schemaErrors++;
+      return;
+    }
+    // required fields
+    if (schemaNode.required) {
+      for (const req of schemaNode.required) {
+        if (!(req in data)) {
+          errors.push(`SCHEMA(${jsonPath}): missing required field "${req}"`);
+          schemaErrors++;
+        }
+      }
+    }
+    // additionalProperties: false
+    if (schemaNode.additionalProperties === false && schemaNode.properties) {
+      const allowed = Object.keys(schemaNode.properties);
+      for (const k of Object.keys(data)) {
+        if (!allowed.includes(k)) {
+          errors.push(`SCHEMA(${jsonPath}): unknown field "${k}" (not in schema)`);
+          schemaErrors++;
+        }
+      }
+    }
+    // recursive property check
+    if (schemaNode.properties) {
+      for (const [prop, subSchema] of Object.entries(schemaNode.properties)) {
+        if (data[prop] !== undefined) {
+          validateSchemaNode(subSchema, data[prop], jsonPath ? `${jsonPath}.${prop}` : prop);
+        }
+      }
+    }
+    return;
+  }
+  // primitive type check
+  const typeMap = { string: 'string', number: 'number', boolean: 'boolean' };
+  const expected = typeMap[schemaNode.type];
+  if (expected) {
+    const actual = typeof data;
+    if (actual !== expected && data != null) {
+      errors.push(`SCHEMA(${jsonPath}): expected ${expected}, got ${actual} (value: ${JSON.stringify(data).slice(0, 80)})`);
+      schemaErrors++;
+    }
+  }
+  // enum check
+  if (schemaNode.enum && !schemaNode.enum.includes(data)) {
+    errors.push(`SCHEMA(${jsonPath}): "${data}" not in allowed values [${schemaNode.enum.join(', ')}]`);
+    schemaErrors++;
+  }
+}
+
+if (schema && schema.type === 'object') {
+  validateSchemaNode(schema, snapshot, '');
+} else {
+  warnings.push('SCHEMA: reasoning/schema.json missing or invalid — structural validation skipped');
+  schemaWarnings++;
+}
+const schemaNote = schema
+  ? `schema: ${schemaErrors} errors`
+  : 'schema: SKIPPED (file missing)';
 
 // ── Recursive JSON string collector ──────────────────────────
 function collectStrings(obj, prefix) {
@@ -125,7 +206,7 @@ for (const blocked of blockedPaths) {
 
 // ── Check 3: JSON scenario portfolio_implication ─────────────
 if (isGoldBlocked) {
-  const scenarios = snapshot.gold_rate_conflict?.step5_scenarios || [];
+  const scenarios = snapshot.gold_rate_conflict?.scenarios || [];
   for (let i = 0; i < scenarios.length; i++) {
     const impl = scenarios[i].portfolio_implication || '';
     for (const { pattern, label } of actionWords) {
@@ -235,21 +316,24 @@ if (evidence) {
 }
 
 // ── Output ───────────────────────────────────────────────────
-console.log('=== reasoning-snapshot validator v1.2.0 ===');
+console.log('=== reasoning-snapshot validator v1.3.0 ===');
 console.log(`runId: ${runId}`);
-console.log(`scanned: ${allStrings.length} JSON strings + ${mdText ? 'MD' : 'MD (missing)'}`);
+console.log(`scanned: ${schemaNote} | ${allStrings.length} JSON strings + ${mdText ? 'MD' : 'MD (missing)'}`);
 console.log(`blocked: gold=${isGoldBlocked} portfolio=${isPortfolioBlocked}\n`);
 
 if (errors.length > 0) {
   console.log(`BLOCKED: ${errors.length} error(s):`);
-  errors.forEach(e => console.log(`  ❌ ${e}`));
+  errors.forEach(e => {
+    const marker = e.startsWith('SCHEMA') ? '🧱' : '❌';
+    console.log(`  ${marker} ${e}`);
+  });
 }
 if (warnings.length > 0) {
   console.log(`WARNINGS: ${warnings.length}:`);
   warnings.forEach(w => console.log(`  ⚠️  ${w}`));
 }
 if (errors.length === 0 && warnings.length === 0) {
-  console.log('  ✅ All checks passed.');
+  console.log('  ✅ All checks passed (structural + semantic).');
 }
 
 console.log(`\nResult: ${errors.length} errors, ${warnings.length} warnings`);

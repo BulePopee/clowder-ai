@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const RUNTIME = 'D:/clowder-ai/packages/api/data/ttfund-monitor';
+const { runtimeRoot: RUNTIME } = require('../lib/workspace.cjs');
 const GUARD_RULES_PATH = path.join(__dirname, 'guard-rules.json');
 
 // ── CLI ──────────────────────────────────────────────────────
@@ -48,10 +48,8 @@ function ageDays(dateStr) {
 }
 
 function indicatorNames() {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'collector', 'indicators.json'), 'utf8'));
-    return cfg.indicatorNames || {};
-  } catch (_) { return {}; }
+  try { return require('../collector/indicators.cjs').indicatorNames || {}; }
+  catch (_) { return {}; }
 }
 
 // ── Main ─────────────────────────────────────────────────────

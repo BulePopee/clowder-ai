@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "reasoning-snapshot",
+  "title": "Reasoning Snapshot Schema",
+  "description": "Formal contract for reasoning-snapshot.json produced by Reason B-layer. Serves as both LLM output spec and validator structural check.",
+  "type": "object",
+  "required": ["meta", "macro_regime", "gold_rate_conflict", "portfolio_action_gate"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["runId", "generatedAt", "framework", "blueprints_rendered", "blueprints_degraded", "guard_blockers", "guard_warnings", "action_advice_allowed", "data_coverage"],
+      "additionalProperties": false,
+      "properties": {
+        "runId": { "type": "string" },
+        "generatedAt": { "type": "string" },
+        "framework": { "type": "string" },
+        "blueprints_rendered": { "type": "array", "items": { "type": "string" } },
+        "blueprints_degraded": { "type": "array", "items": { "type": "string" } },
+        "guard_blockers": { "type": "array", "items": { "type": "string" } },
+        "guard_warnings": { "type": "array", "items": { "type": "string" } },
+        "action_advice_allowed": { "type": "boolean" },
+        "data_coverage": { "type": "string" }
+      }
+    },
+    "macro_regime": {
+      "type": "object",
+      "required": ["regime_claim", "confidence", "rationale", "steps", "supporting_evidence", "opposing_evidence", "stale_or_missing_data", "invalidate_if"],
+      "properties": {
+        "regime_claim": { "type": "string" },
+        "confidence": { "type": "string" },
+        "rationale": { "type": "string" },
+        "steps": {
+          "type": "object",
+          "required": ["step1_real_rate", "step2_usd_liquidity", "step3_risk_sentiment", "step4_china_factors", "step5_regime_classification", "step6_confidence"],
+          "additionalProperties": false,
+          "properties": {
+            "step1_real_rate": { "type": "object" },
+            "step2_usd_liquidity": { "type": "object" },
+            "step3_risk_sentiment": { "type": "object" },
+            "step4_china_factors": { "type": "object" },
+            "step5_regime_classification": { "type": "object" },
+            "step6_confidence": { "type": "object" }
+          }
+        },
+        "supporting_evidence": { "type": "array", "items": { "type": "object" } },
+        "opposing_evidence": { "type": "array", "items": { "type": "object" } },
+        "stale_or_missing_data": { "type": "array", "items": { "type": "string" } },
+        "invalidate_if": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "gold_rate_conflict": {
+      "type": "object",
+      "required": ["claim", "confidence", "model_conflict", "weighted_score", "action_gate", "scenarios"],
+      "properties": {
+        "claim": { "type": "string" },
+        "confidence": { "type": "string" },
+        "model_conflict": {
+          "type": "object",
+          "required": ["traditional_model_signal", "actual_price_signal", "conflict_resolution"],
+          "additionalProperties": false,
+          "properties": {
+            "traditional_model_signal": { "type": "string" },
+            "actual_price_signal": { "type": "string" },
+            "conflict_resolution": { "type": "string" }
+          }
+        },
+        "weighted_score": {
+          "type": "object",
+          "required": ["real_rates_score", "usd_score", "positioning_score", "structural_score", "china_premium_score", "total", "interpretation"],
+          "additionalProperties": false,
+          "properties": {
+            "real_rates_score": { "type": "object" },
+            "usd_score": { "type": "object" },
+            "positioning_score": { "type": "object" },
+            "structural_score": { "type": "object" },
+            "china_premium_score": { "type": "object" },
+            "total": { "type": "number" },
+            "interpretation": { "type": "string" }
+          }
+        },
+        "action_gate": {
+          "type": "object",
+          "required": ["action_allowed", "action_reason"],
+          "additionalProperties": false,
+          "properties": {
+            "action_allowed": { "type": "boolean" },
+            "action_reason": { "type": "string" }
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["scenario", "trigger", "probability", "gold_impact"],
+            "additionalProperties": false,
+            "properties": {
+              "scenario": { "type": "string" },
+              "trigger": { "type": "string" },
+              "probability": { "type": "string" },
+              "gold_impact": { "type": "string" },
+              "portfolio_implication": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "portfolio_action_gate": {
+      "type": "object",
+      "required": ["action_advice_allowed", "recommendation", "confidence", "blocker_detail", "current_allocation", "deviation_analysis", "macro_alignment", "degraded_portfolio_warnings", "action_gate"],
+      "properties": {
+        "action_advice_allowed": { "type": "boolean" },
+        "recommendation": { "type": "string" },
+        "confidence": { "type": "string" },
+        "blocker_detail": { "type": "array", "items": { "type": "object" } },
+        "current_allocation": {
+          "type": "object",
+          "required": ["total_assets", "hqb_pct", "hqb_assets", "mmf_assets", "mmf_note", "mmf_pct", "equity_a_share_pct", "equity_us_pct", "gold_pct", "fixed_income_pct", "mixed_pct"],
+          "additionalProperties": false,
+          "properties": {
+            "total_assets": { "type": "number" },
+            "hqb_pct": { "type": "number" },
+            "hqb_assets": { "type": "number" },
+            "mmf_assets": { "type": "number" },
+            "mmf_note": { "type": "string" },
+            "mmf_pct": { "type": "number" },
+            "equity_a_share_pct": { "type": "number" },
+            "equity_us_pct": { "type": "number" },
+            "gold_pct": { "type": "number" },
+            "fixed_income_pct": { "type": "number" },
+            "mixed_pct": { "type": "number" }
+          }
+        },
+        "deviation_analysis": {
+          "type": "object",
+          "required": ["target_regime", "deviations", "total_deviation"],
+          "additionalProperties": false,
+          "properties": {
+            "target_regime": { "type": "string" },
+            "deviations": { "type": "array", "items": { "type": "object" } },
+            "total_deviation": { "type": "string" }
+          }
+        },
+        "macro_alignment": {
+          "type": "object",
+          "required": ["defensive_triggers_assessable", "defensive_triggers_active", "details", "summary"],
+          "additionalProperties": false,
+          "properties": {
+            "defensive_triggers_assessable": { "type": "number" },
+            "defensive_triggers_active": { "type": "number" },
+            "details": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "string" }
+          }
+        },
+        "degraded_portfolio_warnings": { "type": "array", "items": { "type": "string" } },
+        "action_gate": {
+          "type": "object",
+          "required": ["action_type", "reason", "next_checkpoint", "conditions_to_act"],
+          "additionalProperties": false,
+          "properties": {
+            "action_type": { "type": "string" },
+            "reason": { "type": "string" },
+            "next_checkpoint": { "type": "string" },
+            "conditions_to_act": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}
