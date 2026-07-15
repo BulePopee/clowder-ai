@@ -3,7 +3,7 @@
 - 最新 runId: 20260714-1609-auto
 - 报告时间: 2026-07-14 16:20 CST
 - 轮次: 常规轮 (routine)
-- 框架: v2.6.1 (P4-A unit normalization contract + P3.2-B feedback consumption)
+- 框架: v2.6.2 (P4-A unit normalization + P4-B pipeline replay & run contract)
 - 覆盖: 55 attempted | fresh:39 staleSuccess:1 staleGap:4 noDate:4 missing:4
 - Portfolio: S1=ok S2=empty S3=unavailable S4=empty
 - iFinD: 33 indicators, 30 OK, 3 null (A1/N5/N7)
@@ -39,3 +39,4 @@
 | 全管道集成 | ✅ | Stage 4 B-layer → 4.5 temporal-diff → 4.6 feedback → 5 report 完整链路 |
 | P3.2-B → 下一 P | ✅ | 反馈消费已落地，G7单位归一化修复完成 → 已进入 P4-A |
 | P4-A unit normalization | ✅ | G7 contract + unit-normalizer.cjs + validate §6；3 新字段已同步 schema，4/4 validators pass |
+| P4-B run contract | ✅ | 14-stage topology + verify.cjs + 3 acceptance tests pass |
