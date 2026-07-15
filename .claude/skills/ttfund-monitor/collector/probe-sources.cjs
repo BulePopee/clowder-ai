@@ -5,7 +5,7 @@
  * Usage: node collector/probe-sources.cjs [--runId <id>] [--json]
  */
 
-const { existsSync } = require('fs');
+const fs = require('fs');
 const { spawnSync } = require('child_process');
 const path = require('path');
 const os = require('os');
@@ -13,6 +13,7 @@ const os = require('os');
 // ── resolve $HOME ──────────────────────────────────────────────
 const HOME = process.env.HOME || process.env.USERPROFILE || os.homedir();
 function resolveHome(p) {
+  if (!p) return p;
   return p.replace(/\$HOME/g, HOME);
 }
 
@@ -40,7 +41,7 @@ function probeTtfund(indicatorsJson) {
   const result = {
     tool: 'ttfund',
     installPath: cliPath,
-    pathExists: cliPath ? existsSync(cliPath) : false,
+    pathExists: cliPath ? fs.existsSync(cliPath) : false,
     cliExists: false,
     cliCheck: null,
     status: 'not_installed',
@@ -92,7 +93,7 @@ function probeIfind(indicatorsJson) {
     tool: 'ifind',
     installPath: entryPath,
     cwd: cwd,
-    pathExists: entryPath ? existsSync(entryPath) : false,
+    pathExists: entryPath ? fs.existsSync(entryPath) : false,
     cliExists: false,
     cliCheck: null,
     configCheck: null,
@@ -112,7 +113,7 @@ function probeIfind(indicatorsJson) {
 
   // check mcp_config.json exists next to entry
   const configPath = path.join(path.dirname(entryPath), 'mcp_config.json');
-  const configExists = existsSync(configPath);
+  const configExists = fs.existsSync(configPath);
   result.configCheck = { path: configPath, exists: configExists };
   if (!configExists) {
     result.status = 'cli_missing';
@@ -159,9 +160,9 @@ function probeWind(indicatorsJson) {
     tool: 'wind',
     installDir: installDir,
     entryPath: entryPath,
-    pathExists: installDir ? existsSync(installDir) : false,
-    skillExists: skillPath ? existsSync(skillPath) : false,
-    cliExists: entryPath ? existsSync(entryPath) : false,
+    pathExists: installDir ? fs.existsSync(installDir) : false,
+    skillExists: skillPath ? fs.existsSync(skillPath) : false,
+    cliExists: entryPath ? fs.existsSync(entryPath) : false,
     probeCheck: null,
     status: 'not_installed',
     details: ''
@@ -231,10 +232,35 @@ function probeMxData(indicatorsJson) {
     result.details = 'indicators.json 中无 mx-data 入口路径';
     return result;
   }
-  result.pathExists = existsSync(result.installPath);
+  result.pathExists = fs.existsSync(result.installPath);
   result.status = result.pathExists ? 'available' : 'path_missing';
   result.details = result.pathExists ? '入口文件存在' : `入口文件不存在: ${result.installPath}`;
   return result;
+}
+
+// ── Contract classification ──────────────────────────────────────
+function classifyStatus(probeResult, contract) {
+  const s = probeResult.status;
+  if (s === 'available') return 'callable';
+  if (s === 'not_installed') return 'tool_missing';
+  if (s === 'path_missing') return 'tool_missing';
+  if (s === 'cli_missing') return 'tool_missing';
+  if (s === 'probe_failed') {
+    const detail = (probeResult.details || '').toLowerCase();
+    if (/auth|login|token|credentials|permission|unauthorized/i.test(detail)) return 'auth_missing';
+    if (/timeout|network|connect|econnrefused|eacces/i.test(detail)) return 'auth_missing';
+    if (/parse|schema|unexpected.*type|json/i.test(detail)) return 'schema_drift';
+    return 'no_data';
+  }
+  return 'unknown';
+}
+
+function contractStatus(probeResult, contractClass) {
+  if (contractClass === 'callable') return 'ok';
+  // Check if this failure mode is allowed by the contract
+  const allowed = probeResult._contractAllowedModes || [];
+  if (allowed.includes(contractClass)) return 'degraded';
+  return 'violation';
 }
 
 // ── main ─────────────────────────────────────────────────────────
@@ -244,8 +270,17 @@ function main() {
   const jsonFlag = args.includes('--json');
   const runIdIdx = args.indexOf('--runId');
   const runId = runIdIdx >= 0 ? args[runIdIdx + 1] : null;
+  const outIdx = args.indexOf('--output');
+  const outDir = outIdx >= 0 ? args[outIdx + 1] : null;
 
   const indicatorsJson = require('./indicators.cjs');
+
+  let contracts = null;
+  try {
+    contracts = require('../config/source-contracts.json');
+  } catch (e) {
+    // source-contracts.json may not exist yet — degrade gracefully
+  }
 
   const results = {
     checkedAt: new Date().toISOString(),
@@ -276,7 +311,8 @@ function main() {
   };
 
   // output
-  if (!jsonFlag) {
+  const effectiveOutDir = outDir || (runId ? path.join(__dirname, '..', '..', '..', '..', 'data', 'ttfund-monitor', 'runs', runId) : null);
+  if (!jsonFlag && !effectiveOutDir) {
     console.log('=== ttfund-monitor 前置探测 ===');
     console.log(`时间: ${results.checkedAt}`);
     console.log('');
@@ -298,6 +334,66 @@ function main() {
 
   if (jsonFlag) {
     console.log(JSON.stringify(results, null, 2));
+  }
+
+  // ── Write source-probe.json ──────────────────────────────────
+  if (effectiveOutDir) {
+    fs.mkdirSync(effectiveOutDir, { recursive: true });
+
+    // Merge all probed sources into a unified array
+    const allSources = [
+      { sourceId: 'ttfund', ...results.tools.ttfund },
+      { sourceId: 'ifind', ...results.tools.ifind },
+      { sourceId: 'wind', ...results.tools.wind },
+      { sourceId: 'mx-data', ...results.mxdata },
+      { sourceId: 'websearch', status: 'available', details: 'WebSearch ilways available in CLI environment' }
+    ];
+
+    const probeResults = allSources.map(s => {
+      const contract = contracts?.sources?.[s.sourceId] || null;
+      const contractModes = contract?.allowedFailureModes || [];
+      s._contractAllowedModes = contractModes;
+      const cls = classifyStatus(s, contract);
+      return {
+        sourceId: s.sourceId,
+        name: contract?.name || s.tool || s.sourceId,
+        probeStatus: s.status,
+        classification: cls,
+        contractStatus: contractStatus(s, cls),
+        contractExpected: contract ? true : false,
+        details: s.details || '',
+        installPath: s.installPath || s.installDir || null,
+        probeCheck: s.cliCheck || s.probeCheck || null
+      };
+    });
+
+    const totalCallable = probeResults.filter(p => p.classification === 'callable').length;
+    const violations = probeResults.filter(p => p.contractStatus === 'violation');
+    const degraded = probeResults.filter(p => p.contractStatus === 'degraded');
+
+    const probeOutput = {
+      meta: {
+        checkedAt: results.checkedAt,
+        runId: runId || null,
+        version: contracts?.version || '0.0.0',
+        pipelineVersion: '2.7.0'
+      },
+      sources: probeResults,
+      summary: {
+        total: probeResults.length,
+        callable: totalCallable,
+        toolMissing: probeResults.filter(p => p.classification === 'tool_missing').length,
+        authMissing: probeResults.filter(p => p.classification === 'auth_missing').length,
+        schemaDrift: probeResults.filter(p => p.classification === 'schema_drift').length,
+        noData: probeResults.filter(p => p.classification === 'no_data').length,
+        contractViolations: violations.length,
+        contractDegraded: degraded.length,
+        verdict: violations.length > 0 ? 'contract_violation' : results.summary.verdict === 'fatal' ? 'fatal' : degraded.length > 0 ? 'degraded' : 'ok'
+      }
+    };
+
+    fs.writeFileSync(path.join(effectiveOutDir, 'source-probe.json'), JSON.stringify(probeOutput, null, 2));
+    console.log(`source-probe.json → ${path.join(effectiveOutDir, 'source-probe.json')}`);
   }
 
   // exit code: fatal=2, degraded/ok=0 (degraded 不卡管道，由 SKILL 按 runMode 决策)

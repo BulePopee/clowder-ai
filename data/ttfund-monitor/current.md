@@ -3,7 +3,7 @@
 - 最新 runId: 20260714-1609-auto
 - 报告时间: 2026-07-14 16:20 CST
 - 轮次: 常规轮 (routine)
-- 框架: v2.6.2 (P4-A unit normalization + P4-B pipeline replay & run contract)
+- 框架: v2.7.0 (P4-A unit norm + P4-B run contract + P4-C source adapter contract & probe gate)
 - 覆盖: 55 attempted | fresh:39 staleSuccess:1 staleGap:4 noDate:4 missing:4
 - Portfolio: S1=ok S2=empty S3=unavailable S4=empty
 - iFinD: 33 indicators, 30 OK, 3 null (A1/N5/N7)
@@ -20,7 +20,7 @@
 - 组合偏离: HQB 0%严重不足(目标10-15%)，美股6.88%低于目标(15-20%)，黄金14.95%触及上限(10-15%)，A股24.23%略低于目标(25-30%)
 - 近期交易: S4为空, 无近期交易记录
 - 下一检查点: 7/29(FOMC决议日), 7/16-17(FOMC前最后一轮常规监测)
-- 前置检查: ttfund=available iFinD=available Wind=available probe-sources=ok
+- 前置检查: ttfund=available iFinD=available Wind=available probe-sources=ok (source-probe.json: 5/5 callable ✅)
 - Temporal-diff: status=ok | baseline=20260708-1058-auto (validated, 6d prior) | 20 compared, 1 new, 0 lost | regime CHANGED: Policy Divergence → Stagflation-Lite | 3 significant changes (G2↓, G4↓, O1↑)
 - Feedback: 4 cross_refs (3 add_invalidation_condition + 1 add_condition_to_act) | action_advice_allowed=true
 - P3.2-B: Ch2.7跨资产一致性 ✅ + Ch6.6反馈信号参考 ✅ | validate-feedback 12/12 ✅
@@ -39,4 +39,5 @@
 | 全管道集成 | ✅ | Stage 4 B-layer → 4.5 temporal-diff → 4.6 feedback → 5 report 完整链路 |
 | P3.2-B → 下一 P | ✅ | 反馈消费已落地，G7单位归一化修复完成 → 已进入 P4-A |
 | P4-A unit normalization | ✅ | G7 contract + unit-normalizer.cjs + validate §6；3 新字段已同步 schema，4/4 validators pass |
-| P4-B run contract | ✅ | 14-stage topology + verify.cjs + 3 acceptance tests pass |
+| P4-B run contract | ✅ | 16-stage topology + verify.cjs + 6 auto validators pass |
+| P4-C source adapter contract | ✅ | source-contracts.json + probe gate + provenance enrichment + validate-source-contract + 16-stage pipeline verify pass |

@@ -1,7 +1,7 @@
 ---
 name: ttfund-monitor
 description: 天天基金实盘宏观监测——50项指标4层数据源+5阶段管道(含Reason推理层)，输出9章标准化报告
-version: 2.5.0
+version: 2.7.0
 ---
 
 # ttfund-monitor
@@ -84,9 +84,10 @@ node .claude/skills/ttfund-monitor/pipeline/run.cjs --runId 20260701-1017-auto -
 
 | 阶段 | 读哪些 |
 |------|--------|
-| 前置 | `VERSION.md` `modules/pipeline.md` → 运行 `collector/probe-sources.cjs` |
+| 前置 | `VERSION.md` `modules/pipeline.md` → 运行 `collector/probe-sources.cjs`（产出 `source-probe.json`）→ `config/source-contracts.json` |
 | 1-Round | `modules/round.md` |
-| 2-Collect | `collect/index.md` → 运行 `collector/index.cjs` → `portfolio/collect.cjs` → `config/indicators.json` + `config/sources.json` → `source-map.md` → `retry-policy.md` → `snapshot-schema.md` → `portfolio/spec.md` → `portfolio/snapshot-schema.md` |
+| 2-Collect | `collect/index.md` → 运行 `collector/index.cjs`（含 P4-C contract enrichment）→ `portfolio/collect.cjs` → `config/indicators.json` + `config/sources.json` → `source-map.md` → `retry-policy.md` → `snapshot-schema.md` → `portfolio/spec.md` → `portfolio/snapshot-schema.md` |
+| 2.5-Validate Source | 运行 `collector/validate-source-contract.cjs` → 校验 source whitelist / fallback chain / WebSearch constraints |
 | 3-Compute | `compute/index.md` → `formulas.md` |
 | 4-Reason | `reasoning/README.md` → 运行 `reasoning/build-evidence-packet.cjs` → `reasoning/schema.json` → `reasoning/blueprints/*.md` → `reasoning/guard-rules.json` |
-| 5-Report | `report/index.md` → `sections/*.md` → `report/schema.json` → `decision-engine.md` → `data/indicator-catalog.md` |
+| 5-Report | `report/index.md` → `sections/*.md` → `report/schema.json` → `decision-engine.md` → `data/indicator-catalog.md` → `feedback.json` |

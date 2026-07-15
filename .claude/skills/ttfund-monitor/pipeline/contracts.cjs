@@ -1,4 +1,4 @@
-// pipeline/contracts.cjs — ttfund-monitor v2.6.2 (P4-B)
+// pipeline/contracts.cjs — ttfund-monitor v2.7.0 (P4-C)
 // Single source of truth for artifact and stage declarations.
 // Shared by pipeline/run.cjs (orchestrator), pipeline/verify.cjs (contract verifier),
 // and validate-run-consistency.cjs (validator).
@@ -6,6 +6,14 @@
 // Stage order IS the topological dependency graph — no separate verifyOrder needed.
 
 const artifacts = [
+  {
+    id: 'source-probe',
+    path: '{runDir}/source-probe.json',
+    stage: 'source-probe',
+    required: true,
+    producedBy: 'collector/probe-sources.cjs',
+    consumedBy: ['validate-source-contract', 'consistency']
+  },
   {
     id: 'raw-json',
     path: '{runDir}/raw.json',
@@ -143,6 +151,20 @@ const artifacts = [
 // Each stage declares its inputs/outputs/validators/failurePolicy/rebuildCommand.
 // auto=true: deterministic script; auto=false: LLM/manual work.
 const stages = [
+  // ── Stage 1: Source Probe ──
+  {
+    id: 'source-probe',
+    label: '数据源探测',
+    auto: true,
+    dependsOn: [],
+    inputs: [],
+    outputs: ['source-probe'],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    rebuildCommand: 'node collector/probe-sources.cjs --runId {runId}',
+    script: 'collector/probe-sources.cjs',
+    args: (runId) => ['--runId', runId]
+  },
   // ── Stage 2: Data Collection ──
   {
     id: 'collect',
@@ -151,11 +173,24 @@ const stages = [
     dependsOn: [],
     inputs: [],
     outputs: ['raw-json', 'raw-snapshot', 'provenance', 'gaps'],
-    validators: [],
+    validators: ['validate-source-contract'],
     failurePolicy: 'hard_fail',
     rebuildCommand: 'node collector/index.cjs --round routine --runId {runId}',
     script: 'collector/index.cjs',
     args: (runId, mode) => ['--round', mode === 'validation' ? 'routine' : 'routine', '--runId', runId]
+  },
+  {
+    id: 'validate-source-contract',
+    label: '验证数据源契约',
+    auto: true,
+    dependsOn: ['source-probe', 'collect'],
+    inputs: ['source-probe', 'raw-json', 'provenance'],
+    outputs: [],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    rebuildCommand: 'node collector/validate-source-contract.cjs --runId {runId}',
+    script: 'collector/validate-source-contract.cjs',
+    args: (runId) => ['--runId', runId]
   },
   {
     id: 'portfolio',
@@ -321,8 +356,8 @@ const stages = [
     id: 'consistency',
     label: '全链路一致性校验',
     auto: true,
-    dependsOn: ['validate-reasoning', 'validate-temporal-diff', 'validate-feedback', 'validate-report', 'publish-current'],
-    inputs: ['raw-json', 'derived-json', 'evidence-packet', 'reasoning-snapshot', 'temporal-diff', 'feedback', 'report', 'current'],
+    dependsOn: ['validate-source-contract', 'validate-reasoning', 'validate-temporal-diff', 'validate-feedback', 'validate-report', 'publish-current'],
+    inputs: ['source-probe', 'raw-json', 'derived-json', 'evidence-packet', 'reasoning-snapshot', 'temporal-diff', 'feedback', 'report', 'current'],
     outputs: [],
     validators: [],
     failurePolicy: 'hard_fail',

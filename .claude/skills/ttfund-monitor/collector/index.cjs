@@ -10,6 +10,10 @@ const cp = require('child_process');
 const cfg = require('./indicators.cjs');
 const { runtimeRoot: RUNTIME, homeDir: HOME } = require('../lib/workspace.cjs');
 
+// Load source contracts (P4-C) — degrade gracefully if missing
+let sourceContracts = null;
+try { sourceContracts = require('../config/source-contracts.json'); } catch (_) { /* contracts not yet created */ }
+
 // ── CLI ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const round = args.includes('--round') ? args[args.indexOf('--round') + 1] : 'routine';
@@ -80,6 +84,24 @@ function parseDate(raw) {
   return null; // invalid_date
 }
 
+// Count trading days (Mon-Fri) between two dates (Fix 3: trading calendar)
+function countTradingDays(fromDate, toDate) {
+  if (!fromDate || !toDate) return null;
+  const from = fromDate instanceof Date ? fromDate : parseDate(fromDate);
+  const to = toDate instanceof Date ? toDate : parseDate(toDate);
+  if (!from || !to) return null;
+  if (from >= to) return 0;
+  let count = 0;
+  const d = new Date(from);
+  d.setDate(d.getDate() + 1); // start from next day
+  while (d <= to) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) count++; // Mon-Fri only
+    d.setDate(d.getDate() + 1);
+  }
+  return count;
+}
+
 // ── iFinD helpers ────────────────────────────────────────────
 function parseIfind(r) {
   if (!r?.ok || !r?.data?.result?.content?.[0]?.text) return null;
@@ -118,6 +140,13 @@ const py = ym === 0 ? yy - 1 : yy;
 const MONTH = `${yy}年${MN[ym]}`;
 const MONTH_PREV = `${py}年${MN[pm]}`;
 const YEAR = `${yy}`;
+// P2.5: date range for kline queries (~45 calendar days = ~30 trading days)
+const dateTo = new Date(now);
+const dateFrom = new Date(now); dateFrom.setDate(dateFrom.getDate() - 45);
+const pad2 = n => String(n).padStart(2, '0');
+const DATEFROM = `${dateFrom.getFullYear()}${pad2(dateFrom.getMonth()+1)}${pad2(dateFrom.getDate())}`;
+const DATETO = `${dateTo.getFullYear()}${pad2(dateTo.getMonth()+1)}${pad2(dateTo.getDate())}`;
+const DATERANGE = `${DATEFROM}-${DATETO}`;
 
 // ── Retry helpers ─────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -150,7 +179,7 @@ function freshnessRecheck(runDir, cfg) {
   const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
   const { results } = raw;
   const freshness = cfg.freshness || {};
-  let freshCount = 0, staleSuccessCount = 0, staleGapCount = 0, invalidDateCount = 0;
+  let freshCount = 0, staleSuccessCount = 0, staleGapCount = 0, noDateCount = 0, invalidDateCount = 0;
   const freshnessGaps = [];
 
   for (const [id, r] of Object.entries(results)) {
@@ -158,7 +187,7 @@ function freshnessRecheck(runDir, cfg) {
     r._freshStatus = 'unknown';
     if (!f) continue;
     if (r.value == null || r.error) { r._freshStatus = 'missing'; continue; }
-    if (!r.date) { r._freshStatus = 'no_date'; staleGapCount++; freshnessGaps.push({ indicator: id, status: 'no_date', source: r.source || 'unknown' }); continue; }
+    if (!r.date) { r._freshStatus = 'no_date'; noDateCount++; freshnessGaps.push({ indicator: id, status: 'no_date', source: r.source || 'unknown' }); continue; }
 
     const parsed = parseDate(r.date);
     if (!parsed) {
@@ -169,7 +198,11 @@ function freshnessRecheck(runDir, cfg) {
       continue;
     }
     const ageDays = (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24);
-    if (ageDays < f.maxAgeDays + 1) {
+    const effectiveAge = f.maxAgeTradingDays != null
+      ? countTradingDays(parsed, new Date())
+      : ageDays;
+    const effectiveMax = f.maxAgeTradingDays != null ? f.maxAgeTradingDays : f.maxAgeDays;
+    if (effectiveAge < effectiveMax + 1) {
       r._freshStatus = 'fresh';
       freshCount++;
     } else if (f.staleAction === 'acceptable') {
@@ -179,8 +212,8 @@ function freshnessRecheck(runDir, cfg) {
       r._freshStatus = 'staleGap';
       if (f.staleAction === 'fallback_not_implemented') r._staleNote = 'fallback_not_implemented';
       staleGapCount++;
-      freshnessGaps.push({ indicator: id, status: r._freshStatus, ageDays: Math.round(ageDays), maxAgeDays: f.maxAgeDays, date: r.date, source: r.source || 'unknown' });
-      console.log(`  [stale] ${id}: ${r.date} (${ageDays.toFixed(0)}d > ${f.maxAgeDays}d max)`);
+      freshnessGaps.push({ indicator: id, status: r._freshStatus, ageDays: Math.round(ageDays), effectiveAge: Math.round(effectiveAge), maxAgeDays: f.maxAgeDays, date: r.date, source: r.source || 'unknown' });
+      console.log(`  [stale] ${id}: ${r.date} (${effectiveAge.toFixed(0)}td / ${ageDays.toFixed(0)}d > ${effectiveMax}td/${f.maxAgeDays}d max)`);
     }
   }
 
@@ -189,10 +222,10 @@ function freshnessRecheck(runDir, cfg) {
   const total = Object.keys(results).length;
 
   // Update raw.json summary
-  raw.summary = { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, invalidDate: invalidDateCount };
+  raw.summary = { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount };
   raw.collectedAt = new Date().toISOString();
   fs.writeFileSync(rawPath, JSON.stringify(raw, null, 2));
-  console.log(`  fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} invalidDate:${invalidDateCount} missing:${missing}`);
+  console.log(`  fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} noDate:${noDateCount} invalidDate:${invalidDateCount} missing:${missing}`);
 
   // Merge freshness gaps into gaps.json: remove stale freshness gaps, re-add fresh ones
   const freshnessStatuses = new Set(['staleGap', 'no_date', 'invalid_date']);
@@ -214,7 +247,7 @@ function freshnessRecheck(runDir, cfg) {
   fs.writeFileSync(gapsPath, JSON.stringify(deduped, null, 2));
 
   // Regenerate raw-snapshot.md
-  regenerateSnapshotMd(runDir, results, cfg, { total, freshCount, staleSuccessCount, staleGapCount, invalidDateCount, missing, allGaps: deduped });
+  regenerateSnapshotMd(runDir, results, cfg, { total, freshCount, staleSuccessCount, staleGapCount, noDateCount, invalidDateCount, missing, allGaps: deduped });
   // Regenerate provenance.md
   regenerateProvMd(runDir, raw, deduped);
 
@@ -245,7 +278,7 @@ function regenerateSnapshotMd(runDir, results, cfg, summary) {
 
   let md = `# 数据快照 · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n\n`;
   md += `## 元信息\n- 采集时间：${new Date().toISOString()} CST\n`;
-  md += `- 覆盖：${summary.total} attempted | fresh:${summary.freshCount} staleSuccess:${summary.staleSuccessCount} staleGap:${summary.staleGapCount} invalidDate:${summary.invalidDateCount} missing:${summary.missing}\n`;
+  md += `- 覆盖：${summary.total} attempted | fresh:${summary.freshCount} staleSuccess:${summary.staleSuccessCount} staleGap:${summary.staleGapCount} noDate:${summary.noDateCount} invalidDate:${summary.invalidDateCount} missing:${summary.missing}\n`;
   md += `- 缺口：${summary.allGaps?.length > 0 ? summary.allGaps.map(g => g.indicator).join(', ') : '无'}\n\n`;
   md += `## 原始数据\n\n`;
 
@@ -272,12 +305,25 @@ function regenerateSnapshotMd(runDir, results, cfg, summary) {
 function regenerateProvMd(runDir, raw, allGaps) {
   let md = `# Provenance — ${raw.runId}\n\n`;
   md += `## Meta\n- runId: ${raw.runId}\n- collectedAt: ${raw.collectedAt || new Date().toISOString()}\n\n`;
-  md += `## Summary\n- total: ${raw.summary?.total || '?'}\n- fresh: ${raw.summary?.fresh || 0}\n- staleSuccess: ${raw.summary?.staleSuccess || 0}\n- staleGap: ${raw.summary?.staleGap || 0}\n- invalidDate: ${raw.summary?.invalidDate || 0}\n- missing: ${raw.summary?.missing || 0}\n\n`;
+  md += `## Summary\n- total: ${raw.summary?.total || '?'}\n- fresh: ${raw.summary?.fresh || 0}\n- staleSuccess: ${raw.summary?.staleSuccess || 0}\n- staleGap: ${raw.summary?.staleGap || 0}\n- noDate: ${raw.summary?.noDate || 0}\n- invalidDate: ${raw.summary?.invalidDate || 0}\n- missing: ${raw.summary?.missing || 0}\n\n`;
   if (allGaps?.length > 0) {
     md += `## 缺口分类\n| 编号 | 原因类别 | 详情 |\n|------|------|------|\n`;
     for (const g of allGaps) {
       md += `| ${g.indicator} | ${g.status} | ${g.error || g.rawDate || `${g.ageDays || '?'}d / max ${g.maxAgeDays || '?'}d`} |\n`;
     }
+    md += '\n';
+  }
+  // P4-C: Source contract summary
+  if (raw.sourceContracts?.summary) {
+    const cs = raw.sourceContracts.summary;
+    md += `## Source Contract (P4-C)\n`;
+    md += `| 状态 | 数量 |\n|------|:--:|\n`;
+    md += `| ok (主源匹配) | ${cs.ok || 0} |\n`;
+    md += `| fallback_ok (备选在白名单) | ${cs.fallbackOk || 0} |\n`;
+    md += `| fallback_violation (越界) | ${cs.fallbackViolation || 0} |\n`;
+    md += `| missing (缺失) | ${cs.missing || 0} |\n`;
+    md += `| no_contract (无契约) | ${cs.noContract || 0} |\n`;
+    if (cs.websearchViolations > 0) md += `| websearch_violations | ${cs.websearchViolations} |\n`;
   }
   fs.writeFileSync(path.join(runDir, 'provenance.md'), md);
 }
@@ -313,42 +359,67 @@ async function main() {
         return r?.data?.raw_result?.body?.data || null;
       }, 2, call.name);
 
-      const datePaths = call.datePath || ['macro_fiscal.trade_date', 'gold_quotes.au9999.date'];
-	      let date = null;
-	      for (const dp of datePaths) {
-	        date = dotGet(d, dp);
-	        if (date) break;
+      const callDatePaths = call.datePath || ['macro_fiscal.trade_date', 'gold_quotes.au9999.date'];
+	      let callDate = null;
+	      for (const dp of callDatePaths) {
+	        callDate = dotGet(d, dp);
+	        if (callDate) break;
 	      }
 
       let ok = 0;
       for (const [id, spec] of Object.entries(call.extracts)) {
         const v = dotGet(d, spec.path);
         results[id] = {
-          indicator: id, value: v ?? null, date, source: 'ttfund', unit: spec.unit || ''
+          indicator: id, value: v ?? null, date: spec.datePath ? (dotGet(d, spec.datePath) || callDate) : (call.requirePerIndicatorDate ? null : callDate), source: 'ttfund', unit: spec.unit || ''
         };
         if (v != null) ok++;
       }
 
-      // G2 intermittent fix: re-fetch GOLD_INFO once if au9999 is missing but other gold data present
-      if (call.name === 'GOLD_INFO' && results.G2?.value == null && results.G3?.value != null) {
-        console.log(`  G2 missing, retrying GOLD_INFO after 5s delay...`);
-        await new Promise(r => setTimeout(r, 5000));
-        try {
-          const out2 = run(ttfCli, ['invoke', call.skill, '--action', 'query', '--env', 'prod', '--body', call.body]);
-          const r2 = JSON.parse(out2);
-          const d2 = r2?.data?.raw_result?.body?.data || null;
-          if (d2) {
-            const g2v = dotGet(d2, 'gold_quotes.au9999.close');
-            if (g2v != null) {
-              results.G2 = { indicator: 'G2', value: g2v, date, source: 'ttfund', unit: '元/克' };
-              ok++;
-              console.log(`  G2 recovered: ${g2v}`);
-            }
-          }
-        } catch (e2) {
-          console.error(`  G2 retry failed: ${e2.message.slice(0, 100)}`);
-        }
-      }
+      // G2/G3 retry: re-fetch GOLD_INFO if any critical gold field missing (Fix 2)
+	      const goldCriticalMissing = results.G2?.value == null || results.G3?.value == null;
+	      if (call.name === 'GOLD_INFO' && goldCriticalMissing) {
+	        const missingGold = [];
+	        if (results.G2?.value == null) missingGold.push('G2');
+	        if (results.G3?.value == null) missingGold.push('G3');
+	        console.log(`  ${missingGold.join(',')} missing, retrying GOLD_INFO after 5s delay...`);
+	        await new Promise(r => setTimeout(r, 5000));
+	        try {
+	          const out2 = run(ttfCli, ['invoke', call.skill, '--action', 'query', '--env', 'prod', '--body', call.body]);
+	          const r2 = JSON.parse(out2);
+	          const d2 = r2?.data?.raw_result?.body?.data || null;
+	          if (d2) {
+	            if (results.G2?.value == null) {
+	              const g2v = dotGet(d2, 'gold_quotes.au9999.close');
+	              if (g2v != null) {
+	                const g2Date = dotGet(d2, 'gold_quotes.au9999.date') || callDate;
+	                results.G2 = { indicator: 'G2', value: g2v, date: g2Date, source: 'ttfund', unit: '元/克' };
+	                ok++;
+	                console.log(`  G2 recovered: ${g2v}`);
+	              }
+	            }
+	            if (results.G3?.value == null) {
+	              const g3v = dotGet(d2, 'gold_quotes.au_td.close');
+	              if (g3v != null) {
+	                const g3Date = dotGet(d2, 'gold_quotes.au_td.date') || callDate;
+	                results.G3 = { indicator: 'G3', value: g3v, date: g3Date, source: 'ttfund', unit: '元/克' };
+	                ok++;
+	                console.log(`  G3 recovered: ${g3v}`);
+	              }
+	            }
+	          }
+	          // G2_proxy: if G2 still missing, record G1_pm as SEPARATE proxy (never overwrite G2)
+	          if (results.G2?.value == null && results.G1_pm?.value != null) {
+	            results.G2_proxy = {
+	              indicator: 'G2_proxy', value: results.G1_pm.value,
+	              date: results.G1_pm.date, source: 'ttfund', unit: '元/克',
+	              note: 'proxy: G1_pm (SGE evening benchmark) — Au99.99 unavailable, substitute for domestic gold reference only'
+	            };
+	            console.log(`  G2_proxy: G1_pm (${results.G1_pm.value}) available as Au99.99 proxy (G2 remains missing)`);
+	          }
+	        } catch (e2) {
+	          console.error(`  G2/G3 retry failed: ${e2.message.slice(0, 100)}`);
+	        }
+	      }
 
       prov.sources.ttfund.calls.push({ call: call.name, durationMs: Date.now() - t0, extracted: ok, attempts, status: 'ok' });
       console.log(`  ${call.name}: ${ok} values extracted`);
@@ -371,9 +442,9 @@ async function main() {
   for (const batch of ifind.batches) {
     for (const item of batch.calls) {
       iCount++;
-      const q = item.query.replace(/\$MONTH/g, MONTH).replace(/\$MONTH_PREV/g, MONTH_PREV).replace(/\$YEAR/g, YEAR);
+      const q = item.query.replace(/\$MONTH/g, MONTH).replace(/\$MONTH_PREV/g, MONTH_PREV).replace(/\$YEAR/g, YEAR).replace(/\$DATERANGE/g, DATERANGE).replace(/\$DATEFROM/g, DATEFROM).replace(/\$DATETO/g, DATETO);
       const qPrev = MONTH !== MONTH_PREV
-        ? item.query.replace(/\$MONTH/g, MONTH_PREV).replace(/\$MONTH_PREV/g, MONTH_PREV).replace(/\$YEAR/g, YEAR) : null;
+        ? item.query.replace(/\$MONTH/g, MONTH_PREV).replace(/\$MONTH_PREV/g, MONTH_PREV).replace(/\$YEAR/g, YEAR).replace(/\$DATERANGE/g, DATERANGE).replace(/\$DATEFROM/g, DATEFROM).replace(/\$DATETO/g, DATETO) : null;
       try {
         const { result: data, attempts } = await withRetry(async () => {
           const doFetch = (qry) => iCall('edb', 'get_edb_data', { query: qry }).then(r => ({ r, parsed: parseIfind(r) }));
@@ -406,10 +477,19 @@ async function main() {
             indicator: item.indicator,
             value: data.val,
             date: data.val[0]?.[0] || null,
-            source: 'ifind', unit: item.unit || '', note: `kline:${data.val.length}`
+            source: 'ifind', unit: item.unit || '', note: `kline:${data.val.length}`,
+            _klineInsufficient: data.val.length < 20
           };
         }
         iOk++;
+        // Fix 4: K-line insufficient_history gap
+        if (data.type !== "single" && data.val.length < 20) {
+          gaps.push({
+            indicator: item.indicator, source: "ifind", status: "insufficient_history",
+            klineCount: data.val.length,
+            note: "K-line has " + data.val.length + " records, need >=20 for 20MA/涨跌幅"
+          });
+        }
       } catch (e) {
         results[item.indicator] = { indicator: item.indicator, value: null, date: null, source: 'ifind', unit: item.unit || '', error: e.message.slice(0, 200) };
         gaps.push({ indicator: item.indicator, source: 'ifind', status: e.message === 'null value' ? 'null_value' : 'error', error: e.message.slice(0, 200) });
@@ -463,13 +543,13 @@ async function main() {
   console.log('\n── Freshness check ──');
 
   const freshness = cfg.freshness || {};
-  let freshCount = 0, staleSuccessCount = 0, staleGapCount = 0, invalidDateCount = 0;
+  let freshCount = 0, staleSuccessCount = 0, staleGapCount = 0, noDateCount = 0, invalidDateCount = 0;
   for (const [id, r] of Object.entries(results)) {
     const f = freshness[id];
     r._freshStatus = 'unknown';
     if (!f) continue;
     if (r.value == null || r.error) { r._freshStatus = 'missing'; continue; }
-    if (!r.date) { r._freshStatus = 'no_date'; staleGapCount++; gaps.push({ indicator: id, status: 'no_date', source: r.source || 'unknown' }); continue; }
+    if (!r.date) { r._freshStatus = 'no_date'; noDateCount++; gaps.push({ indicator: id, status: 'no_date', source: r.source || 'unknown' }); continue; }
 
     const parsed = parseDate(r.date);
     if (!parsed) {
@@ -480,7 +560,11 @@ async function main() {
       continue;
     }
     const ageDays = (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24);
-    if (ageDays < f.maxAgeDays + 1) {
+    const effectiveAge = f.maxAgeTradingDays != null
+      ? countTradingDays(parsed, new Date())
+      : ageDays;
+    const effectiveMax = f.maxAgeTradingDays != null ? f.maxAgeTradingDays : f.maxAgeDays;
+    if (effectiveAge < effectiveMax + 1) {
       r._freshStatus = 'fresh';
       freshCount++;
     } else if (f.staleAction === 'acceptable') {
@@ -490,8 +574,8 @@ async function main() {
       r._freshStatus = 'staleGap';
       if (f.staleAction === 'fallback_not_implemented') r._staleNote = 'fallback_not_implemented';
       staleGapCount++;
-      gaps.push({ indicator: id, status: r._freshStatus, ageDays: Math.round(ageDays), maxAgeDays: f.maxAgeDays, date: r.date, source: r.source || 'unknown' });
-      console.log(`  [stale] ${id}: ${r.date} (${ageDays.toFixed(0)}d > ${f.maxAgeDays}d max)`);
+      gaps.push({ indicator: id, status: r._freshStatus, ageDays: Math.round(ageDays), effectiveAge: Math.round(effectiveAge), maxAgeDays: f.maxAgeDays, date: r.date, source: r.source || 'unknown' });
+      console.log(`  [stale] ${id}: ${r.date} (${effectiveAge.toFixed(0)}td / ${ageDays.toFixed(0)}d > ${effectiveMax}td/${f.maxAgeDays}d max)`);
     }
   }
 
@@ -501,7 +585,93 @@ async function main() {
   const missing = Object.values(results).filter(r => r.value == null || r.error).length;
   const total = Object.keys(results).length;
 
-  console.log(`  fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} invalidDate:${invalidDateCount} missing:${missing}`);
+  console.log(`  fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} noDate:${noDateCount} invalidDate:${invalidDateCount} missing:${missing}`);
+
+  // ════════════ SOURCE CONTRACT ENRICHMENT (P4-C) ════════
+  function resolveExpectedSource(indicatorId) {
+    if (!sourceContracts) return null;
+    for (const [srcId, contract] of Object.entries(sourceContracts.sources)) {
+      if (contract.isPrimaryFor?.includes(indicatorId)) return srcId;
+      if (contract.supportedIndicators?.prefixes) {
+        for (const prefix of contract.supportedIndicators.prefixes) {
+          if (indicatorId === prefix || indicatorId.startsWith(prefix.replace(/[0-9_]+$/, ''))) {
+            return srcId;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function resolveAllowedFallback(indicatorId, actualSource) {
+    if (!sourceContracts) return true; // no contracts = no restriction
+    const contract = sourceContracts.sources[actualSource];
+    if (!contract) return true;
+    // If this source is primary for this indicator, it's fine
+    if (contract.isPrimaryFor?.includes(indicatorId)) return true;
+    // Check if any source's fallback whitelist covers this indicator
+    for (const [srcId, srcContract] of Object.entries(sourceContracts.sources)) {
+      if (srcContract.allowedFallbackTargets?.includes(actualSource)) {
+        const restrictions = srcContract.fallbackRestrictions?.[actualSource];
+        if (!restrictions) return true;
+        if (restrictions.allowedFor === 'non_critical_only') {
+          if (!cfg.criticalIds.includes(indicatorId)) return true;
+        }
+        if (restrictions.allowedFor?.includes?.(indicatorId)) return true;
+      }
+    }
+    return false;
+  }
+
+  function checkWebSearchConstraints(indicatorId, result) {
+    if (result.source !== 'websearch') return [];
+    const violations = [];
+    const wsContract = sourceContracts?.sources?.websearch;
+    if (!wsContract) return violations;
+    if (!result.date && wsContract.constraints?.requiresDataDate) {
+      violations.push('websearch_missing_date');
+    }
+    if (!result._sourceUrl && wsContract.constraints?.requiresSourceUrl) {
+      violations.push('websearch_missing_source_url');
+    }
+    return violations;
+  }
+
+  const indicatorContracts = {};
+  for (const [id, r] of Object.entries(results)) {
+    const expected = resolveExpectedSource(id);
+    const actual = r.source || 'unknown';
+    const fallbackOk = expected && expected !== actual ? resolveAllowedFallback(id, actual) : true;
+    const wsViolations = checkWebSearchConstraints(id, r);
+    let status = 'ok';
+    if (r.value == null || r.error) {
+      status = 'missing';
+    } else if (expected && expected !== actual && !fallbackOk) {
+      status = 'fallback_violation';
+    } else if (expected && expected !== actual) {
+      status = 'fallback_ok';
+    } else if (!expected) {
+      status = 'no_contract';
+    }
+
+    indicatorContracts[id] = {
+      expectedSource: expected,
+      actualSource: actual,
+      contractStatus: status,
+      fallbackChain: actual !== (expected || actual) ? [expected || 'unknown', actual] : [actual],
+      websearchViolations: wsViolations.length > 0 ? wsViolations : undefined
+    };
+  }
+
+  const contractSummary = {
+    totalWithContract: Object.values(indicatorContracts).filter(c => c.expectedSource).length,
+    ok: Object.values(indicatorContracts).filter(c => c.contractStatus === 'ok').length,
+    fallbackOk: Object.values(indicatorContracts).filter(c => c.contractStatus === 'fallback_ok').length,
+    fallbackViolation: Object.values(indicatorContracts).filter(c => c.contractStatus === 'fallback_violation').length,
+    missing: Object.values(indicatorContracts).filter(c => c.contractStatus === 'missing').length,
+    noContract: Object.values(indicatorContracts).filter(c => c.contractStatus === 'no_contract').length,
+    websearchViolations: Object.values(indicatorContracts).filter(c => c.websearchViolations?.length > 0).length
+  };
 
   // ════════════ WRITE OUTPUTS ════════════
   console.log('\n── Writing outputs ──');
@@ -510,14 +680,15 @@ async function main() {
   fs.writeFileSync(path.join(RUN_DIR, 'raw.json'), JSON.stringify({
     runId, round, version: cfg.version,
     collectedAt: new Date().toISOString(),
-    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, invalidDate: invalidDateCount },
+    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount },
     results
   }, null, 2));
 
   // provenance.json
   prov.endTime = new Date().toISOString();
   const wsItems = cfg.websearch?.items || [];
-  prov.summary = { totalItems: total, activeItems: activeCount, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, invalidDate: invalidDateCount, missing, websearchPending: wsItems.length };
+  prov.summary = { totalItems: total, activeItems: activeCount, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, missing, websearchPending: wsItems.length };
+  prov.sourceContracts = { version: sourceContracts?.version || 'N/A', indicatorContracts, summary: contractSummary };
   fs.writeFileSync(path.join(RUN_DIR, 'provenance.json'), JSON.stringify(prov, null, 2));
 
   // gaps.json
@@ -556,7 +727,7 @@ async function main() {
   snapshotMd += `## 元信息\n`;
   snapshotMd += `- 轮次：${round}\n`;
   snapshotMd += `- 采集时间：${prov.startTime} - ${prov.endTime || now.toISOString()} CST\n`;
-  snapshotMd += `- 覆盖：${total} attempted | fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} invalidDate:${invalidDateCount} missing:${missing}\n`;
+  snapshotMd += `- 覆盖：${total} attempted | fresh:${freshCount} staleSuccess:${staleSuccessCount} staleGap:${staleGapCount} noDate:${noDateCount} invalidDate:${invalidDateCount} missing:${missing}\n`;
   snapshotMd += `- 缺口：${gaps.length > 0 ? gaps.map(g => g.indicator).join(', ') : '无'}\n\n`;
   snapshotMd += `## 原始数据\n\n`;
 
@@ -616,12 +787,33 @@ async function main() {
     for (const g of gaps) {
       provMd += `| ${g.indicator} | ${g.status} | ${g.error || '-'} |\n`;
     }
+    provMd += '\n';
+  }
+  // P4-C: Source contract section
+  if (contractSummary.ok !== undefined) {
+    provMd += `## Source Contract (P4-C)\n`;
+    provMd += `| 状态 | 数量 |\n|------|:--:|\n`;
+    provMd += `| ok (主源匹配) | ${contractSummary.ok} |\n`;
+    provMd += `| fallback_ok (备选在白名单) | ${contractSummary.fallbackOk} |\n`;
+    provMd += `| fallback_violation (越界) | ${contractSummary.fallbackViolation} |\n`;
+    provMd += `| missing (缺失) | ${contractSummary.missing} |\n`;
+    provMd += `| no_contract (无契约) | ${contractSummary.noContract} |\n`;
+    if (contractSummary.websearchViolations > 0) provMd += `| websearch_violations | ${contractSummary.websearchViolations} |\n`;
+    // List violations if any
+    const violations = Object.entries(indicatorContracts).filter(([, c]) => c.contractStatus === 'fallback_violation');
+    if (violations.length > 0) {
+      provMd += `\n### Fallback Violations\n`;
+      provMd += `| 指标 | 期望源 | 实际源 |\n|------|--------|--------|\n`;
+      for (const [id, c] of violations) {
+        provMd += `| ${id} | ${c.expectedSource} | ${c.actualSource} |\n`;
+      }
+    }
   }
   fs.writeFileSync(path.join(RUN_DIR, 'provenance.md'), provMd);
 
   // ── Summary ──
   console.log(`\n=== DONE ===`);
-  console.log(`Structured: ${activeCount} active / ${staleGapCount} stale / ${invalidDateCount} invalidDate / ${missing} missing / ${total} total (fresh:${freshCount} staleSuccess:${staleSuccessCount})`);
+  console.log(`Structured: ${activeCount} active / ${staleGapCount} stale / ${noDateCount} noDate / ${invalidDateCount} invalidDate / ${missing} missing / ${total} total (fresh:${freshCount} staleSuccess:${staleSuccessCount})`);
   console.log(`WebSearch: ${wsItems.length} tasks pending`);
   console.log(`Output: ${RUN_DIR}/`);
   console.log(`  raw.json  raw-snapshot.md  provenance.json  provenance.md  gaps.json  websearch-tasks.md`);
