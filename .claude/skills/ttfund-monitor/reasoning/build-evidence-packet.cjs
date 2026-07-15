@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { runtimeRoot: RUNTIME } = require('../lib/workspace.cjs');
+const { normalize } = require('../lib/unit-normalizer.cjs');
 const GUARD_RULES_PATH = path.join(__dirname, 'guard-rules.json');
 
 // ── CLI ──────────────────────────────────────────────────────
@@ -92,29 +93,43 @@ function main() {
     evidence.push(entry);
   }
 
-  // Add derived indicators
+  // ── Unit normalization notes (P4-A) ───────────────────────────
+  // Only add notes, never change evidence values (per 缅因猫 review).
+  const unitNormNotes = [];
+  for (const e of evidence) {
+    const result = normalize(e.indicator, { value: e.value, unit: e.unit });
+    if (result.canonicalUnit !== null) {
+      unitNormNotes.push({
+        indicator: e.indicator,
+        rawValue: result.rawValue,
+        rawUnit: result.rawUnit,
+        detectedUnit: result.detectedUnit,
+        canonicalUnit: result.canonicalUnit,
+        normalized: result.normalized,
+        ruleId: result.ruleId,
+        warning: result.warning
+      });
+    }
+  }
+
+  // Add derived indicators (Fix 6: strongly depends on derived.json)
   const derivedEntries = [];
-  if (derived) {
-	    const derivedCategories = ['yieldCurves', 'liquidity', 'goldRatios', 'fx', 'movingAverages'];
-	    for (const cat of derivedCategories) {
-	      const catData = derived[cat];
-	      if (!catData || typeof catData !== 'object') continue;
-	      for (const [id, entry] of Object.entries(catData)) {
-	        const name = entry.name || entry.label || id;
-	        const value = entry.value != null ? entry.value : (entry.latest || null);
-	        derivedEntries.push({
-	          indicator: `D_${id}`,
-	          category: cat,
-	          name: typeof name === 'string' ? name : id,
-	          value: value,
-	          unit: entry.unit || '',
-	          freshness: 'fresh_derived',
-	          critical: false,
-	          note: entry.meaning || entry.note || ''
-	        });
-	      }
-	    }
-	  }
+  if (derived && derived.derived) {
+    for (const [id, entry] of Object.entries(derived.derived)) {
+      derivedEntries.push({
+        indicator: id,
+        name: entry.name || id,
+        value: entry.value,
+        unit: entry.unit || '',
+        freshness: entry.freshness || 'unknown',
+        critical: false,
+        note: entry.reason || '',
+        components: entry.components || {}
+      });
+    }
+  } else {
+    console.log('  WARNING: derived.json missing or empty — derived indicators absent from packet');
+  }
 
   // ── Portfolio state ─────────────────────────────────────────
   const portfolioState = { available: false, statuses: {}, summary: null };
@@ -252,7 +267,8 @@ function main() {
         portfolio: portfolioState.available ? `S1=${portfolioState.statuses.S1_holding} S2=${portfolioState.statuses.S2_profit} S3=${portfolioState.statuses.S3_analysis} S4=${portfolioState.statuses.S4_trade}` : 'missing',
         provenance: provenance ? 'available' : 'missing',
         gaps: `${gaps.length} gaps`
-      }
+      },
+      unit_normalization_notes: unitNormNotes.length > 0 ? unitNormNotes : undefined
     },
     freshness: freshnessCounts,
     evidence,

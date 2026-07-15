@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "temporal-diff",
+  "title": "Temporal Diff Schema",
+  "description": "Formal contract for temporal-diff.json produced by Stage 4.5. Compares current run indicators against a validated baseline run.",
+  "type": "object",
+  "required": ["meta", "directional_changes", "consistency_check", "regime_stability", "threshold_crossings"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["status", "currentRunId", "builtAt", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["ok", "degraded", "no_baseline"],
+          "description": "ok=baseline found+validated, degraded=baseline found but not validated, no_baseline=no prior run with reasoning"
+        },
+        "currentRunId": { "type": "string" },
+        "baselineRunId": { "type": "string" },
+        "baselineStatus": {
+          "description": "validated=consistency result 0 errors, unvalidated=no consistency result file, artifact_only=reasoning exists but other artifacts partial. null when no_baseline."
+        },
+        "builtAt": { "type": "string" },
+        "version": { "type": "string" },
+        "daysSinceBaseline": { "type": "number" },
+        "indicatorsCompared": { "type": "number" },
+        "indicatorsUnavailableBoth": { "type": "number" },
+        "indicatorsNew": { "type": "number" },
+        "indicatorsLost": { "type": "number" },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "directional_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["indicator", "name", "tier", "direction"],
+        "additionalProperties": false,
+        "properties": {
+          "indicator": { "type": "string" },
+          "name": { "type": "string" },
+          "tier": { "type": "integer", "enum": [1, 2, 3] },
+          "direction": {
+            "type": "string",
+            "enum": ["up", "down", "flat", "new", "lost", "unknown"]
+          },
+          "currentValue": {},
+          "baselineValue": {},
+          "delta": {},
+          "deltaDisplay": { "type": "string" },
+          "unit": { "type": "string" },
+          "magnitude": {
+            "type": "string",
+            "enum": ["negligible", "moderate", "significant", "N/A"]
+          },
+          "thresholdGroup": { "type": "string" },
+          "currentDate": { "type": "string" },
+          "baselineDate": { "type": "string" },
+          "normalized": { "type": "boolean" },
+          "currentDetectedUnit": { "type": "string" },
+          "baselineDetectedUnit": { "type": "string" }
+        }
+      }
+    },
+    "consistency_check": {
+      "type": "object",
+      "required": ["coherent_pairs", "divergent_pairs", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "coherent_pairs": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Pairs that moved in mutually consistent directions"
+        },
+        "divergent_pairs": {
+          "type": "array",
+          "items": { "type": "object" },
+          "description": "Pairs that moved in contradictory directions (e.g. TIPS up, gold up)"
+        },
+        "summary": { "type": "string" }
+      }
+    },
+    "regime_stability": {
+      "type": "object",
+      "required": ["currentRegime", "baselineRegime", "regimeChanged", "keyDifferences"],
+      "additionalProperties": false,
+      "properties": {
+        "currentRegime": { "type": "string" },
+        "baselineRegime": { "type": "string" },
+        "regimeChanged": { "type": "boolean" },
+        "keyDifferences": { "type": "array", "items": { "type": "string" } },
+        "stabilityNote": { "type": "string" }
+      }
+    },
+    "threshold_crossings": {
+      "type": "object",
+      "required": ["crossed", "approaching"],
+      "additionalProperties": false,
+      "properties": {
+        "crossed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["indicator", "name", "threshold", "from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "indicator": { "type": "string" },
+              "name": { "type": "string" },
+              "threshold": { "type": "string" },
+              "from": {},
+              "to": {},
+              "direction": { "type": "string" },
+              "tier": { "type": "integer" }
+            }
+          }
+        },
+        "approaching": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["indicator", "name", "threshold", "currentValue", "distance"],
+            "additionalProperties": false,
+            "properties": {
+              "indicator": { "type": "string" },
+              "name": { "type": "string" },
+              "threshold": { "type": "string" },
+              "currentValue": {},
+              "distance": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

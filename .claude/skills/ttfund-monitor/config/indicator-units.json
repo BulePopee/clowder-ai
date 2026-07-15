@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "description": "Canonical unit definitions for indicators with known cross-run unit drift from source adapters. Add indicators here ONLY after a confirmed drift incident (not preemptively).",
+  "indicators": {
+    "G7": {
+      "name": "SPDR持仓",
+      "canonicalUnit": "吨",
+      "ranges": [
+        { "id": "tons", "min": 0, "max": 10000, "unit": "吨" },
+        { "id": "oz", "min": 1000000, "max": 100000000, "unit": "oz" }
+      ],
+      "toCanonical": {
+        "oz": { "operation": "divide", "factor": 32150.7467 }
+      }
+    }
+  }
+}

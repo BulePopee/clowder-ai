@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { runtimeRoot, runDir, currentFile } = require('./lib/workspace.cjs');
 const { artifacts } = require('./pipeline/contracts.cjs');
+const { normalize, loadUnitConfig } = require('./lib/unit-normalizer.cjs');
 
 // ── CLI ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -229,6 +230,139 @@ if (report && current) {
 } else {
   if (!report) fail('Cannot run report→current checks: report.md missing');
   if (!current) warn('Cannot run report→current checks: current.md missing');
+}
+
+// ── 5. Feedback consistency (P3.2-A) ──────────────────────────
+console.log('\n── 5. Feedback consistency ──');
+const feedback = readJSON('feedback.json');
+
+if (feedback && reasoning) {
+  // 5a. feedback meta.runId matches reasoning meta.runId
+  if (feedback.meta?.runId === reasoning.meta?.runId) {
+    ok(`Feedback runId matches reasoning (${feedback.meta.runId})`);
+  } else {
+    fail(`Feedback runId (${feedback.meta?.runId}) does NOT match reasoning (${reasoning.meta?.runId})`);
+  }
+
+  // 5b. action_advice_allowed consistency
+  const fActionAllowed = feedback.adjustment_summary?.action_advice_allowed;
+  const rActionAllowed = reasoning.meta?.action_advice_allowed;
+  if (fActionAllowed === rActionAllowed) {
+    ok(`action_advice_allowed consistent (feedback:${fActionAllowed}, reasoning:${rActionAllowed})`);
+  } else {
+    fail(`action_advice_allowed MISMATCH (feedback:${fActionAllowed}, reasoning:${rActionAllowed})`);
+  }
+
+  // 5c. cross_refs from_field can be resolved in reasoning or temporal
+  const crossRefs = feedback.cross_refs || [];
+  let unresolvedFields = 0;
+  for (const ref of crossRefs) {
+    if (ref.from_blueprint === 'temporal-diff') continue; // checked separately
+    if (ref.from_blueprint === 'macro-regime' && !reasoning.macro_regime) {
+      unresolvedFields++;
+    } else if (ref.from_blueprint === 'gold-rate-conflict' && !reasoning.gold_rate_conflict) {
+      unresolvedFields++;
+    } else if (ref.from_blueprint === 'portfolio-action-gate' && !reasoning.portfolio_action_gate) {
+      unresolvedFields++;
+    }
+  }
+  if (unresolvedFields === 0) {
+    ok(`All ${crossRefs.length} cross_refs reference available blueprints`);
+  } else {
+    fail(`${unresolvedFields} cross_ref(s) reference unavailable blueprints`);
+  }
+
+  // 5d. adjustment_summary cumulative_caps check
+  const cumCaps = feedback.adjustment_summary?.cumulative_caps || {};
+  let capViolations = 0;
+  for (const [target, info] of Object.entries(cumCaps)) {
+    if (!info.ok) {
+      capViolations++;
+      fail(`cumulative cap violated for "${target}": delta ${info.totalDelta} > cap ${info.cap}`);
+    }
+  }
+  if (capViolations === 0) {
+    ok(`All cumulative caps respected (${Object.keys(cumCaps).length} targets)`);
+  }
+
+  // 5e. cross_ref count consistency
+  const summaryCount = feedback.adjustment_summary?.total || 0;
+  if (summaryCount === crossRefs.length) {
+    ok(`cross_ref count consistent (${crossRefs.length})`);
+  } else {
+    fail(`cross_ref count MISMATCH (summary:${summaryCount}, actual:${crossRefs.length})`);
+  }
+} else if (feedback && !reasoning) {
+  fail('feedback.json exists but reasoning-snapshot.json missing — cannot verify consistency');
+} else if (!feedback) {
+  warn('feedback.json MISSING — P3.2-A feedback not yet generated for this run');
+}
+
+// ── 6. Unit consistency (P4-A) ──────────────────────────────────
+console.log('\n── 6. Unit consistency ──');
+const unitConfig = loadUnitConfig();
+const configIndicatorIds = Object.keys(unitConfig.indicators || {});
+
+if (configIndicatorIds.length > 0) {
+  const raw = readJSON('raw.json');
+  const temporalDiff = readJSON('temporal-diff.json');
+
+  // 6a. Configured indicator raw value check: value must fall in known range
+  if (raw && raw.results) {
+    for (const id of configIndicatorIds) {
+      const r = raw.results[id];
+      if (!r || r.value == null) continue;
+      const result = normalize(id, { value: r.value, unit: r.unit });
+      if (result.detectedUnit === null) {
+        warn(`§6a ${id}: value ${result.rawValue} outside all known range groups — unit drift cannot be detected`);
+      } else if (result.normalized) {
+        ok(`§6a ${id}: detected as ${result.detectedUnit}, normalized to ${result.canonicalUnit} (${result.rawValue} → ${Number(result.value).toFixed(2)})`);
+      } else {
+        ok(`§6a ${id}: in canonical range (${result.detectedUnit}), no normalization needed`);
+      }
+    }
+  } else {
+    warn('§6a Cannot check: raw.json missing');
+  }
+
+  // 6b. Temporal-diff normalization audit
+  if (temporalDiff) {
+    const tdWarnings = temporalDiff.meta?.warnings || [];
+    const normWarnings = tdWarnings.filter(w => w && w.includes('单位归一化'));
+    const changes = temporalDiff.directional_changes || [];
+    const normalizedChanges = changes.filter(c => c.normalized);
+
+    if (normalizedChanges.length > 0 && normWarnings.length === 0) {
+      fail('§6b Temporal-diff has normalized indicators but no normalization warnings');
+    } else if (normalizedChanges.length > 0) {
+      ok(`§6b ${normalizedChanges.length} normalized indicator(s) with ${normWarnings.length} warning(s)`);
+    } else {
+      ok('§6b No normalization applied (all indicators in canonical units)');
+    }
+  }
+
+  // 6c. Cross-run unit consistency: baseline vs current detectedUnit drift
+  if (temporalDiff) {
+    const changes = temporalDiff.directional_changes || [];
+    let crossRunDrifts = 0;
+    for (const c of changes) {
+      if (!c.currentDetectedUnit && !c.baselineDetectedUnit) continue;
+      if (c.currentDetectedUnit && c.baselineDetectedUnit &&
+          c.currentDetectedUnit !== c.baselineDetectedUnit) {
+        if (c.normalized) {
+          console.log(`  INFO: §6c ${c.indicator}: baseline(${c.baselineDetectedUnit}) vs current(${c.currentDetectedUnit}) unit drift — already normalized`);
+        } else {
+          warn(`§6c ${c.indicator}: baseline(${c.baselineDetectedUnit}) vs current(${c.currentDetectedUnit}) unit drift NOT normalized`);
+          crossRunDrifts++;
+        }
+      }
+    }
+    if (crossRunDrifts === 0) {
+      ok('§6c Cross-run unit consistency: no unhandled drifts');
+    }
+  }
+} else {
+  console.log('  (no indicators configured for unit normalization)');
 }
 
 // ── Summary ──────────────────────────────────────────────────
