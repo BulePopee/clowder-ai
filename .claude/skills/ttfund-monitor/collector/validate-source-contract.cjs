@@ -43,7 +43,7 @@ const sourceProbe = readJSON('source-probe.json');
 const raw = readJSON('raw.json');
 
 if (!provenance) { fail('provenance.json missing'); process.exit(1); }
-if (!sourceProbe) { warn('source-probe.json missing — probe gate not run for this run'); }
+if (!sourceProbe) { fail('source-probe.json MISSING — probe gate must be run before source contract validation'); }
 
 // ── 1. Source probe gate ────────────────────────────────────────
 console.log('── 1. Source Probe Gate ──');
@@ -67,7 +67,10 @@ if (sourceProbe) {
 console.log('\n── 2. Indicator Source Contracts ──');
 const indicatorContracts = provenance.sourceContracts?.indicatorContracts;
 if (!indicatorContracts) {
-  warn('provenance.json has no sourceContracts section — was collector run with P4-C?');
+  fail('provenance.json has no sourceContracts section — collector was NOT run with P4-C contract enrichment. Rebuild with current collector/index.cjs.');
+  // Short-circuit: without contract data, the rest of validation is meaningless
+  console.error('SOURCE CONTRACT CHECK FAILED — provenance.json lacks P4-C contract enrichment.\n');
+  process.exit(1);
 } else {
   let checked = 0, violations = 0, fallbackOk = 0, missing = 0;
 

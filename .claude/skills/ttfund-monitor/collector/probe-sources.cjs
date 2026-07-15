@@ -346,7 +346,7 @@ function main() {
       { sourceId: 'ifind', ...results.tools.ifind },
       { sourceId: 'wind', ...results.tools.wind },
       { sourceId: 'mx-data', ...results.mxdata },
-      { sourceId: 'websearch', status: 'available', details: 'WebSearch ilways available in CLI environment' }
+      { sourceId: 'websearch', status: 'available', details: 'WebSearch always available in CLI environment' }
     ];
 
     const probeResults = allSources.map(s => {

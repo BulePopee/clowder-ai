@@ -39,6 +39,14 @@ const artifacts = [
     consumedBy: ['evidence', 'report']
   },
   {
+    id: 'provenance-json',
+    path: '{runDir}/provenance.json',
+    stage: 'collect',
+    required: true,
+    producedBy: 'collector/index.cjs',
+    consumedBy: ['validate-source-contract', 'consistency']
+  },
+  {
     id: 'gaps',
     path: '{runDir}/gaps.json',
     stage: 'collect',
@@ -172,7 +180,7 @@ const stages = [
     auto: true,
     dependsOn: [],
     inputs: [],
-    outputs: ['raw-json', 'raw-snapshot', 'provenance', 'gaps'],
+    outputs: ['raw-json', 'raw-snapshot', 'provenance', 'provenance-json', 'gaps'],
     validators: ['validate-source-contract'],
     failurePolicy: 'hard_fail',
     rebuildCommand: 'node collector/index.cjs --round routine --runId {runId}',
@@ -184,7 +192,7 @@ const stages = [
     label: '验证数据源契约',
     auto: true,
     dependsOn: ['source-probe', 'collect'],
-    inputs: ['source-probe', 'raw-json', 'provenance'],
+    inputs: ['source-probe', 'raw-json', 'provenance-json'],
     outputs: [],
     validators: [],
     failurePolicy: 'hard_fail',

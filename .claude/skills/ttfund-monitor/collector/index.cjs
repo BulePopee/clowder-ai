@@ -590,13 +590,16 @@ async function main() {
   // ════════════ SOURCE CONTRACT ENRICHMENT (P4-C) ════════
   function resolveExpectedSource(indicatorId) {
     if (!sourceContracts) return null;
+    // Priority: exact match in isPrimaryFor first, then prefix-with-delimiter match
+    // (e.g. prefix B1 matches B1_am but NOT B8 — avoids cross-source false matches)
     for (const [srcId, contract] of Object.entries(sourceContracts.sources)) {
       if (contract.isPrimaryFor?.includes(indicatorId)) return srcId;
+    }
+    for (const [srcId, contract] of Object.entries(sourceContracts.sources)) {
       if (contract.supportedIndicators?.prefixes) {
         for (const prefix of contract.supportedIndicators.prefixes) {
-          if (indicatorId === prefix || indicatorId.startsWith(prefix.replace(/[0-9_]+$/, ''))) {
-            return srcId;
-          }
+          if (indicatorId === prefix) return srcId;
+          if (indicatorId.startsWith(prefix + '_')) return srcId;
         }
       }
     }
