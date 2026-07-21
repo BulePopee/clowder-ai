@@ -1,6 +1,12 @@
 {
-  "version": "1.0.0",
-  "description": "Source adapter contracts — machine-verifiable constraints for each data source. Used by probe-sources.cjs (probe gate), collector/index.cjs (provenance), and validate-source-contract.cjs (validator).",
+  "version": "1.1.0",
+  "description": "Source adapter contracts — machine-verifiable constraints for each data source. Used by probe-sources.cjs (probe gate), collector/index.cjs (provenance), and validate-source-contract.cjs (validator). v1.1.0 adds depthProbe section per source (P5-C).",
+  "depthProbePolicy": {
+    "requiredSources": ["ttfund", "ifind", "wind"],
+    "requiredFailureAction": "hard_fail",
+    "optionalFailureAction": "warn",
+    "note": "Required sources failing depth probe must block pipeline before collect. Optional sources (mx-data, websearch) only warn."
+  },
   "forbiddenFallbackTypes": {
     "news_article": "新闻文章 — 不得作为精确值来源",
     "proxy_etf": "ETF代理 — 不得替代原始指标（如GLD代理G7）",
@@ -24,7 +30,20 @@
       "allowedFailureModes": ["timeout", "login_expired", "null_value", "parse_error", "missing_field"],
       "allowedFallbackTargets": [],
       "isPrimaryFor": ["B1","B2","B3","B6","S1","X1","X3","G1_am","G1_pm","G2","G3","G5","G6","E2","M3","CPI"],
-      "probeCheck": { "command": "node", "argsTemplate": ["{cliPath}", "status", "--env", "prod", "--json"], "successPattern": "exit_0" }
+      "probeCheck": { "command": "node", "argsTemplate": ["{cliPath}", "status", "--env", "prod", "--json"], "successPattern": "exit_0" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "cli_invoke",
+        "command": "node",
+        "argsTemplate": ["{cliPath}", "invoke", "TTFUND_GOLD_INFO", "--action", "query", "--env", "prod", "--body", "{}"],
+        "timeoutMs": 30000,
+        "responseParser": { "type": "jsonPath", "path": "data.raw_result.body.data" },
+        "checks": [
+          { "path": "macro_fiscal.treasury_yields.us_10y", "label": "B2 US 10Y yield", "valueKind": "number", "critical": true },
+          { "path": "macro_fiscal.trade_date", "label": "Trade date", "valueKind": "date", "critical": true },
+          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": true }
+        ]
+      }
     },
     "ifind": {
       "id": "ifind",
@@ -47,11 +66,23 @@
       "allowedFailureModes": ["timeout", "null_value", "parse_error", "empty_result", "month_no_data", "schema_drift"],
       "allowedFallbackTargets": ["websearch"],
       "fallbackRestrictions": {
-        "websearch": { "allowedFor": ["non_critical_only"], "forbiddenFor": ["G4","O1","O2","X4","B8","B9"] },
+        "websearch": { "allowedFor": ["non_critical_only"], "forbiddenFor": ["G4","G7","O1","O2","X4","B8","B9"] },
         "note": "WebSearch 不得替代 iFinD critical 指标"
       },
       "isPrimaryFor": ["G4","G4b","G7","G8l","G8s","O1","O2","A1","A2a","A2g","B5","B7","B8","B9","B10","M1","M2","M2a","M5","N1","N4","N5","N6","N7","S2","S3","X4","R3","R4","AG","E1_kl","E2_kl","E3_kl"],
-      "probeCheck": { "command": "node", "argsTemplate": ["-e", "require('{entryPath}') && console.log('ok')"], "successPattern": "ok_in_stdout" }
+      "probeCheck": { "command": "node", "argsTemplate": ["-e", "require('{entryPath}') && console.log('ok')"], "successPattern": "ok_in_stdout" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "require_call",
+        "modulePath": "{entryPath}",
+        "cwd": "{cwd}",
+        "timeoutMs": 25000,
+        "functionCall": { "export": "call", "args": ["edb", "get_edb_data", { "query": "美国通胀保值国债收益率 10年期" }] },
+        "checks": [
+          { "path": "value", "label": "B8 TIPS 10Y value", "valueKind": "number", "critical": true },
+          { "path": "date", "label": "B8 date", "valueKind": "date", "critical": true }
+        ]
+      }
     },
     "wind": {
       "id": "wind",
@@ -65,13 +96,25 @@
       "valueType": "number_or_string",
       "unitExpectation": { "note": "各 call 的 unit 字段声明于 sources.json" },
       "allowedFailureModes": ["timeout", "auth_error", "null_value", "parse_error", "no_data", "policy_blocked"],
-      "allowedFallbackTargets": ["websearch"],
+      "allowedFallbackTargets": ["websearch", "ifind"],
       "fallbackRestrictions": {
         "websearch": { "allowedFor": ["F3"], "forbiddenFor": ["F1","F2","N2","X2","E1"] },
-        "note": "Wind 核心政策指标不得用 WebSearch 替代（除 F3 FOMC 日期外）"
+        "ifind": { "allowedFor": ["E1","X2","N2","M4"], "note": "Wind unavailable or probe call failed for these → iFinD provides valid equivalent data" },
+        "note": "Wind 核心政策指标不得用 WebSearch 替代（除 F3 FOMC 日期外）。iFinD 允许作为非政策类指标的 fallback。"
       },
       "isPrimaryFor": ["F1","F2","N2","X2","E1","M4"],
-      "probeCheck": { "command": "node", "argsTemplate": ["{entryPath}", "call", "analytics_data", "get_financial_data", "{\"question\":\"联邦基金目标利率 最新值\"}"], "successPattern": "exit_0_and_json" }
+      "probeCheck": { "command": "node", "argsTemplate": ["{entryPath}", "call", "analytics_data", "get_financial_data", "{\"question\":\"联邦基金目标利率 最新值\"}"], "successPattern": "exit_0_and_json" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "cli_invoke",
+        "command": "node",
+        "argsTemplate": ["{entryPath}", "call", "analytics_data", "get_financial_data", "{\"question\":\"联邦基金目标利率 最新值\"}"],
+        "timeoutMs": 30000,
+        "responseParser": { "type": "json" },
+        "checks": [
+          { "path": "$any", "label": "F1 Fed funds rate (any response field)", "valueKind": "number", "critical": true }
+        ]
+      }
     },
     "mx-data": {
       "id": "mx-data",

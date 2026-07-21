@@ -63,6 +63,68 @@ if (sourceProbe) {
   }
 }
 
+// ── 1b. Depth Probe Gate (P5-C) ─────────────────────────────────
+console.log('\n── 1b. Depth Probe Gate (P5-C) ──');
+const depthPolicy = contracts.depthProbePolicy || { requiredSources: ['ttfund', 'ifind', 'wind'] };
+if (sourceProbe) {
+  for (const sp of sourceProbe.sources || []) {
+    const dp = sp.depthProbe;
+    if (!dp || dp.verdict === 'skipped') {
+      if (depthPolicy.requiredSources?.includes(sp.sourceId) && sp.probeStatus === 'available') {
+        warn(`Source ${sp.sourceId}: depth probe skipped but source is required — may indicate config gap`);
+      } else {
+        ok(`Source ${sp.sourceId}: depth probe skipped (not required or not available)`);
+      }
+      continue;
+    }
+
+    const label = `${sp.sourceId} depth:${dp.verdict}`;
+    const isRequired = depthPolicy.requiredSources?.includes(sp.sourceId);
+    if (dp.verdict === 'failed' || (dp.verdict === 'degraded' && isRequired)) {
+      const classification = dp.classification || 'endpoint_failed';
+      if (isRequired) {
+        fail(`${label} (${classification}) — ${dp.details}. Required source depth probe ${dp.verdict.toUpperCase()} — pipeline blocked before collect.`);
+        if (dp.failures?.length > 0) {
+          for (const f of dp.failures) {
+            console.error(`    └─ ${f}`);
+          }
+        }
+        // Show per-check failures
+        for (const c of (dp.checks || [])) {
+          if (c.failureClass) {
+            const crit = c.critical ? ' [CRITICAL]' : '';
+            console.error(`    └─ ${c.label}${crit}: ${c.failureClass} (valueOk=${c.valueOk} dateOk=${c.dateOk})`);
+          }
+        }
+      } else {
+        warn(`${label} (${classification}) — ${dp.details}`);
+      }
+    } else if (dp.verdict === 'degraded') {
+      warn(`${label} — ${dp.details}`);
+      if (dp.failures?.length > 0) {
+        for (const f of dp.failures) {
+          console.warn(`    └─ ${f}`);
+        }
+      }
+    } else {
+      ok(`${label} — ${dp.details}`);
+    }
+
+    // Show per-check results in verbose mode
+    if (verbose && dp.checks?.length > 0) {
+      for (const c of dp.checks) {
+        const status = c.failureClass ? `WARN:${c.failureClass}` : 'OK';
+        console.log(`    ${status} ${c.label}: valueOk=${c.valueOk} dateOk=${c.dateOk}`);
+      }
+    }
+  }
+
+  const depthSummary = sourceProbe.summary?.depthProbe;
+  if (depthSummary) {
+    console.log(`  Depth probe summary: ${depthSummary.ok} ok / ${depthSummary.failed} failed / ${depthSummary.degraded} degraded / ${depthSummary.skipped} skipped → ${depthSummary.verdict}`);
+  }
+}
+
 // ── 2. Indicator source contract check ─────────────────────────
 console.log('\n── 2. Indicator Source Contracts ──');
 const indicatorContracts = provenance.sourceContracts?.indicatorContracts;
@@ -85,8 +147,37 @@ if (!indicatorContracts) {
         ok(`${indicatorId}: ${ic.actualSource} (fallback from ${ic.expectedSource})`);
         break;
       case 'fallback_violation':
-        violations++;
-        fail(`${indicatorId}: source ${ic.actualSource} not in fallback whitelist for ${ic.expectedSource}`);
+        // Re-check against current contracts — provenance may have been written against old contracts.
+        // Two-layer check: (1) allowedFallbackTargets includes actualSource, AND
+        // (2) fallbackRestrictions[actualSource] doesn't forbid/acl-block this specific indicator.
+        {
+          const expectedSrc = contracts.sources?.[ic.expectedSource];
+          const isTargetAllowed = expectedSrc?.allowedFallbackTargets?.includes(ic.actualSource);
+          if (!isTargetAllowed) {
+            violations++;
+            fail(`${indicatorId}: source ${ic.actualSource} not in fallback whitelist for ${ic.expectedSource}`);
+            break;
+          }
+          // Layer 2: per-indicator restriction check
+          const restrictions = expectedSrc?.fallbackRestrictions?.[ic.actualSource];
+          if (restrictions) {
+            const inAllowed = !restrictions.allowedFor || restrictions.allowedFor.includes(indicatorId);
+            const inForbidden = restrictions.forbiddenFor?.includes(indicatorId);
+            if (inForbidden) {
+              violations++;
+              fail(`${indicatorId}: source ${ic.actualSource} forbidden for this indicator (forbiddenFor list)`);
+            } else if (!inAllowed) {
+              violations++;
+              fail(`${indicatorId}: source ${ic.actualSource} not in allowedFor list for ${ic.expectedSource}→${ic.actualSource} fallback`);
+            } else {
+              fallbackOk++;
+              ok(`${indicatorId}: ${ic.actualSource} (fallback from ${ic.expectedSource}, restriction-checked ok)`);
+            }
+          } else {
+            fallbackOk++;
+            ok(`${indicatorId}: ${ic.actualSource} (fallback from ${ic.expectedSource}, now whitelisted, no per-indicator restrictions)`);
+          }
+        }
         break;
       case 'missing':
         missing++;

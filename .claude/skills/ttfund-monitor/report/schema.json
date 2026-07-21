@@ -21,7 +21,7 @@
     "0.6": {
       "prefix": "0.6",
       "required": true,
-      "mustContain": ["源健康度", "新鲜度分布", "陈旧告警", "质量总评"],
+      "mustContain": ["源健康度", "新鲜度分布", "陈旧告警", "质量总评", "未覆盖"],
       "minTables": 2
     },
     "1": {
@@ -103,7 +103,21 @@
     "forbiddenContextPatterns": [
       "\\*\\*[^*\\n]{0,80}{action}[^*\\n]{0,80}\\*\\*",
       "建议[^。，\\n]{0,20}{action}"
+    ],
+    "reasoningForbidden": [
+      "consider adding", "increasing allocation", "reducing allocation",
+      "adding to", "should add", "should buy", "should sell", "should reduce",
+      "加仓", "减仓", "买入", "卖出", "提高配置", "降低配置"
     ]
+  },
+
+  "feedback": {
+    "source": "feedback.json",
+    "producedBy": "reasoning/build-feedback.cjs",
+    "version": "1.0.0",
+    "consumedBy": ["Ch2.7", "Ch6.6"],
+    "requiredSubsections": { "ch2": "2.7", "ch6": "6.6" },
+    "note": "P3.2-B: feedback.json consumed by report. Missing = pre-P3.2 run (no error). Conditional subsection enforcement handled by validate-report Check 5 per requiredSubsections contract."
   },
 
   "sourceLabeling": {

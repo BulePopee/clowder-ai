@@ -182,7 +182,10 @@ if (reasoning && report) {
 
   // 3e. Blocker count in report
   const rBlockerCount = reasoning.meta?.guard_blockers?.length || 0;
-  const blockerRe = new RegExp(`${rBlockerCount}\\s*blocker`);
+  const blockerPattern = rBlockerCount === 0
+    ? String.raw`(?:0|无)\s*block(?:er)?(?![a-z])`
+    : `${rBlockerCount}\\s*block(?:er)?(?![a-z])`;
+  const blockerRe = new RegExp(blockerPattern);
   if (blockerRe.test(report)) {
     ok(`Report blocker count matches reasoning: ${rBlockerCount}`);
   } else {
@@ -363,6 +366,170 @@ if (configIndicatorIds.length > 0) {
   }
 } else {
   console.log('  (no indicators configured for unit normalization)');
+}
+
+// ── 7. Coverage number consistency (P5-D) ──────────────────
+// Hard validation: report.md and current.md coverage numbers MUST
+// be computed from raw.json + gaps.json, not free-written.
+// Prevents drift between first-pass collect data (used in report)
+// and final collect data (in raw.json).
+console.log('\n── 7. Coverage consistency (raw.json → report/current) ──');
+const raw = readJSON('raw.json');
+
+if (raw && report) {
+  const rs = raw.summary;
+  if (!rs) {
+    warn('§7 raw.json missing summary — cannot verify coverage');
+  } else {
+    const expectedTotal = rs.total;
+    // active = fresh + staleSuccess (indicators with usable values)
+    // collected = active + staleGap (all with data, including stale)
+    const expectedCollected = (rs.fresh || 0) + (rs.staleSuccess || 0) + (rs.staleGap || 0);
+    const expectedMissing = rs.missing || 0;
+    const expectedFresh = rs.fresh || 0;
+    const expectedStaleSuccess = rs.staleSuccess || 0;
+    const expectedStaleGap = rs.staleGap || 0;
+    const wsPending = rs.websearchPending || 0;
+
+    // ── 7a. Report §0.6 coverage line ──
+    // Pattern: "fresh:N staleSuccess:N staleGap:N missing:N (attempted:N/N)" or similar
+    const covPatterns = [
+      // §0.6 inline: fresh:40 staleSuccess:3 staleGap:6 missing:4 (attempted:56/60)
+      { re: /fresh\s*[：:]\s*(\d+)\s+staleSuccess\s*[：:]\s*(\d+)\s+staleGap\s*[：:]\s*(\d+)\s+missing\s*[：:]\s*(\d+)/i, labels: ['fresh','staleSuccess','staleGap','missing'] },
+      // §0.5 inline: 42 fresh + 3 staleSuccess + 6 staleGap + 0 noDate + 2 missing
+      { re: /(\d+)\s*fresh\s*\+\s*(\d+)\s*staleSuccess\s*\+\s*(\d+)\s*staleGap\s*\+\s*\d+\s*noDate\s*\+\s*(\d+)\s*missing/i, labels: ['fresh','staleSuccess','staleGap','missing'] },
+      // Table rows: | fresh | 40 | ...
+      { re: /\|\s*fresh\s*\|\s*(\d+)\s*\|/i, labels: ['fresh'] },
+      { re: /\|\s*missing\s*\|\s*(\d+)\s*\|/i, labels: ['missing'] },
+    ];
+
+    let reportFresh = null, reportStaleGap = null, reportMissing = null, reportStaleSuccess = null;
+
+    // Try inline patterns first (richest)
+    for (const pat of covPatterns) {
+      const m = report.match(pat.re);
+      if (!m) continue;
+      if (pat.labels.length >= 4) {
+        reportFresh = reportFresh ?? parseInt(m[1]);
+        reportStaleSuccess = reportStaleSuccess ?? parseInt(m[2]);
+        reportStaleGap = reportStaleGap ?? parseInt(m[3]);
+        reportMissing = reportMissing ?? parseInt(m[4]);
+      } else if (pat.labels[0] === 'fresh') {
+        reportFresh = reportFresh ?? parseInt(m[1]);
+      } else if (pat.labels[0] === 'missing') {
+        reportMissing = reportMissing ?? parseInt(m[1]);
+      }
+    }
+
+    // Check each against raw.json
+    if (reportFresh !== null && reportFresh !== expectedFresh) {
+      fail(`§7a Report fresh count MISMATCH: report says ${reportFresh}, raw.json says ${expectedFresh}`);
+    } else if (reportFresh !== null) {
+      ok(`§7a Report fresh=${reportFresh} matches raw.json`);
+    } else {
+      warn('§7a Could not extract fresh count from report');
+    }
+
+    if (reportMissing !== null && reportMissing !== expectedMissing) {
+      fail(`§7a Report missing count MISMATCH: report says ${reportMissing}, raw.json says ${expectedMissing}`);
+    } else if (reportMissing !== null) {
+      ok(`§7a Report missing=${reportMissing} matches raw.json`);
+    } else {
+      warn('§7a Could not extract missing count from report');
+    }
+
+    if (reportStaleGap !== null && reportStaleGap !== expectedStaleGap) {
+      fail(`§7a Report staleGap count MISMATCH: report says ${reportStaleGap}, raw.json says ${expectedStaleGap}`);
+    } else if (reportStaleGap !== null) {
+      ok(`§7a Report staleGap=${reportStaleGap} matches raw.json`);
+    }
+
+    if (reportStaleSuccess !== null && reportStaleSuccess !== expectedStaleSuccess) {
+      fail(`§7a Report staleSuccess count MISMATCH: report says ${reportStaleSuccess}, raw.json says ${expectedStaleSuccess}`);
+    } else if (reportStaleSuccess !== null) {
+      ok(`§7a Report staleSuccess=${reportStaleSuccess} matches raw.json`);
+    }
+
+    // ── 7b. current.md coverage line ──
+    // Pattern: "覆盖: 56 attempted | fresh:40 staleSuccess:3 staleGap:6 missing:4"
+    if (current) {
+      const curMatch = current.match(/覆盖\s*[：:]\s*(\d+)\s*attempted\s*\|\s*fresh\s*[：:]\s*(\d+)\s*staleSuccess\s*[：:]\s*(\d+)\s*staleGap\s*[：:]\s*(\d+)\s*missing\s*[：:]\s*(\d+)/i);
+      if (curMatch) {
+        const curFresh = parseInt(curMatch[2]);
+        const curStaleSuccess = parseInt(curMatch[3]);
+        const curStaleGap = parseInt(curMatch[4]);
+        const curMissing = parseInt(curMatch[5]);
+
+        if (curFresh !== expectedFresh) {
+          fail(`§7b current.md fresh MISMATCH: current says ${curFresh}, raw.json says ${expectedFresh}`);
+        } else {
+          ok(`§7b current.md fresh=${curFresh} matches raw.json`);
+        }
+        if (curMissing !== expectedMissing) {
+          fail(`§7b current.md missing MISMATCH: current says ${curMissing}, raw.json says ${expectedMissing}`);
+        } else {
+          ok(`§7b current.md missing=${curMissing} matches raw.json`);
+        }
+        if (curStaleGap !== expectedStaleGap) {
+          fail(`§7b current.md staleGap MISMATCH: current says ${curStaleGap}, raw.json says ${expectedStaleGap}`);
+        } else {
+          ok(`§7b current.md staleGap=${curStaleGap} matches raw.json`);
+        }
+        if (curStaleSuccess !== expectedStaleSuccess) {
+          fail(`§7b current.md staleSuccess MISMATCH: current says ${curStaleSuccess}, raw.json says ${expectedStaleSuccess}`);
+        } else {
+          ok(`§7b current.md staleSuccess=${curStaleSuccess} matches raw.json`);
+        }
+      } else {
+        warn('§7b Could not extract coverage numbers from current.md');
+      }
+    }
+
+    // ── 7c. WebSearch pending explicit mention ──
+    if (wsPending > 0) {
+      // 7c-i: Must mention WebSearch/pending concept
+      const mentionsWs = /WebSearch|补采|未覆盖|websearch/i.test(report);
+      if (mentionsWs) {
+        ok(`§7c-i Report mentions WebSearch/pending items`);
+      } else {
+        fail(`§7c-i Report does NOT mention WebSearch pending items (${wsPending} in sources.json) — pending items disguised as covered`);
+      }
+
+      // 7c-ii: Must state the pending COUNT (not just the word)
+      // Two patterns: keyword-then-number ("待补采 10 项") or number-then-keyword ("10项 待补采")
+      const countRe = new RegExp(`(?:WebSearch|补采|待补采|websearch).*?\\b${wsPending}\\s*项|\\b${wsPending}\\s*项.*?(?:WebSearch|补采|待补采|websearch)`, 'i');
+      const countMentioned = countRe.test(report);
+      if (countMentioned) {
+        ok(`§7c-ii Report states WebSearch pending count ${wsPending}`);
+      } else {
+        fail(`§7c-ii Report mentions WebSearch but does NOT state correct pending count (expected ${wsPending}) — may have wrong or missing number`);
+      }
+
+      // 7c-iii: Two-segment coverage — must separate "attempted" from "websearch pending"
+      // The report should NOT present a single unified coverage that merges attempted + pending
+      const hasAttempted = /attempted|已采集|自动采集/i.test(report);
+      const hasPending = /待补采|websearch\s*pending|pending/i.test(report);
+      if (hasAttempted && hasPending) {
+        ok(`§7c-iii Report uses two-segment coverage (attempted + pending separated)`);
+      } else if (hasAttempted && !hasPending) {
+        fail(`§7c-iii Report has "attempted" but no "pending" section — coverage may be merged into single number`);
+      } else {
+        warn(`§7c-iii Could not verify two-segment coverage phrasing in report`);
+      }
+    }
+
+    if (wsPending > 0 && current) {
+      const curMentionsWs = /WebSearch|补采|待补采|websearch/i.test(current);
+      if (curMentionsWs) {
+        ok(`§7c current.md mentions WebSearch/pending items`);
+      } else {
+        warn(`§7c current.md does not mention WebSearch pending items (${wsPending} pending)`);
+      }
+    }
+  }
+} else {
+  if (!raw) warn('§7 Cannot run coverage checks: raw.json missing');
+  if (!report) warn('§7 Cannot run coverage checks: report.md missing');
 }
 
 // ── Summary ──────────────────────────────────────────────────

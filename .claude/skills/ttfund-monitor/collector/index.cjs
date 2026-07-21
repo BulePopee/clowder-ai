@@ -679,17 +679,20 @@ async function main() {
   // ════════════ WRITE OUTPUTS ════════════
   console.log('\n── Writing outputs ──');
 
+  // WebSearch pending items (from sources.json, never auto-collected)
+  const wsItems = cfg.websearch?.items || [];
+  const wsPendingIds = wsItems.map(w => w.id);
+
   // raw.json
   fs.writeFileSync(path.join(RUN_DIR, 'raw.json'), JSON.stringify({
     runId, round, version: cfg.version,
     collectedAt: new Date().toISOString(),
-    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount },
+    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, websearchPending: wsItems.length, websearchPendingIds: wsPendingIds },
     results
   }, null, 2));
 
   // provenance.json
   prov.endTime = new Date().toISOString();
-  const wsItems = cfg.websearch?.items || [];
   prov.summary = { totalItems: total, activeItems: activeCount, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, missing, websearchPending: wsItems.length };
   prov.sourceContracts = { version: sourceContracts?.version || 'N/A', indicatorContracts, summary: contractSummary };
   fs.writeFileSync(path.join(RUN_DIR, 'provenance.json'), JSON.stringify(prov, null, 2));

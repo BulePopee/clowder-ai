@@ -1,43 +1,46 @@
 # ttfund-monitor 最新报告
 
-- 最新 runId: 20260714-1609-auto
-- 报告时间: 2026-07-14 16:20 CST
+- 最新 runId: 20260721-1117-auto
+- 报告时间: 2026-07-21 03:22 UTC (11:22 CST)
 - 轮次: 常规轮 (routine)
-- 框架: v2.7.0 (P4-A unit norm + P4-B run contract + P4-C source adapter contract & probe gate)
-- 覆盖: 55 attempted | fresh:39 staleSuccess:1 staleGap:4 noDate:4 missing:4
+- 框架: v2.7.0 (P5-C depth probe hardening + Wind recovery)
+- 覆盖: 56 attempted | fresh:40 staleSuccess:3 staleGap:6 missing:4
+- WebSearch补采: 10项待补采 (B4/F3/N3/A3/N5等, F1/F2已由Wind覆盖)
 - Portfolio: S1=ok S2=empty S3=unavailable S4=empty
-- iFinD: 33 indicators, 30 OK, 3 null (A1/N5/N7)
+- iFinD: 38 calls, 36 OK, 2 null (A1/N7)
+- Wind: 2 calls, 2 OK ✅ (F1=3.75%, F2=3.3654% June) — depth probe pass
 - Reason: A-layer ✅ (0 blockers, 2 warnings) + B-layer 3 blueprints ✅
-- Guard: 0 blockers / 2 warnings (G008: 4 staleGap / G009: portfolio data partial) → action_advice_allowed=true
-- 置信度: **中** — 核心指标 17/17 fresh，辅助指标有时效缺口但不影响主结论
-- 操作建议: **维持** — 2/6 防御触发器(TIPS 2.36% + FedWatch 46%)，FOMC 7/28-29 前不宜操作
-- 宏观判定: **Stagflation-Lite** — 紧货币(TIPS 2.36%↑·FedWatch 46% hike)·地缘推油价(Brent $83 +$9)·黄金崩$4,000·中国分化(CNH走强/A股走弱)
-- 防御信号: 2/6 触发 (B8 TIPS > 2.0%, B4 FedWatch hike > 40%) — 不满足全面切换条件(需≥3/6)
-- 黄金判定: 偏熊 — 加权评分 -0.56, 冲突已从"背离"转为"一致下行", TIPS 2.36% → COMEX $3,997(-$110)
-- FedWatch: 7月加息概率 ~46% (WebSearch)
-- FOMC: 7/28-29 下次会议
-- 组合状态: 8只基金 ¥3,365.93, 货基 38.75%/黄金 14.95%/债券 15.20%/美股 6.88%/A股 24.23%/HQB 0%
-- 组合偏离: HQB 0%严重不足(目标10-15%)，美股6.88%低于目标(15-20%)，黄金14.95%触及上限(10-15%)，A股24.23%略低于目标(25-30%)
-- 近期交易: S4为空, 无近期交易记录
-- 下一检查点: 7/29(FOMC决议日), 7/16-17(FOMC前最后一轮常规监测)
-- 前置检查: ttfund=available iFinD=available Wind=available probe-sources=ok (source-probe.json: 5/5 callable ✅)
-- Temporal-diff: status=ok | baseline=20260708-1058-auto (validated, 6d prior) | 20 compared, 1 new, 0 lost | regime CHANGED: Policy Divergence → Stagflation-Lite | 3 significant changes (G2↓, G4↓, O1↑)
-- Feedback: 4 cross_refs (3 add_invalidation_condition + 1 add_condition_to_act) | action_advice_allowed=true
-- P3.2-B: Ch2.7跨资产一致性 ✅ + Ch6.6反馈信号参考 ✅ | validate-feedback 12/12 ✅
-- 完整报告: runs/20260714-1609-auto/report.md
+- Guard: 0 blockers / 2 warnings (G008: 6 staleGap / G009: portfolio data partial) → action_advice_allowed=true
+- 置信度: **中等** — 0个关键指标缺口，Wind F1/F2恢复→Fed政策评估权威性提升。降级因素：S1 VIX staleGap 4d、B4 FedWatch未采集
+- 操作建议: **HOLD 维持当前配置** — 防御触发仅1/5 (TIPS>2.0%)，组合事实防御(MMF 40.4%+债券15.5%=55.9%低风险)，FOMC 7/28-29仅7天→等待决议
+- 宏观判定: **Transitional (紧缩后期+地缘风险升温)** — TIPS 2.35%高位 + 曲线正利差+0.39bp + **Brent $89(+5.9% in 4d)新增通胀风险** + VIX 18.77(+3.1pt)情绪恶化
+- 防御信号: 1/5触发 (B8 TIPS>2.0%) + 曲线正利差削弱防御必要性 + 新增油价飙升但未触发新防御条件
+- 黄金判定: Moderately Bearish — 加权评分 **-0.665**(较上次-0.588恶化), CFTC **8.49:1**(较上次7.19:1拥挤加剧), COMEX $4014(+1.0%), 国内溢价从+1.09%转折价-0.44%
+- ⚠️ CFTC拥挤: 8.49:1创新高(上周7.19:1) — 投机多头在油价飙升时进一步加仓，回调风险加剧
+- 🔴 油价飙升: Brent $84→$89(+5.9% in 4d) — 本轮最大变化，地缘风险溢价(伊朗/霍尔木兹)，若>$90持续可能改变通胀预期路径
+- FOMC: 7/28-29(仅7天), F1=3.75%/F2=3.3654% June(Wind权威源), B4 FedWatch未采集
+- Wind: ✅ 恢复 — F1/F2从WebSearch升级至Wind权威源，F2首次提供6月核心PCE 3.3654%
+- 组合状态: 8只基金 ¥3,979.31(↓¥69.57/-1.7% vs 7/17), MMF 40.4%/黄金 15.1%/固收 15.5%/美股 5.8%/A股 14.6%/混合 8.6%/HQB 0%
+- 组合偏离: HQB 0%严重不足(但MMF 40.4%提供充足流动性), A股14.6%低于正常目标, 黄金超防御上限0.1pp(15.1%), 总资产缩水主因混合型宝盈↓¥42.81+股债齐跌
+- 资产变化: Nasdaq 28604(-3.4% vs 20MA, -5.9% from 6/18 high), 沪深300 4668(从4529反弹但-4.3% vs 20MA), 创业板3443(-16.0% vs 20MA, 自7/1暴跌19.2%)
+- 下一检查点: 7/30(FOMC会后), 事件触发: US 10Y>5.0%(FB-002)/TIPS>2.5%/Brent>$95持续3d/VIX>25/COMEX<$3800
+- 前置检查: ttfund=available iFinD=available Wind=available(✅ 恢复)
+- Depth probes: ttfund✅(G2 proxy可用) iFinD✅ Wind✅(F1/F2 OK)
+- Source contracts: validate-source-contract warn (4 fallback_violations: E1/X2/N2/M4 iFinD, 白名单需更新)
+- Temporal-diff: status=degraded | baseline=20260717-1520-auto (4d prior, degraded) | 21 compared, 0 new, 0 lost, 2 divergent | regime direction consistent
+- Feedback: 2 cross_refs (FB-001: E2 invalidate macro-regime, FB-002: B2>5.0% trigger portfolio) | action_advice_allowed=true
+- P5-C: Wind恢复→Fed数据权威性提升, ttfund G2 proxy机制有效
+- 完整报告: runs/20260721-1117-auto/report.md
 
 ---
-## P3.2-B 验收
+## P5 系列验收
 
 | 修复项 | 状态 | 效果 |
 |--------|:--:|------|
-| feedback.json → Ch2.7 | ✅ | 4 cross_refs 全部展示，一致性评估"信号总体一致" |
-| feedback.json → Ch6.6 | ✅ | 4 decision-relevant signals, 参考权重标注完成 |
-| validate-feedback | ✅ | 12/12 checks passed |
-| validate-report Check 5 | ✅ | feedback consumption 4 sub-checks passed |
-| schema.json feedback段 | ✅ | requiredSubsections ch2.7 + ch6.6 |
-| 全管道集成 | ✅ | Stage 4 B-layer → 4.5 temporal-diff → 4.6 feedback → 5 report 完整链路 |
-| P3.2-B → 下一 P | ✅ | 反馈消费已落地，G7单位归一化修复完成 → 已进入 P4-A |
-| P4-A unit normalization | ✅ | G7 contract + unit-normalizer.cjs + validate §6；3 新字段已同步 schema，4/4 validators pass |
-| P4-B run contract | ✅ | 16-stage topology + verify.cjs + 6 auto validators pass |
-| P4-C source adapter contract | ✅ | source-contracts.json + probe gate + provenance enrichment + validate-source-contract + 16-stage pipeline verify pass |
+| P4-A unit normalization | ✅ | G7 SPDR oz→吨 auto-normalized, unit-normalizer.cjs validated |
+| P4-B run contract | ✅ | 17-stage topology + verify.cjs |
+| P4-C source adapter contract | ✅ | source-contracts.json + probe gate + validate-source-contract |
+| P5-B indicator onboarding contract | ✅ | indicator-contracts.json + validate-indicator-contract 7-dimension gate |
+| P5-C depth probe hardening | ✅ | ttfund/iFinD/Wind real-data endpoint probes; exit 3=degraded continue |
+| P5-C data gap root cause fix (7/17) | ✅ | 4 root causes fixed — ttfund datePath(5), iFinD kline query(1), Wind→iFinD migration(5), WebSearch patch(9) |
+| P5-C Wind recovery (7/21) | ✅ | Wind depth probe pass — F1=3.75%/F2=3.3654% June from authoritative source |

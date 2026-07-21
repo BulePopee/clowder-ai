@@ -1,0 +1,211 @@
+{
+  "meta": {
+    "runId": "20260721-1117-auto",
+    "version": "2.4.0",
+    "collectedAt": "2026-07-21T03:32:11.299Z"
+  },
+  "sources": {
+    "S1_holding": {
+      "status": "ok",
+      "error": null,
+      "data": {
+        "total": {
+          "total": "3979.31",
+          "hqb": "0.00",
+          "fund": "3979.31",
+          "tg": "0.00",
+          "gdlc": "0.00",
+          "pension": "0.00",
+          "gold": "0.00"
+        },
+        "list": [
+          {
+            "fundName": "长城收益宝货币C",
+            "fundCode": "016778",
+            "assetValue": "1233.71",
+            "holdProfit": "1.46",
+            "holdProfitRate": "0.12%",
+            "constantProfit": "0.97",
+            "constantProfitRate": "0.08%",
+            "dailyProfit": "0.07",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "广发中债7-10年国开债指数C",
+            "fundCode": "003377",
+            "assetValue": "616.71",
+            "holdProfit": "-8.94",
+            "holdProfitRate": "-1.43%",
+            "constantProfit": "0.88",
+            "constantProfitRate": "0.14%",
+            "dailyProfit": "-0.15",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "博时黄金ETF联接C",
+            "fundCode": "002611",
+            "assetValue": "600.37",
+            "holdProfit": "-59.29",
+            "holdProfitRate": "-8.99%",
+            "constantProfit": "-25.64",
+            "constantProfitRate": "-4.10%",
+            "dailyProfit": "0.38",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "易方达沪深300ETF联接C",
+            "fundCode": "007339",
+            "assetValue": "398.02",
+            "holdProfit": "-2.12",
+            "holdProfitRate": "-0.53%",
+            "constantProfit": "-17.68",
+            "constantProfitRate": "-4.25%",
+            "dailyProfit": "5.40",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "富国收益宝交易型货币B",
+            "fundCode": "001982",
+            "assetValue": "375.75",
+            "holdProfit": "0.11",
+            "holdProfitRate": "0.03%",
+            "constantProfit": "0.11",
+            "constantProfitRate": "0.03%",
+            "dailyProfit": "0.04",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "宝盈转型动力混合C",
+            "fundCode": "015389",
+            "assetValue": "341.45",
+            "holdProfit": "1009.78",
+            "holdProfitRate": "--",
+            "constantProfit": "-36.67",
+            "constantProfitRate": "-9.70%",
+            "dailyProfit": "-12.77",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "南方纳斯达克100指数发起(QDII)C",
+            "fundCode": "016453",
+            "assetValue": "232.19",
+            "holdProfit": "-17.53",
+            "holdProfitRate": "-7.31%",
+            "constantProfit": "-10.67",
+            "constantProfitRate": "-4.58%",
+            "dailyProfit": "-3.10",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "长城中证500指数增强C",
+            "fundCode": "007413",
+            "assetValue": "181.11",
+            "holdProfit": "-19.40",
+            "holdProfitRate": "-9.68%",
+            "constantProfit": "-28.36",
+            "constantProfitRate": "-13.54%",
+            "dailyProfit": "-3.52",
+            "ptype": "fund"
+          },
+          {
+            "fundName": "活期宝",
+            "fundCode": "hqb",
+            "assetValue": "0.00",
+            "holdProfit": "--",
+            "holdProfitRate": "--",
+            "constantProfit": "--",
+            "constantProfitRate": "--",
+            "dailyProfit": "--",
+            "ptype": "hqb"
+          }
+        ],
+        "hqb": {
+          "totalCount": 0,
+          "holds": []
+        },
+        "gold": {
+          "amount": "0.00",
+          "buildDate": null,
+          "buildDays": 0,
+          "calcDate": "2026-07-21",
+          "expectedBuyCount": null,
+          "expectedSellCount": null,
+          "firstTradeDate": null,
+          "holdCost": "0.00",
+          "holdProfit": "0.00",
+          "holdProfitRate": "0.00",
+          "onUpdate": false,
+          "positionCost": "0.00",
+          "positionProfit": "0.00",
+          "positionProfitRate": "0.00",
+          "todayProfit": "0.00",
+          "todayProfitRate": "0.00",
+          "totalProfit": "0.00",
+          "totalProfitRate": "0.00",
+          "totalProfitThisRound": "0.00",
+          "weight": 0,
+          "expectedSellPriceDiff": "0.00",
+          "currentGoldPrice": "881.74"
+        },
+        "pension": {
+          "totalAssetValue": 0,
+          "totalDailyProfit": 0,
+          "totalHoldProfit": 0,
+          "totalProfitValue": 0,
+          "isTodayProfit": false,
+          "details": null,
+          "multiBanks": false
+        }
+      }
+    },
+    "S2_profit": {
+      "status": "empty",
+      "error": null,
+      "data": {
+        "total": null,
+        "funds": null
+      }
+    },
+    "S3_analysis": {
+      "status": "unavailable",
+      "error": null,
+      "data": {
+        "asset_type_pct": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "fund_type_pct": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "hold_perform": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "bull_bear": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "capm": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        },
+        "irr": {
+          "fetched": false,
+          "error": "HTTP 403: {\"detail\":\"skill 不存在或未启用\"}\n",
+          "unavailable": true
+        }
+      }
+    },
+    "S4_trade": {
+      "status": "empty",
+      "error": "null value",
+      "data": {}
+    }
+  }
+}
