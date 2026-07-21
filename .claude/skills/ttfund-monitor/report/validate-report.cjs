@@ -249,7 +249,102 @@ if (reasoning && schema.blockerSemantics) {
   }
 }
 
-// ── Check 5: Section count ────────────────────────────────────
+// ── Check 4b: Reasoning-layer blocked action leak (Fix 7) ─────
+if (reasoning && schema.blockerSemantics) {
+  const bs = schema.blockerSemantics;
+  const guardBlockers = reasoning.meta?.guard_blockers || [];
+  const isBlocked = guardBlockers.length > 0;
+
+  // Fix B: scan entire reasoning JSON — blueprints are top-level (macro_regime, gold_rate_conflict, portfolio_action_gate)
+  if (isBlocked) {
+    const reasoningForbidden = bs.reasoningForbidden || [
+      'add', 'increase', 'reduce', 'buy', 'sell', '加仓', '减仓', '买入', '卖出',
+      '超配', '低配', '增持', '减持', '提高配置', '降低配置', 'consider adding',
+      'increasing allocation', 'reducing allocation', 'adding to'
+    ];
+    const rText = JSON.stringify(reasoning).toLowerCase();
+    let found = [];
+    for (const action of reasoningForbidden) {
+      if (rText.includes(action.toLowerCase())) {
+        found.push(action);
+      }
+    }
+    if (found.length > 0) {
+      errors.push(`BLOCKER: reasoning-snapshot.json contains ${found.length} forbidden action(s) while blockers active: ${found.join(', ')}`);
+    }
+  }
+}
+
+// ── Check 5: Feedback consumption (P3.2-B) ─────────────────────
+const feedbackPath = path.join(RUN_DIR, 'feedback.json');
+const feedback = readJSON(feedbackPath);
+let feedbackInfo = null; // for output section
+
+if (feedback && report) {
+  const crossRefs = feedback.cross_refs || [];
+  const actionAllowed = feedback.adjustment_summary?.action_advice_allowed;
+  const ch2Text = extractSection(report, '2.');
+  const ch6Text = extractSection(report, '6.');
+  const decisionTypes = ['add_condition_to_act', 'add_invalidation_condition'];
+  const decisionRefs = crossRefs.filter(r => decisionTypes.includes(r.adjustment?.type));
+
+  feedbackInfo = { crossRefs: crossRefs.length, decisionRefs: decisionRefs.length, actionAllowed };
+
+  // 5a: feedback.json exists → Ch2 MUST have 2.7 (regardless of cross_refs count)
+  const has2_7 = ch2Text ? /###\s+2\.7/.test(ch2Text) : false;
+  if (!has2_7) {
+    errors.push('FEEDBACK: feedback.json exists but Ch2 missing 2.7 subsection');
+  } else {
+    // 5a-i: cross_refs > 0 → all cross_ref IDs must appear in Ch2.7
+    if (crossRefs.length > 0) {
+      const h3s = findAllH3(ch2Text);
+      const idx2_7 = h3s.findIndex(h => h.includes('2.7'));
+      if (idx2_7 >= 0) {
+        const after2_7 = ch2Text.slice(ch2Text.indexOf(h3s[idx2_7]));
+        const missingIds = crossRefs.map(r => r.id).filter(id => !after2_7.includes(id));
+        if (missingIds.length > 0) {
+          errors.push(`FEEDBACK: Ch2.7 missing cross_ref IDs: ${missingIds.join(', ')}`);
+        }
+      }
+    }
+    // 5a-ii: cross_refs === 0 → must say "本轮无跨资产一致性信号"
+    if (crossRefs.length === 0) {
+      if (!ch2Text.includes('本轮无跨资产一致性信号')) {
+        errors.push('FEEDBACK: cross_refs empty but Ch2.7 missing "本轮无跨资产一致性信号"');
+      }
+    }
+  }
+
+  // 5b: action_advice_allowed === false → Ch6 MUST have 6.6 with disclaimer
+  if (actionAllowed === false) {
+    const has6_6 = ch6Text ? /###\s+6\.6/.test(ch6Text) : false;
+    if (!has6_6) {
+      errors.push('FEEDBACK: action_advice_allowed=false but Ch6 missing 6.6 subsection');
+    } else if (!ch6Text.includes('不可转化为操作建议')) {
+      errors.push('FEEDBACK: action_advice_allowed=false but Ch6.6 missing disclaimer "不可转化为操作建议"');
+    }
+  }
+
+  // 5c: Has decision-relevant cross_refs (and action allowed) → Ch6 must have 6.6
+  if (decisionRefs.length > 0 && actionAllowed !== false) {
+    const has6_6 = ch6Text ? /###\s+6\.6/.test(ch6Text) : false;
+    if (!has6_6) {
+      errors.push('FEEDBACK: decision-relevant cross_refs exist but Ch6 missing 6.6 subsection');
+    }
+  }
+
+  // 5d: Ch6.6 must not duplicate non-decision cross_refs from Ch2.7
+  if (ch6Text && /###\s+6\.6/.test(ch6Text)) {
+    const nonDecisionRefs = crossRefs.filter(r => !decisionTypes.includes(r.adjustment?.type));
+    for (const ref of nonDecisionRefs) {
+      if (ch6Text.includes(ref.id)) {
+        warnings.push(`FEEDBACK: Ch6.6 includes non-decision cross_ref ${ref.id} (type: ${ref.adjustment?.type}) — should only appear in Ch2.7`);
+      }
+    }
+  }
+}
+
+// ── Check 6: Section count ────────────────────────────────────
 const expectedMin = Object.entries(schema.sections).filter(([, v]) => v.required).length;
 if (sectionsFound < expectedMin) {
   errors.push(`COMPLETENESS: ${sectionsFound} sections found, need ≥${expectedMin}`);
@@ -262,7 +357,14 @@ console.log(`schema: v${schema.version}`);
 console.log(`sections: ${sectionsFound}/${Object.keys(schema.sections).length} defined (${expectedMin} required)`);
 
 const isBlocked = reasoning ? (reasoning.meta?.guard_blockers || []).length > 0 : null;
-console.log(`blocked: ${isBlocked === null ? 'unknown (reasoning missing)' : isBlocked}\n`);
+console.log(`blocked: ${isBlocked === null ? 'unknown (reasoning missing)' : isBlocked}`);
+
+if (feedbackInfo) {
+  console.log(`feedback: enabled, cross_refs=${feedbackInfo.crossRefs}, decisionRefs=${feedbackInfo.decisionRefs}, action_advice=${feedbackInfo.actionAllowed}`);
+} else {
+  console.log('feedback: none (pre-P3.2 run or feedback.json missing)');
+}
+console.log('');
 
 if (errors.length > 0) {
   console.log(`BLOCKED: ${errors.length} error(s):`);

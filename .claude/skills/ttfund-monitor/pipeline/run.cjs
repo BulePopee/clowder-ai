@@ -1,23 +1,26 @@
-// pipeline/run.cjs — ttfund-monitor v2.5.1
+// pipeline/run.cjs — ttfund-monitor v2.6.0
 // Single pipeline entry point. Orchestrates automatable stages, stops at LLM boundaries.
 //
 // Usage:
 //   node pipeline/run.cjs --mode report --round routine
 //   node pipeline/run.cjs --runId 20260701-1017-auto --from evidence
+//   node pipeline/run.cjs --runId 20260701-1017-auto --from reason
 //   node pipeline/run.cjs --runId 20260701-1017-auto --from report
 //
 // --from values:
-//   collect  (default) — collect → portfolio → [STOP: compute]
+//   source-probe — source-probe → DONE
+//   collect  (default) — source-probe → collect → portfolio → [STOP: compute]
 //   evidence — evidence → validate-reasoning → [STOP: B-layer]
-//   reason   — verify B-layer artifacts → [STOP: report]
-//   report   — consistency validator → DONE
+//   reason   — temporal-diff → [STOP: report]
+//   report   — temporal-diff → validate-report → consistency → DONE
+//   diff     — temporal-diff only → DONE
 
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
 
 const { runtimeRoot, skillRoot } = require('../lib/workspace.cjs');
-const { stages } = require('./contracts.cjs');
+const { artifacts, stages } = require('./contracts.cjs');
 
 // ── CLI ──────────────────────────────────────────────────────
 const args = process.argv.slice(2);
@@ -31,8 +34,8 @@ const round = flagVal('--round') || 'routine';
 const fromStage = flagVal('--from') || 'collect';
 const explicitRunId = flagVal('--runId');
 
-if (!['collect', 'evidence', 'reason', 'report'].includes(fromStage)) {
-  console.error(`ERROR: invalid --from value: ${fromStage}. Must be: collect, evidence, reason, report`);
+if (!['source-probe', 'collect', 'evidence', 'reason', 'report', 'diff'].includes(fromStage)) {
+  console.error(`ERROR: invalid --from value: ${fromStage}. Must be: source-probe, collect, evidence, reason, report, diff`);
   process.exit(1);
 }
 if (fromStage !== 'collect' && !explicitRunId) {
@@ -51,7 +54,7 @@ const RUN_DIR = path.join(runtimeRoot, 'runs', runId);
 const stageMap = {};
 for (const s of stages) stageMap[s.id] = s;
 // --from aliases: user-facing names → internal stage IDs
-const fromAlias = { collect: 'collect', evidence: 'evidence', reason: 'reason-b', report: 'report' };
+const fromAlias = { 'source-probe': 'source-probe', collect: 'source-probe', evidence: 'evidence', reason: 'temporal-diff', report: 'temporal-diff', diff: 'temporal-diff' };
 const resolvedStage = fromAlias[fromStage];
 const stageOrder = stages.map(s => s.id);
 const startIdx = stageOrder.indexOf(resolvedStage);
@@ -82,6 +85,13 @@ function checkArtifact(relPath) {
   return fs.existsSync(p);
 }
 
+function checkArtifactById(artifactId) {
+  const artifact = artifacts.find(a => a.id === artifactId);
+  if (!artifact) return false;
+  const p = artifact.path.replace('{runDir}', RUN_DIR).replace('{runtimeRoot}', runtimeRoot);
+  return fs.existsSync(p);
+}
+
 function checkCurrentMd() {
   return fs.existsSync(path.join(runtimeRoot, 'current.md'));
 }
@@ -89,7 +99,7 @@ function checkCurrentMd() {
 // ── Manual stage output mapping ──────────────────────────────
 // If all listed outputs exist, the manual stage is considered complete.
 const manualOutputs = {
-  compute: ['derived-snapshot.md'],
+  compute: ['derived-snapshot.md', 'derived.json'],
   'reason-b': ['reasoning-snapshot.json'],
   report: ['report.md']
 };
@@ -123,11 +133,32 @@ for (let i = startIdx; i < stageOrder.length; i++) {
       ? stage.args(runId, mode)
       : stage.args(runId);
 
+    // Check inputs exist before execution (P5-C: runner-level blocking)
+    if (stage.inputs && stage.inputs.length > 0) {
+      const missing = stage.inputs.filter(id => !checkArtifactById(id));
+      if (missing.length > 0) {
+        console.error(`  FATAL: ${stage.label} — missing inputs: ${missing.join(', ')}`);
+        console.error(`  Run earlier stages first.`);
+        process.exit(1);
+      }
+    }
+
     console.log(`  Running: node ${stage.script} ${scriptArgs.join(' ')}`);
     const result = runStage(stage.script, scriptArgs);
     if (!result.ok) {
-      console.error(`\nFATAL: ${stage.label} failed (exit ${result.exitCode}). Pipeline stopped.`);
-      process.exit(1);
+      if (stage.failurePolicy === 'warn' || stage.failurePolicy === 'degraded') {
+        console.warn(`  WARN: ${stage.label} failed (exit ${result.exitCode}) — continuing (failurePolicy=${stage.failurePolicy}).`);
+      } else {
+        console.error(`\nFATAL: ${stage.label} failed (exit ${result.exitCode}). Pipeline stopped.`);
+        process.exit(1);
+      }
+    }
+
+    // --from diff: stop after validate-temporal-diff
+    if (fromStage === 'diff' && sid === 'validate-temporal-diff') {
+      console.log(`  ⏸  STOP — temporal-diff complete (--from diff)`);
+      stoppedForLLM = true;
+      break;
     }
   } else {
     // ── Manual (LLM) stage ──
@@ -147,10 +178,18 @@ for (let i = startIdx; i < stageOrder.length; i++) {
     } else if (sid === 'reason-b') {
       if (!checkArtifact('evidence-packet.json')) missing.push('evidence-packet.json');
       if (!checkArtifact('derived-snapshot.md')) missing.push('derived-snapshot.md');
+	      if (!checkArtifact('derived.json')) missing.push('derived.json');
     } else if (sid === 'report') {
       if (!checkArtifact('reasoning-snapshot.json')) missing.push('reasoning-snapshot.json');
       if (!checkArtifact('evidence-packet.json')) missing.push('evidence-packet.json');
       if (!checkArtifact('raw-snapshot.md')) missing.push('raw-snapshot.md');
+    } else if (sid === 'temporal-diff') {
+      if (!checkArtifact('reasoning-snapshot.json')) {
+        missing.push('reasoning-snapshot.json');
+        console.error('  NOTE: --from reason requires B-layer (reasoning-snapshot.json) to already exist.');
+        console.error('  If B-layer not yet generated, use: node pipeline/run.cjs --runId <id> --from evidence');
+      }
+      if (!checkArtifact('raw.json')) missing.push('raw.json');
     }
 
     if (missing.length > 0) {

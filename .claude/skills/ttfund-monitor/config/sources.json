@@ -8,28 +8,29 @@
         "skill": "TTFUND_GOLD_INFO",
         "body": "{}",
         "datePath": ["macro_fiscal.trade_date", "gold_quotes.au9999.date"],
+        "requirePerIndicatorDate": true,
         "extracts": {
-          "B1":  { "path": "macro_fiscal.treasury_yields.us_30y",     "unit": "%",  "critical": true  },
-          "B2":  { "path": "macro_fiscal.treasury_yields.us_10y",     "unit": "%",  "critical": true  },
-          "B3":  { "path": "macro_fiscal.treasury_yields.us_2y",      "unit": "%",  "critical": true  },
-          "B6":  { "path": "macro_fiscal.treasury_yields.cn_10y",     "unit": "%",  "critical": true  },
-          "S1":  { "path": "risk_indicators.vix.INDICATOR_VAL",      "unit": "",   "critical": true  },
-          "X1":  { "path": "risk_indicators.dxy.INDICATOR_VAL",      "unit": "",   "critical": true  },
-          "X3":  { "path": "risk_indicators.exchprice.EXCHPRICE",    "unit": "",   "critical": true  },
-          "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false },
-          "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false },
-          "G2":  { "path": "gold_quotes.au9999.close",               "unit": "元/克", "critical": true  },
-          "G3":  { "path": "gold_quotes.au_td.close",                "unit": "元/克", "critical": false },
-          "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false },
-          "G6":  { "path": "gold_quotes.central_bank_gold.gold_reserves", "unit": "万盎司", "critical": false },
-          "CPI": { "path": "macro_fiscal.cpi_yoy.value",             "unit": "%",  "critical": false }
+          "B1":  { "path": "macro_fiscal.treasury_yields.us_30y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B2":  { "path": "macro_fiscal.treasury_yields.us_10y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B3":  { "path": "macro_fiscal.treasury_yields.us_2y",      "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B6":  { "path": "macro_fiscal.treasury_yields.cn_10y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "S1":  { "path": "risk_indicators.vix.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.vix.date" },
+          "X1":  { "path": "risk_indicators.dxy.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.dxy.date" },
+          "X3":  { "path": "risk_indicators.exchprice.EXCHPRICE",    "unit": "",   "critical": true,  "datePath": "risk_indicators.exchprice.date" },
+          "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
+          "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
+          "G2":  { "path": "gold_quotes.au9999.close",               "unit": "元/克", "critical": true,  "datePath": "gold_quotes.au9999.date" },
+          "G3":  { "path": "gold_quotes.au_td.close",                "unit": "元/克", "critical": false, "datePath": "gold_quotes.au_td.date" },
+          "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
+          "G6":  { "path": "gold_quotes.central_bank_gold.gold_reserves", "unit": "万盎司", "critical": false, "datePath": "gold_quotes.central_bank_gold.date" },
+          "CPI": { "path": "macro_fiscal.cpi_yoy.value",             "unit": "%",  "critical": false, "datePath": "macro_fiscal.trade_date" }
         }
       },
       {
         "name": "INDEX_INFO_000300",
         "skill": "TTFUND_INDEX_INFO",
         "body": "{\"index_id\":\"000300\"}",
-        "datePath": ["quote.date", "trade_date"],
+        "datePath": ["quote.quote_time", "quote.latest_nav_date"],
         "extracts": {
           "E2": { "path": "quote.current_point", "unit": "", "critical": true }
         }
@@ -74,6 +75,7 @@
         "calls": [
           { "id": "A2_aaa",    "query": "中债企业债到期收益率(AAA):3Y",          "type": "single",  "indicator": "A2a", "unit": "%",      "critical": false },
           { "id": "A2_gb",     "query": "中债国债到期收益率:3Y",                 "type": "single",  "indicator": "A2g", "unit": "%",      "critical": false },
+          { "id": "A1_move",   "query": "ICE BofA MOVE指数 $MONTH",              "type": "single",  "indicator": "A1",  "unit": "",       "critical": false },
           { "id": "N4",        "query": "美国 准备金余额利率 IORB 最新",        "type": "single",  "indicator": "N4",  "unit": "%",      "critical": false },
           { "id": "X4",        "query": "美元兑人民币离岸 $MONTH",               "type": "single",  "indicator": "X4",  "unit": "",       "critical": true  },
           { "id": "B8",        "query": "美国通胀保值国债收益率 10年期 $MONTH", "type": "single",  "indicator": "B8",  "unit": "%",      "critical": true  },
@@ -92,11 +94,21 @@
         ]
       },
       {
+        "name": "批3c_Wind替代",
+        "calls": [
+          { "id": "E1_ifind",  "query": "纳斯达克100指数 收盘价 $MONTH",       "type": "single",  "indicator": "E1",  "unit": "",   "critical": true  },
+          { "id": "X2_ifind",  "query": "美元兑人民币中间价 $MONTH",            "type": "single",  "indicator": "X2",  "unit": "",   "critical": true  },
+          { "id": "N2_ifind",  "query": "SOFR利率 $MONTH",                      "type": "single",  "indicator": "N2",  "unit": "%",  "critical": true  },
+          { "id": "E3_ifind",  "query": "创业板指 收盘价 $MONTH",               "type": "single",  "indicator": "E3",  "unit": "",   "critical": true  },
+          { "id": "M4_ifind",  "query": "R007 利率 $MONTH",                     "type": "single",  "indicator": "M4",  "unit": "%",  "critical": false }
+        ]
+      },
+      {
         "name": "批4_K线",
         "calls": [
-          { "id": "E1_kl",     "query": "纳斯达克100指数 $MONTH_PREV $MONTH 收盘价", "type": "kline", "indicator": "E1_kl", "unit": "", "critical": true  },
-          { "id": "E2_kl",     "query": "沪深300指数 $MONTH_PREV $MONTH 收盘价",      "type": "kline", "indicator": "E2_kl", "unit": "", "critical": true  },
-          { "id": "E3_kl",     "query": "创业板指 $MONTH_PREV $MONTH 收盘价",        "type": "kline", "indicator": "E3_kl", "unit": "", "critical": true  }
+          { "id": "E1_kl",     "query": "纳斯达克100指数 收盘价（$DATERANGE）", "type": "kline", "indicator": "E1_kl", "unit": "", "critical": true  },
+          { "id": "E2_kl",     "query": "沪深300指数 收盘价（$DATERANGE）",      "type": "kline", "indicator": "E2_kl", "unit": "", "critical": true  },
+          { "id": "E3_kl",     "query": "创业板指 收盘价 $DATEFROM-$DATETO",    "type": "kline", "indicator": "E3_kl", "unit": "", "critical": true  }
         ]
       },
       {
@@ -126,11 +138,7 @@
     "method": "get_financial_data",
     "calls": [
       { "id": "F1",  "question": "联邦基金目标利率 最新值",                "indicator": "F1",  "unit": "%",  "critical": true  },
-      { "id": "F2",  "question": "核心PCE物价指数 同比 最新",              "indicator": "F2",  "unit": "%",  "critical": true  },
-      { "id": "N2",  "question": "SOFR利率 最新",                          "indicator": "N2",  "unit": "%",  "critical": true  },
-      { "id": "X2",  "question": "美元兑人民币中间价 最新",                 "indicator": "X2",  "unit": "",   "critical": true  },
-      { "id": "E1",  "question": "纳斯达克100指数 最新价格",               "indicator": "E1",  "unit": "",   "critical": true, "valueCol": 2, "dateCol": 4 },
-      { "id": "M4",  "question": "银行间7天质押式回购加权利率 最新",      "indicator": "M4",  "unit": "%",  "critical": false }
+      { "id": "F2",  "question": "核心PCE物价指数 同比 最新",              "indicator": "F2",  "unit": "%",  "critical": true  }
     ]
   },
 
@@ -148,7 +156,12 @@
       { "id": "B4",  "name": "FedWatch",       "query": "CME FedWatch July 2026 rate hike probability",     "unit": "%",  "critical": false },
       { "id": "F3",  "name": "下次FOMC",        "query": "FOMC meeting schedule 2026 next meeting date",    "unit": "",   "critical": false },
       { "id": "N3",  "name": "Crane 100 MMF",   "query": "Crane 100 money fund yield index June 2026",      "unit": "%",  "critical": false },
-      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额 2026年6月",                   "unit": "亿元", "critical": false }
+      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额 2026年6月",                   "unit": "亿元", "critical": false },
+      { "id": "F1",  "name": "联邦基金利率上限", "query": "Federal funds rate target upper bound July 2026",    "unit": "%",   "critical": true  },
+      { "id": "F2",  "name": "核心PCE YoY",       "query": "US core PCE price index year-over-year June 2026",  "unit": "%",   "critical": true  },
+      { "id": "N7",  "name": "TED利差",            "query": "TED spread July 2026 latest value",                 "unit": "%",   "critical": false },
+      { "id": "N5",  "name": "美国MMF总规模",      "query": "ICI US money market fund total assets July 2026",   "unit": "T",   "critical": false },
+      { "id": "R3",  "name": "IG OAS",              "query": "US investment grade corporate bond OAS spread July 2026", "unit": "bp", "critical": false }
     ]
   }
 }

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://clowder.ai/schemas/feedback-v1",
+  "$id": "feedback-v1",
+  "title": "Cross-Blueprint Feedback Artifact Schema",
+  "description": "Structure contract for feedback.json — P3.2-A deterministic A-layer output. Produced by build-feedback.cjs, validated by validate-feedback.cjs. Independent artifact, never writes back to reasoning-snapshot.json.",
+  "version": "1.0.0",
+
+  "meta": {
+    "required": ["version", "builtAt", "runId", "inputs", "temporalDiffStatus"],
+    "properties": {
+      "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+      "builtAt": { "type": "string", "format": "iso8601" },
+      "runId": { "type": "string", "minLength": 1 },
+      "inputs": {
+        "type": "object",
+        "required": ["reasoningSnapshot", "temporalDiff", "evidencePacket"],
+        "properties": {
+          "reasoningSnapshot": { "type": "string" },
+          "temporalDiff": { "type": "string" },
+          "evidencePacket": { "type": "string" }
+        }
+      },
+      "temporalDiffStatus": { "type": "string", "enum": ["ok", "degraded", "missing"] }
+    }
+  },
+
+  "adjustmentTypes": {
+    "scenario_probability_shift": {
+      "unit": "percentage_point",
+      "singleCap": 20,
+      "cumulativeCap": 30
+    },
+    "confidence_shift": {
+      "unit": "level",
+      "singleCap": 1,
+      "cumulativeCap": 1,
+      "allowedLevels": ["高", "中高", "中", "低"]
+    },
+    "weight_adjustment": {
+      "unit": "percentage_point",
+      "singleCap": 15,
+      "cumulativeCap": 25
+    },
+    "add_invalidation_condition": {
+      "unit": "text",
+      "singleCap": 3,
+      "cumulativeCap": 3
+    },
+    "add_condition_to_act": {
+      "unit": "text",
+      "singleCap": 3,
+      "cumulativeCap": 3
+    }
+  },
+
+  "forbiddenActionWords": [
+    "加仓", "减仓", "买入", "卖出",
+    "超配", "低配", "增持", "减持",
+    "consider adding", "should add", "adding to position", "add to position",
+    "should buy", "should sell", "buy more", "sell position",
+    "should reduce", "reduce position", "reduce exposure", "reduce allocation",
+    "increasing allocation", "reducing allocation",
+    "increase exposure", "reduce exposure"
+  ],
+
+  "confidenceLevels": ["高", "中高", "中", "低"],
+
+  "indicatorToBlueprint": {
+    "B1": "macro-regime", "B2": "macro-regime", "B3": "macro-regime",
+    "B6": "macro-regime", "B8": "macro-regime", "B9": "macro-regime",
+    "F1": "macro-regime", "F2": "macro-regime",
+    "X1": "macro-regime", "X3": "macro-regime", "X4": "macro-regime",
+    "N2": "macro-regime", "N4": "macro-regime",
+    "E1": "macro-regime", "E2": "macro-regime", "E3": "macro-regime",
+    "S1": "macro-regime",
+    "G2": "gold-rate-conflict", "G4": "gold-rate-conflict",
+    "G6": "gold-rate-conflict", "G7": "gold-rate-conflict",
+    "G8l": "gold-rate-conflict", "G8s": "gold-rate-conflict",
+    "O1": "macro-regime"
+  }
+}

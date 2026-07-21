@@ -76,6 +76,36 @@
 - 等待事件: {关键事件如 FOMC/CPI/地缘，没有则写"无"}
 
 辅助标签：{利率驱动/地缘驱动/信用驱动/无强主导方向}
+
+### 2.6 时序对比
+
+> 本小节数据来源：`temporal-diff.json`。仅当 `meta.status` 为 `ok` 或 `degraded` 时输出完整对比；`no_baseline` 时仅输出一行"无可比基线"。
+
+**对比基线**: {baselineRunId}（{daysSinceBaseline} 天前）
+
+**方向变化摘要**（Tier 1 核心指标，最多 10 项显著变化）:
+
+| 指标 | 基线值 | 当前值 | 变化 | 方向 | 幅度 |
+|------|------|------|------|:--:|:--:|
+| {indicator} | {baselineValue} | {currentValue} | {deltaDisplay} | {↑/↓/→/新/失} | {negligible/moderate/significant} |
+
+**跨期一致性**:
+
+{consistency_check.summary}
+
+{如有 divergent_pairs，逐项列出:}
+- {pair}: {aDir} vs {bDir} — {note}
+
+**Regime 稳定性**: {stabilityNote}{regimeChanged 时追加: 从 "{baselineRegime}" → "{currentRegime}"}
+
+{如有 keyDifferences:}
+- {keyDifferences 逐项}
+
+**阈值穿越** {如有 crossed}:
+- {indicator}: {from} → {to}, 穿越 {threshold}
+
+{如有 approaching}:
+- {indicator}: 距 {threshold} 仅 {distance}, 当前 {currentValue}
 ```
 
 ## Source

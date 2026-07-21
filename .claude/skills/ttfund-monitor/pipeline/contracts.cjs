@@ -1,8 +1,9 @@
-// pipeline/contracts.cjs — ttfund-monitor v2.7.0 (P4-C)
+// pipeline/contracts.cjs — ttfund-monitor v2.8.0 (P5-B)
 // Single source of truth for artifact and stage declarations.
 // Shared by pipeline/run.cjs (orchestrator), pipeline/verify.cjs (contract verifier),
 // and validate-run-consistency.cjs (validator).
 // P4-B: stages now carry inputs, outputs, validators, failurePolicy, rebuildCommand/manualInstruction.
+// P5-B: added validate-indicator-contract stage (config-level gate, pre-pipeline).
 // Stage order IS the topological dependency graph — no separate verifyOrder needed.
 
 const artifacts = [
@@ -159,6 +160,20 @@ const artifacts = [
 // Each stage declares its inputs/outputs/validators/failurePolicy/rebuildCommand.
 // auto=true: deterministic script; auto=false: LLM/manual work.
 const stages = [
+  // ── Stage 0: Config Gate (pre-pipeline) ──
+  {
+    id: 'validate-indicator-contract',
+    label: '验证指标契约 (P5-B)',
+    auto: true,
+    dependsOn: [],
+    inputs: [],
+    outputs: [],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    rebuildCommand: 'node validate-indicator-contract.cjs',
+    script: 'validate-indicator-contract.cjs',
+    args: () => []
+  },
   // ── Stage 1: Source Probe ──
   {
     id: 'source-probe',
@@ -178,8 +193,8 @@ const stages = [
     id: 'collect',
     label: '采集 (宏观数据)',
     auto: true,
-    dependsOn: [],
-    inputs: [],
+    dependsOn: ['source-probe'],
+    inputs: ['source-probe'],
     outputs: ['raw-json', 'raw-snapshot', 'provenance', 'provenance-json', 'gaps'],
     validators: ['validate-source-contract'],
     failurePolicy: 'hard_fail',
@@ -364,7 +379,7 @@ const stages = [
     id: 'consistency',
     label: '全链路一致性校验',
     auto: true,
-    dependsOn: ['validate-source-contract', 'validate-reasoning', 'validate-temporal-diff', 'validate-feedback', 'validate-report', 'publish-current'],
+    dependsOn: ['validate-indicator-contract', 'validate-source-contract', 'validate-reasoning', 'validate-temporal-diff', 'validate-feedback', 'validate-report', 'publish-current'],
     inputs: ['source-probe', 'raw-json', 'derived-json', 'evidence-packet', 'reasoning-snapshot', 'temporal-diff', 'feedback', 'report', 'current'],
     outputs: [],
     validators: [],
