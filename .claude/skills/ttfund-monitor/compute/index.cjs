@@ -69,7 +69,10 @@ function computeDerived(raw) {
 
   // ── D10: US money market ──
   const n2 = get('N2'), n4 = get('N4');
-  derived.D10 = { name: 'SOFR-IORB', formula: 'N2 - N4', value: z(n2.v != null && n4.v != null ? fmt(n2.v - n4.v, 2) : null), unit: 'bp', freshness: worstFreshness(n2.fresh, n4.fresh), components: { N2: n2.fresh, N4: n4.fresh } };
+  derived.D10 = { name: 'SOFR-IORB', formula: 'N2 - N4', value: z(n2.v != null && n4.v != null ? fmt((n2.v - n4.v) * 100, 0) : null), unit: 'bp', freshness: worstFreshness(n2.fresh, n4.fresh), components: { N2: n2.fresh, N4: n4.fresh } };
+
+  // ── N7 derived: SOFR-IORB利差 ──
+  derived.N7 = { name: 'SOFR-IORB利差', formula: 'N2 - N4', value: z(n2.v != null && n4.v != null ? fmt((n2.v - n4.v) * 100, 0) : null), unit: 'bp', freshness: worstFreshness(n2.fresh, n4.fresh), components: { N2: n2.fresh, N4: n4.fresh } };
 
   // ── D11-D13: Gold ratios ──
   const g4 = get('G4'), o1 = get('O1'), ag = get('AG'), g2 = get('G2'), x3 = get('X3');
@@ -170,7 +173,7 @@ function main() {
     { title: '中国债利差', ids: ['D4', 'D5', 'D6'] },
     { title: '中美利差', ids: ['D7'] },
     { title: '中国货币市场利差', ids: ['D8', 'D9'] },
-    { title: '美国货币市场利差', ids: ['D10'] },
+    { title: '美国货币市场利差', ids: ['D10', 'N7'] },
     { title: '黄金衍生', ids: ['D11', 'D12', 'D13'] },
     { title: '汇率衍生', ids: ['D14'] },
     { title: 'K线衍生', ids: ['D15', 'D16', 'D17', 'D18', 'D19', 'D20'] },

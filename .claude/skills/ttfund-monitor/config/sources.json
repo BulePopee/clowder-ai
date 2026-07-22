@@ -116,7 +116,7 @@
         "calls": [
           { "id": "B10",       "query": "美银美林美国高收益利差 $MONTH",        "type": "single",  "indicator": "B10", "unit": "%",      "critical": false },
           { "id": "N6",        "query": "FRA-OIS利差 $MONTH",                   "type": "single",  "indicator": "N6",  "unit": "%",      "critical": false },
-          { "id": "N7",        "query": "TED利差 $MONTH",                        "type": "single",  "indicator": "N7",  "unit": "%",      "critical": false },
+
           { "id": "S3",        "query": "AAII投资者情绪 $MONTH",                 "type": "single",  "indicator": "S3",  "unit": "",       "critical": false }
         ]
       },
@@ -159,7 +159,7 @@
       { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额 2026年6月",                   "unit": "亿元", "critical": false },
       { "id": "F1",  "name": "联邦基金利率上限", "query": "Federal funds rate target upper bound July 2026",    "unit": "%",   "critical": true  },
       { "id": "F2",  "name": "核心PCE YoY",       "query": "US core PCE price index year-over-year June 2026",  "unit": "%",   "critical": true  },
-      { "id": "N7",  "name": "TED利差",            "query": "TED spread July 2026 latest value",                 "unit": "%",   "critical": false },
+
       { "id": "N5",  "name": "美国MMF总规模",      "query": "ICI US money market fund total assets July 2026",   "unit": "T",   "critical": false },
       { "id": "R3",  "name": "IG OAS",              "query": "US investment grade corporate bond OAS spread July 2026", "unit": "bp", "critical": false }
     ]

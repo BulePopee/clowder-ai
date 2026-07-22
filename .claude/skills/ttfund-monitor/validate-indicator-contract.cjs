@@ -129,39 +129,53 @@ console.log(`Checking ${Object.keys(indicatorsToCheck).length} indicator(s)\n`);
 for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   console.log(`── ${id} (${contract.name}) ──`);
 
-  // 1. Source contract check
-  console.log('  [1/7] Source mapping:');
-  const primarySource = contract.source?.primary;
-  if (!primarySource) {
-    fail(`${id}: no primary source declared`);
-  } else {
-    const srcContract = sourceContracts?.sources?.[primarySource];
-    if (!srcContract) {
-      fail(`${id}: primary source "${primarySource}" not in source-contracts.json`);
-    } else if (!srcContract.isPrimaryFor?.includes(id)) {
-      fail(`${id}: "${primarySource}" contract does not list ${id} in isPrimaryFor`);
+  // 1. Source contract check (or derived check for computed indicators)
+  console.log('  [1/8] Source mapping:');
+  if (contract.kind === 'derived') {
+    // Derived indicators: verify derivedFrom components exist, skip source-contracts
+    const derivedFrom = contract.source?.derivedFrom || [];
+    if (derivedFrom.length === 0) {
+      fail(`${id}: kind=derived but no source.derivedFrom declared`);
     } else {
-      ok(`${id}: primary=${primarySource} ✓`);
+      for (const compId of derivedFrom) {
+        if (!indicators?.indicatorNames?.[compId]) {
+          fail(`${id}: derivedFrom component "${compId}" not found in indicators.json`);
+        } else {
+          ok(`${id}: derivedFrom ${compId} ✓`);
+        }
+      }
     }
-
-    // Check forbidden fallbacks are actually restricted in source contract.
-    // Indicator contract takes priority: if it forbids a fallback, the source
-    // contract MUST enforce that prohibition (via forbiddenFor or critical guard).
-    for (const fb of (contract.source?.forbiddenFallbacks || [])) {
-      const fbContract = sourceContracts?.sources?.[primarySource];
-      const restrictions = fbContract?.fallbackRestrictions?.[fb];
-      if (restrictions?.forbiddenFor?.includes?.(id)) {
-        ok(`${id}: fallback ${fb} correctly forbidden in source contract`);
-      } else if (restrictions?.allowedFor === 'non_critical_only' && contract.critical) {
-        ok(`${id}: fallback ${fb} correctly restricted (non_critical_only vs critical)`);
+  } else {
+    const primarySource = contract.source?.primary;
+    if (!primarySource) {
+      fail(`${id}: no primary source declared`);
+    } else {
+      const srcContract = sourceContracts?.sources?.[primarySource];
+      if (!srcContract) {
+        fail(`${id}: primary source "${primarySource}" not in source-contracts.json`);
+      } else if (!srcContract.isPrimaryFor?.includes(id)) {
+        fail(`${id}: "${primarySource}" contract does not list ${id} in isPrimaryFor`);
       } else {
-        fail(`${id}: indicator contract forbids fallback "${fb}" but source contract (${primarySource}) does not enforce this — add ${id} to ${primarySource}.fallbackRestrictions.${fb}.forbiddenFor`);
+        ok(`${id}: primary=${primarySource} ✓`);
+      }
+
+      // Check forbidden fallbacks are actually restricted in source contract.
+      for (const fb of (contract.source?.forbiddenFallbacks || [])) {
+        const fbContract = sourceContracts?.sources?.[primarySource];
+        const restrictions = fbContract?.fallbackRestrictions?.[fb];
+        if (restrictions?.forbiddenFor?.includes?.(id)) {
+          ok(`${id}: fallback ${fb} correctly forbidden in source contract`);
+        } else if (restrictions?.allowedFor === 'non_critical_only' && contract.critical) {
+          ok(`${id}: fallback ${fb} correctly restricted (non_critical_only vs critical)`);
+        } else {
+          fail(`${id}: indicator contract forbids fallback "${fb}" but source contract (${primarySource}) does not enforce this — add ${id} to ${primarySource}.fallbackRestrictions.${fb}.forbiddenFor`);
+        }
       }
     }
   }
 
   // 2. Unit contract check
-  console.log('  [2/7] Unit contract:');
+  console.log('  [2/8] Unit contract:');
   if (contract.unit?.contractRequired) {
     const unitConfig = indicatorUnits?.indicators?.[contract.unit.configId || id];
     if (!unitConfig) {
@@ -174,7 +188,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   }
 
   // 3. Freshness check — hard fail on mismatch for contracted indicators
-  console.log('  [3/7] Freshness:');
+  console.log('  [3/8] Freshness:');
   const freshnessConfig = indicators?.freshness?.[id];
   if (!freshnessConfig) {
     fail(`${id}: no freshness rule in indicators.json — contract declared but config missing`);
@@ -190,7 +204,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   }
 
   // 4. Temporal diff check
-  console.log('  [4/7] Temporal diff:');
+  console.log('  [4/8] Temporal diff:');
   if (contract.temporalDiff?.tracked) {
     const inTemporal = new RegExp(`id:\\s*['"]${id}['"]`).test(temporalDiffSrc);
     if (!inTemporal) {
@@ -203,7 +217,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   }
 
   // 5. Feedback check — uses feedbackSchema.indicatorToBlueprint as ground truth
-  console.log('  [5/7] Feedback:');
+  console.log('  [5/8] Feedback:');
   if (contract.feedback?.tracked) {
     const blueprintMap = feedbackSchema?.indicatorToBlueprint;
     if (!blueprintMap) {
@@ -223,7 +237,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   }
 
   // 6. Report exposure check — structural checks only; text-match is a soft signal
-  console.log('  [6/7] Report:');
+  console.log('  [6/8] Report:');
   if (contract.report?.exposure === 'direct') {
     const sectionFile = path.join(reportSectionsDir, `${contract.report.section}.md`);
     if (!fs.existsSync(sectionFile)) {
@@ -254,7 +268,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
   }
 
   // 7. Catalog entry check
-  console.log('  [7/7] Catalog:');
+  console.log('  [7/8] Catalog:');
   if (contract.catalogEntry) {
     if (!catalogMd) {
       warn(`${id}: catalogEntry declared but indicator-catalog.md not found — cannot verify`);
@@ -265,6 +279,41 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
     }
   } else {
     ok(`${id}: no catalog entry required`);
+  }
+
+  // 8. Compute check — for derived indicators, verify formula exists in compute/index.cjs
+  console.log('  [8/8] Compute:');
+  if (contract.kind === 'derived') {
+    if (!contract.compute) {
+      fail(`${id}: kind=derived but no compute contract declared`);
+    } else {
+      const computeFile = contract.compute.file || 'compute/index.cjs';
+      const computePath = path.join(skillRoot, computeFile);
+      if (!fs.existsSync(computePath)) {
+        fail(`${id}: compute file "${computeFile}" not found`);
+      } else {
+        const computeSrc = fs.readFileSync(computePath, 'utf8');
+        const hasN7 = new RegExp(`derived\\.${id}\\s*=`).test(computeSrc);
+        if (!hasN7) {
+          fail(`${id}: derived formula not found in ${computeFile} — expected "derived.${id} = "`);
+        } else {
+          ok(`${id}: derived formula found in ${computeFile} ✓`);
+        }
+
+        // Verify components referenced in compute file
+        for (const compId of (contract.compute.components || [])) {
+          if (!new RegExp(`get\\('${compId}'\\)`).test(computeSrc)) {
+            warn(`${id}: component "${compId}" not referenced in ${computeFile} (may be indirect)`);
+          } else {
+            ok(`${id}: component ${compId} referenced in compute ✓`);
+          }
+        }
+      }
+    }
+  } else if (contract.compute) {
+    ok(`${id}: has compute contract (raw indicator consumer)`);
+  } else {
+    ok(`${id}: no compute contract required`);
   }
 }
 

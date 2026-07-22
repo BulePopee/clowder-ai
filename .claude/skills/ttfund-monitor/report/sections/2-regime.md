@@ -63,7 +63,7 @@
 | 实际利率 | {主导/辅助/排除} | {TIPS↑/↓, 金, NDX} |
 | 通胀预期 | {主导/辅助/排除} | {breakeven, 油, 金} |
 | 政策利率 | {主导/辅助/排除} | {FedWatch, 2Y, SOFR} |
-| 信用风险 | {主导/辅助/排除} | {HY OAS, TED, A2} |
+| 信用风险 | {主导/辅助/排除} | {HY OAS, SOFR-IORB, A2} |
 | 流动性 | {主导/辅助/排除} | {FRA-OIS, VIX, MOVE} |
 | 美元外部压力 | {主导/辅助/排除} | {DXY, CNH−CNY, MMF AUM} |
 

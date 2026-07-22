@@ -51,7 +51,7 @@ function parse(r) {
 | | E3 kline | `创业板指 2026年5月 2026年6月 收盘价` |
 | 批5 P1扩展 | B10 HY OAS | `美银美林美国高收益利差 2026年6月` |
 | | N6 FRA-OIS | `FRA-OIS利差 2026年6月` |
-| | N7 TED | `TED利差 2026年6月` |
+| | N7 (derived) | `N7=SOFR-IORB利差 (N2−N4派生)` |
 | | S3 AAII | `AAII投资者情绪 2026年6月` |
 
 ## Known Issues

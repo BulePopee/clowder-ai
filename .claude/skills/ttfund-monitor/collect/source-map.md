@@ -73,9 +73,9 @@
 | N4 | IORB | ifind | — | — | 30 | acceptable |
 | N5 | MMF AUM | websearch | — | — | 14 | staleGap |
 | N6 | FRA-OIS利差 | ifind | — | — | 1 | fallback |
-| N7 | TED利差 | ifind | — | — | 1 | fallback |
+| N7 | SOFR-IORB利差 | derived | N2, N4 | — | 1 | fallback |
 
-> N6 与 N2−N4 (SOFR−IORB) 互补：N6 测银行间远期融资压力，SOFR−IORB 测隔夜。N6 >20bp=资金紧张，>40bp=资金危机。N7 测银行间信用压力，>50bp=承压，>100bp=危机。
+> N6 与 N7(SOFR−IORB) 互补：N6 测银行间远期融资压力。N7 测隔夜担保融资压力(N2−N4)，派生无需独立采集。N7>0bp=资金压力信号, >25bp=资金紧张。
 
 ### F 美联储政策 (3 项)
 
@@ -146,7 +146,7 @@
 | R3 | IG OAS (投资级信用利差) | websearch | — | — | 7 | staleGap |
 | R4 | CBOE put/call ratio | websearch | — | — | 3 | staleGap |
 
-> R1/R2 已升级为正式指标 (B10/N7)。R3: iFinD 无数据，WebSearch 周频可获取 ~73bp。R4: iFinD 无数据，WebSearch 可获取 total P/C 0.92。连续 2 轮稳定 → 纳入正式组。
+> R1/R2 已升级为正式指标 (B10)。R3: iFinD 无数据，WebSearch 周频可获取 ~73bp。R4: iFinD 无数据，WebSearch 可获取 total P/C 0.92。连续 2 轮稳定 → 纳入正式组。
 
 ## Invariants
 

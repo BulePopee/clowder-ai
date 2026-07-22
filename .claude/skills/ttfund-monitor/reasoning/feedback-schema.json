@@ -76,6 +76,7 @@
     "G2": "gold-rate-conflict", "G4": "gold-rate-conflict",
     "G6": "gold-rate-conflict", "G7": "gold-rate-conflict",
     "G8l": "gold-rate-conflict", "G8s": "gold-rate-conflict",
-    "O1": "macro-regime"
+    "O1": "macro-regime",
+    "N7": "macro-regime"
   }
 }

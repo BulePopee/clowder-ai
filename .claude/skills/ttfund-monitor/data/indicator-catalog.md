@@ -57,9 +57,9 @@
 | N4 | IORB | 3.65% | — |
 | N5 | MMF AUM | — | — |
 | N6 | FRA-OIS利差 | 0bp | FRA_OIS_STRESS=20bp, FRA_OIS_CRISIS=40bp |
-| N7 | TED利差 | 30bp | TED_ELEVATED=50bp, TED_STRESS=100bp |
+| N7 | SOFR-IORB利差 | -11bp | SOFR_IORB_ELEVATED=0bp, SOFR_IORB_STRESS=25bp |
 
-> N6 与 SOFR−IORB 互补：N6 测 3M 远期融资压力。N7 测银行间信用压力(LIBOR−TBill)。
+> N6 与 N7(SOFR−IORB) 互补：N6 测 3M 远期融资压力。N7 测隔夜担保融资压力(SOFR−IORB)。N7>0bp=资金压力信号。
 
 ## F 美联储政策
 
@@ -142,7 +142,7 @@
 | R3 | IG OAS (投资级信用利差) | 美国投资级公司债OAS, ~73bp (WebSearch周频) | IG_TIGHT=50bp, IG_STRESS=150bp |
 | R4 | CBOE put/call ratio | 期权市场情绪, total P/C ~0.92 (WebSearch日快照) | PUT_CALL_FEAR=1.0, PUT_CALL_EXTREME=1.2 |
 
-> R1/R2 已升级为正式指标 (B10/N7)。R3/R4 数据源为 WebSearch (非API)，连续 2 轮稳定且解释力强 → 纳入正式组。
+> R1/R2 已升级为正式指标 (B10)。R3/R4 数据源为 WebSearch (非API)，连续 2 轮稳定且解释力强 → 纳入正式组。
 
 ---
 
@@ -182,8 +182,8 @@
 | HY_CRISIS | B10 | > 600bp |
 | FRA_OIS_STRESS | N6 | > 20bp |
 | FRA_OIS_CRISIS | N6 | > 40bp |
-| TED_ELEVATED | N7 | > 50bp |
-| TED_STRESS | N7 | > 100bp |
+| SOFR_IORB_ELEVATED | N7 | > 0bp |
+| SOFR_IORB_STRESS | N7 | > 25bp |
 | AAII_NEUTRAL | S3 | 30-50 |
 | AAII_BEARISH | S3 | 20-30 |
 | AAII_BULLISH | S3 | 50-60 |

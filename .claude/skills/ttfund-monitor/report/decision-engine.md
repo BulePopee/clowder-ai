@@ -47,7 +47,7 @@
 | 实际利率 | B8 TIPS, B1 30Y, G2 金, E1 NDX | TIPS↑ + 金↓ + NDX↓ = 实际利率冲击 | 金↑ + TIPS↓ = 不是 |
 | 通胀预期 | B9 breakeven, O1 油价, F2 PCE | breakeven↑ + 金↑ + 油↑ = 通胀冲击 | 金↓ + 油↓ = 不是 |
 | 政策利率 | B4 FedWatch, B3 2Y, N4 IORB | 加息概率↑ + 2Y↑ = 鹰派重定价 | 降息概率↑ = 不是 |
-| 信用风险 | B10 HY OAS, A2 信用利差, TED N7 | OAS↑ + TED↑ + VIX↑ = 信用压力 | OAS↓ + VIX↓ = 不是 |
+| 信用风险 | B10 HY OAS, A2 信用利差, N7 SOFR-IORB | OAS↑ + N7↑ + VIX↑ = 信用/资金压力 | OAS↓ + VIX↓ = 不是 |
 | 流动性 | N6 FRA-OIS, S1 VIX, N2−N4, A1 MOVE | FRA-OIS↑ + VIX↑ = 流动性紧张 | FRA-OIS↓ + VIX↓ = 不是 |
 | 美元外部压力 | X1 DXY, X5 CNH−CNY, N5 MMF AUM | DXY↑ + CNH−CNY 扩大 + MMF↑ = 美元荒 | DXY↓ + CNH−CNY 收窄 = 不是 |
 
@@ -93,7 +93,7 @@ Regime 标签仅作为辅助参考，不出现在报告摘要首句。
 | B8 TIPS↑ + E1 NDX 跌破 20MA | 实际利率冲击风险资产 | 讨论减持高久期 QDII | 讨论级 |
 | B4 加息概率 >60% + B1 30Y↑ | 鹰派确认，利率上行 | 维持防御，延缓切换 | 讨论级 |
 | B4 降息概率 >50% + B1 30Y↓ + B9 稳定 | 鸽派转向信号 | 讨论恢复正常配置 | 讨论级 |
-| B10 HY OAS >500bp 或 N7 TED >100bp | 信用市场压力 | 启动防御审查 | 建议级 |
+| B10 HY OAS >500bp 或 N7 SOFR-IORB >25bp | 信用/资金市场压力 | 启动防御审查 | 建议级 |
 | G2 单日 −3%+ 且 G11 <−3% | 黄金恐慌抛售 | 讨论黄金止损 | 讨论级 |
 | 配置偏移 > 阈值(股±5% 或单类±3%) | 组合偏离目标 | 再平衡操作 | 执行级 |
 | N6 FRA-OIS >20bp + S1 VIX >25 | 美元流动性紧张 | 讨论增加现金缓冲 | 讨论级 |
