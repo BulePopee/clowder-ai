@@ -617,7 +617,7 @@ async function main() {
       if (srcContract.allowedFallbackTargets?.includes(actualSource)) {
         const restrictions = srcContract.fallbackRestrictions?.[actualSource];
         if (!restrictions) return true;
-        if (restrictions.allowedFor === 'non_critical_only') {
+        if (Array.isArray(restrictions.allowedFor) && restrictions.allowedFor.includes('non_critical_only')) {
           if (!cfg.criticalIds.includes(indicatorId)) return true;
         }
         if (restrictions.allowedFor?.includes?.(indicatorId)) return true;
@@ -680,20 +680,27 @@ async function main() {
   console.log('\n── Writing outputs ──');
 
   // WebSearch pending items (from sources.json, never auto-collected)
+  // Split: fillable items (websearchPendingIds) vs blocked disclosures (websearchDisclosures)
   const wsItems = cfg.websearch?.items || [];
+  const wsDisclosures = cfg.websearch?.disclosures || [];
   const wsPendingIds = wsItems.map(w => w.id);
+  const wsDisclosureRecords = wsDisclosures.map(d => ({
+    id: d.id,
+    reason: d.reason || 'blocked_by_contract',
+    note: `${d.name}: source contract forbids websearch fallback`
+  }));
 
   // raw.json
   fs.writeFileSync(path.join(RUN_DIR, 'raw.json'), JSON.stringify({
     runId, round, version: cfg.version,
     collectedAt: new Date().toISOString(),
-    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, websearchPending: wsItems.length, websearchPendingIds: wsPendingIds },
+    summary: { total, collected: activeCount, missing, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, websearchPending: wsItems.length, websearchPendingIds: wsPendingIds, websearchBlocked: wsDisclosures.length, websearchDisclosures: wsDisclosureRecords },
     results
   }, null, 2));
 
   // provenance.json
   prov.endTime = new Date().toISOString();
-  prov.summary = { totalItems: total, activeItems: activeCount, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, missing, websearchPending: wsItems.length };
+  prov.summary = { totalItems: total, activeItems: activeCount, fresh: freshCount, staleSuccess: staleSuccessCount, staleGap: staleGapCount, noDate: noDateCount, invalidDate: invalidDateCount, missing, websearchPending: wsItems.length, websearchBlocked: wsDisclosures.length };
   prov.sourceContracts = { version: sourceContracts?.version || 'N/A', indicatorContracts, summary: contractSummary };
   fs.writeFileSync(path.join(RUN_DIR, 'provenance.json'), JSON.stringify(prov, null, 2));
 
@@ -702,15 +709,61 @@ async function main() {
 
   // websearch-tasks.md
   let md = `# WebSearch Tasks — runId: ${runId}\n## Generated: ${new Date().toISOString()}\n\n`;
-  md += `Execute these ${wsItems.length} WebSearch queries. For each: record value, date, source URL.\n\n`;
-  md += `| ID | Name | Query | Unit | Critical |\n`;
-  md += `|:--:|------|-------|------|:--:|\n`;
+  md += `## Fillable (${wsItems.length} items)\n\n`;
+  md += `Execute these WebSearch queries. For each: record value, date, source URL.\n\n`;
+  md += `| ID | Name | Query | Unit | Critical | Write Policy |\n`;
+  md += `|:--:|------|-------|------|:--:|------|\n`;
+  // Contract-aware policy resolver — same logic as websearch-fill.cjs resolveWritePolicy
+  function wsPolicyLabel(id, critical) {
+    const ws = sourceContracts?.sources?.websearch;
+    if (!ws) return 'unknown';
+    if (ws.isPrimaryFor?.includes(id)) return 'fillable_websearch';
+    if (ws.isFallbackFor?.includes(id)) return 'fallback_allowed';
+    // Check if any source forbids websearch
+    for (const [, src] of Object.entries(sourceContracts?.sources || {})) {
+      if (src.fallbackRestrictions?.websearch?.forbiddenFor?.includes(id)) return 'blocked_by_contract';
+    }
+    // Check fallback chain
+    let expectedSrc = null;
+    for (const [srcId, src] of Object.entries(sourceContracts?.sources || {})) {
+      if (src.isPrimaryFor?.includes(id)) { expectedSrc = srcId; break; }
+    }
+    if (expectedSrc) {
+      const srcContract = sourceContracts.sources[expectedSrc];
+      if (srcContract?.allowedFallbackTargets?.includes('websearch')) {
+        const restrictions = srcContract.fallbackRestrictions?.websearch;
+        if (!restrictions) return 'fallback_allowed';
+        if (Array.isArray(restrictions.allowedFor) && restrictions.allowedFor.includes('non_critical_only')) {
+          return critical ? 'blocked_by_contract' : 'fallback_allowed';
+        }
+        if (restrictions.forbiddenFor?.includes(id)) return 'blocked_by_contract';
+        return 'fallback_allowed';
+      }
+    }
+    return 'fallback_allowed';
+  }
   for (const item of wsItems) {
-    md += `| ${item.id} | ${item.name} | \`${item.query}\` | ${item.unit} | ${item.critical ? 'yes' : 'no'} |\n`;
+    const policy = wsPolicyLabel(item.id, item.critical);
+    md += `| ${item.id} | ${item.name} | \`${item.query}\` | ${item.unit} | ${item.critical ? 'yes' : 'no'} | ${policy} |\n`;
+  }
+  if (wsDisclosures.length > 0) {
+    md += `\n## Blocked / Disclosure Only (${wsDisclosures.length} items)\n\n`;
+    md += `These indicators are BLOCKED by source contract — WebSearch values are advisory only, NEVER written to raw.json.\n\n`;
+    md += `| ID | Name | Query | Unit | Reason |\n`;
+    md += `|:--:|------|-------|------|------|\n`;
+    for (const d of wsDisclosures) {
+      md += `| ${d.id} | ${d.name} | \`${d.query || 'N/A'}\` | ${d.unit || ''} | ${d.reason} |\n`;
+    }
   }
   md += `\n## Results (fill per item)\n\n`;
   for (const item of wsItems) {
-    md += `### ${item.id} — ${item.name}\n- **Value**: \n- **Date**: \n- **Source URL**: \n- **Notes**: \n\n`;
+    md += `### ${item.id} — ${item.name}\n- **Value**: \n- **Date**: \n- **Source URL**: \n- **Source Title**: \n- **Notes**: \n\n`;
+  }
+  if (wsDisclosures.length > 0) {
+    md += `## Disclosure Notes (advisory only, never in raw.json)\n\n`;
+    for (const d of wsDisclosures) {
+      md += `### ${d.id} — ${d.name} (BLOCKED)\n- **Advisory value**: \n- **Date**: \n- **Source URL**: \n- **Notes**: ${d.reason}\n\n`;
+    }
   }
   fs.writeFileSync(path.join(RUN_DIR, 'websearch-tasks.md'), md);
 
@@ -777,7 +830,7 @@ async function main() {
   provMd += `| iFinD | ${prov.sources.ifind?.totalCalls || 0} | ${prov.sources.ifind?.success || 0} |\n`;
   provMd += `| Wind | ${prov.sources.wind?.calls?.length || 0} | ${prov.sources.wind?.calls?.filter(c => c.status === 'ok').length || 0} |\n`;
   provMd += `| mx-data | 0 | — (skipped) |\n`;
-  provMd += `| WebSearch | ${wsItems.length} | — (pending) |\n\n`;
+  provMd += `| WebSearch | ${wsItems.length} fillable + ${wsDisclosures.length} blocked | — (pending) |\n\n`;
   provMd += `## Adapter Execution Matrix\n\n`;
   provMd += `| Adapter | 已执行 | status |\n`;
   provMd += `|---------|:--:|------|\n`;
@@ -785,7 +838,11 @@ async function main() {
   provMd += `| iFinD | ${prov.sources.ifind?.totalCalls || 0} | ${(prov.sources.ifind?.failed || 0) > 0 ? 'partial' : 'ok'} |\n`;
   provMd += `| Wind | ${prov.sources.wind?.calls?.length || 0} | ${prov.sources.wind?.calls?.some?.(c => c.status === 'failed') ? 'partial' : 'ok'} |\n`;
   provMd += `| mx-data | 0 | skipped (A3 via WebSearch) |\n`;
-  provMd += `| WebSearch | ${wsItems.length} | pending |\n\n`;
+  provMd += `| WebSearch | ${wsItems.length} fillable | pending |\n`;
+  if (wsDisclosures.length > 0) {
+    provMd += `| WebSearch (blocked) | ${wsDisclosures.length} | blocked_by_contract (${wsDisclosures.map(d => d.id).join(', ')}) |\n`;
+  }
+  provMd += `\n`;
   if (gaps.length > 0) {
     provMd += `## 缺口分类\n`;
     provMd += `| 编号 | 原因类别 | 详情 |\n`;
@@ -820,7 +877,7 @@ async function main() {
   // ── Summary ──
   console.log(`\n=== DONE ===`);
   console.log(`Structured: ${activeCount} active / ${staleGapCount} stale / ${noDateCount} noDate / ${invalidDateCount} invalidDate / ${missing} missing / ${total} total (fresh:${freshCount} staleSuccess:${staleSuccessCount})`);
-  console.log(`WebSearch: ${wsItems.length} tasks pending`);
+  console.log(`WebSearch: ${wsItems.length} fillable pending + ${wsDisclosures.length} blocked (${wsDisclosures.map(d => d.id).join(', ')})`);
   console.log(`Output: ${RUN_DIR}/`);
   console.log(`  raw.json  raw-snapshot.md  provenance.json  provenance.md  gaps.json  websearch-tasks.md`);
 }

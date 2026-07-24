@@ -146,6 +146,39 @@ function main() {
       }
     }
 
+    // 1b. Content completeness check for websearch-fill (P5-D: template-only detection)
+    if (stage.id === 'websearch-fill' && !stageBroken) {
+      const wsPath = resolveArtifactPath('{runDir}/websearch-results.json');
+      if (fs.existsSync(wsPath)) {
+        try {
+          const ws = JSON.parse(fs.readFileSync(wsPath, 'utf8'));
+          const hasFilledAt = !!ws.filledAt;
+          const rawPath = resolveArtifactPath('{runDir}/raw.json');
+          let hasRawWebsearchResult = false;
+          if (fs.existsSync(rawPath)) {
+            const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+            hasRawWebsearchResult = Object.values(raw.results || {}).some(r => r.source === 'websearch' && r.value != null);
+          }
+          const reflowedCount = ws.summary?.reflowed || ws.summary?.success || 0;
+          if (!hasFilledAt || (!hasRawWebsearchResult && reflowedCount > 0)) {
+            if (!hasFilledAt) {
+              console.log(`  FAIL: websearch-results.json — no filledAt (template only, not yet filled/reflowed)`);
+            } else {
+              console.log(`  FAIL: filledAt present but raw.json has no websearch results — reflow incomplete`);
+            }
+            if (!firstBrokenStage) firstBrokenStage = stage;
+            stageBroken = true;
+            allPassed = false;
+          }
+        } catch (_) {
+          console.log(`  FAIL: websearch-results.json unreadable`);
+          if (!firstBrokenStage) firstBrokenStage = stage;
+          stageBroken = true;
+          allPassed = false;
+        }
+      }
+    }
+
     // 2. Run stage's own script if it's an auto validator stage (outputs empty = pure validator)
     if (isValidatorStage) {
       console.log(`  → ${stage.script}:`);

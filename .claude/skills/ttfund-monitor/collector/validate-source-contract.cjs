@@ -276,6 +276,88 @@ if (raw?.results) {
   }
 }
 
+// ── 5. Raw WebSearch Contract Cross-Reference (post-reflow gate) ──
+// Validates raw.json websearch entries directly against source-contracts.json.
+// Does NOT trust provenance.sourceContracts (which is frozen at collect time).
+// This is the hard post-reflow gate — catches forbidden websearch values
+// that were injected into raw.json outside the websearch-fill.cjs guardrail.
+console.log('\n── 5. Raw WebSearch Contract Cross-Reference ──');
+if (raw?.results) {
+  // Build a map: indicator → expected source + websearch restrictions
+  const wsContract = contracts.sources?.websearch;
+  let wsChecked = 0, wsForbidden = 0, wsOk = 0;
+
+  for (const [id, r] of Object.entries(raw.results)) {
+    if (r.source !== 'websearch') continue;
+    if (r.value == null && r.value !== 0) continue;
+    wsChecked++;
+
+    // Resolve expected source for this indicator
+    let expectedSrc = null;
+    for (const [srcId, srcContract] of Object.entries(contracts.sources)) {
+      if (srcContract.isPrimaryFor?.includes(id)) { expectedSrc = srcId; break; }
+    }
+    if (!expectedSrc) {
+      for (const [srcId, srcContract] of Object.entries(contracts.sources)) {
+        if (srcContract.supportedIndicators?.prefixes) {
+          for (const prefix of srcContract.supportedIndicators.prefixes) {
+            if (id === prefix || id.startsWith(prefix + '_')) { expectedSrc = srcId; break; }
+          }
+        }
+        if (expectedSrc) break;
+      }
+    }
+
+    // Check if any source explicitly forbids websearch for this indicator
+    let explicitlyForbidden = false;
+    const allSources = contracts.sources || {};
+    for (const [srcId, src] of Object.entries(allSources)) {
+      if (src.fallbackRestrictions?.websearch?.forbiddenFor?.includes(id)) {
+        wsForbidden++;
+        explicitlyForbidden = true;
+        fail(`${id}: BLOCKED by ${srcId} contract — websearch value in raw.json is a contract violation. Remove this entry or source from a primary adapter.`);
+        break;
+      }
+    }
+    if (explicitlyForbidden) continue;
+
+    // If not explicitly forbidden, check if websearch is a valid source path
+    if (!allSources.websearch?.isPrimaryFor?.includes(id) &&
+        !allSources.websearch?.isFallbackFor?.includes(id) &&
+        expectedSrc) {
+      // Check if expected source allows websearch as fallback
+      const srcContract = allSources[expectedSrc];
+      const wsAllowedAsTarget = srcContract?.allowedFallbackTargets?.includes('websearch');
+      if (!wsAllowedAsTarget) {
+        wsForbidden++;
+        fail(`${id}: websearch value in raw.json but ${expectedSrc} does not allow websearch as fallback target.`);
+      } else {
+        const restrictions = srcContract?.fallbackRestrictions?.websearch;
+        if (restrictions?.forbiddenFor?.includes(id)) {
+          wsForbidden++;
+          fail(`${id}: websearch forbidden for this indicator by ${expectedSrc} contract.`);
+        } else {
+          wsOk++;
+          ok(`${id}: websearch → ${expectedSrc} fallback chain verified`);
+        }
+      }
+    } else if (allSources.websearch?.isPrimaryFor?.includes(id)) {
+      wsOk++;
+      ok(`${id}: websearch primary collector ✓`);
+    } else if (allSources.websearch?.isFallbackFor?.includes(id)) {
+      wsOk++;
+      ok(`${id}: websearch designated fallback ✓`);
+    } else if (!expectedSrc) {
+      wsOk++;
+      ok(`${id}: websearch source (no contract for this indicator)`);
+    }
+  }
+
+  console.log(`  WebSearch raw entries: ${wsChecked} | OK: ${wsOk} | Forbidden: ${wsForbidden}`);
+} else {
+  warn('raw.json missing — cannot cross-reference WebSearch entries');
+}
+
 // ── Summary ──────────────────────────────────────────────────────
 console.log(`\n=== Results: ${errors} error(s), ${warnings} warning(s) ===`);
 if (errors > 0) {

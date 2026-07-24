@@ -150,18 +150,19 @@
   },
 
   "websearch": {
-    "description": "WebSearch items — remaining after iFinD batch6 covers S2/M5/N5/R3/R4",
+    "description": "WebSearch items — remaining after iFinD batch6 covers S2/M5/N5/R3/R4. F1/F2 moved to disclosures (blocked_by_contract).",
     "items": [
-      { "id": "A1",  "name": "MOVE",           "query": "ICE BofA MOVE index June 2026 latest value",       "unit": "",   "critical": false },
-      { "id": "B4",  "name": "FedWatch",       "query": "CME FedWatch July 2026 rate hike probability",     "unit": "%",  "critical": false },
+      { "id": "A1",  "name": "MOVE",           "query": "ICE BofA MOVE index latest value",                "unit": "",   "critical": false },
+      { "id": "B4",  "name": "FedWatch",       "query": "CME FedWatch latest rate hike probability",      "unit": "%",  "critical": false },
       { "id": "F3",  "name": "下次FOMC",        "query": "FOMC meeting schedule 2026 next meeting date",    "unit": "",   "critical": false },
-      { "id": "N3",  "name": "Crane 100 MMF",   "query": "Crane 100 money fund yield index June 2026",      "unit": "%",  "critical": false },
-      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额 2026年6月",                   "unit": "亿元", "critical": false },
-      { "id": "F1",  "name": "联邦基金利率上限", "query": "Federal funds rate target upper bound July 2026",    "unit": "%",   "critical": true  },
-      { "id": "F2",  "name": "核心PCE YoY",       "query": "US core PCE price index year-over-year June 2026",  "unit": "%",   "critical": true  },
-
-      { "id": "N5",  "name": "美国MMF总规模",      "query": "ICI US money market fund total assets July 2026",   "unit": "T",   "critical": false },
-      { "id": "R3",  "name": "IG OAS",              "query": "US investment grade corporate bond OAS spread July 2026", "unit": "bp", "critical": false }
+      { "id": "N3",  "name": "Crane 100 MMF",   "query": "Crane 100 money fund yield index latest",       "unit": "%",  "critical": false },
+      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额",                            "unit": "亿元", "critical": false },
+      { "id": "N5",  "name": "美国MMF总规模",      "query": "ICI US money market fund total assets latest",    "unit": "T",   "critical": false },
+      { "id": "R3",  "name": "IG OAS",              "query": "US investment grade corporate bond OAS spread latest", "unit": "bp", "critical": false }
+    ],
+    "disclosures": [
+      { "id": "F1",  "name": "联邦基金利率上限", "query": "Federal funds rate target upper bound latest",     "unit": "%",   "critical": true,  "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)" },
+      { "id": "F2",  "name": "核心PCE YoY",       "query": "US core PCE price index year-over-year latest",   "unit": "%",   "critical": true,  "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)" }
     ]
   }
 }

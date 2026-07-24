@@ -100,6 +100,7 @@ function checkCurrentMd() {
 // If all listed outputs exist, the manual stage is considered complete.
 const manualOutputs = {
   compute: ['derived-snapshot.md', 'derived.json'],
+  'websearch-fill': ['websearch-results.json'],
   'reason-b': ['reasoning-snapshot.json'],
   report: ['report.md']
 };
@@ -164,7 +165,22 @@ for (let i = startIdx; i < stageOrder.length; i++) {
     // ── Manual (LLM) stage ──
     // If output already exists, skip this manual stage and continue pipeline.
     const outputs = manualOutputs[sid] || [];
-    const allOutputsExist = outputs.length > 0 && outputs.every(f => checkArtifact(f));
+    let allOutputsExist = outputs.length > 0 && outputs.every(f => checkArtifact(f));
+
+    // websearch-fill: require filledAt + raw.json has websearch results, not just template
+    if (sid === 'websearch-fill' && allOutputsExist) {
+      const wsResultsPath = path.join(RUN_DIR, 'websearch-results.json');
+      try {
+        const ws = JSON.parse(fs.readFileSync(wsResultsPath, 'utf8'));
+        if (!ws.filledAt) allOutputsExist = false;
+        else {
+          // Also verify reflow was run (raw.json has websearch source entries)
+          const rawCheck = JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'raw.json'), 'utf8'));
+          const hasWebsearchResults = Object.values(rawCheck.results || {}).some(r => r.source === 'websearch' && r.value != null);
+          if (!hasWebsearchResults && (ws.summary?.success || 0) > 0) allOutputsExist = false;
+        }
+      } catch (_) { allOutputsExist = false; }
+    }
 
     if (allOutputsExist) {
       console.log(`  (already complete — ${outputs.join(', ')} exists, skipping)`);
@@ -175,6 +191,9 @@ for (let i = startIdx; i < stageOrder.length; i++) {
     const missing = [];
     if (sid === 'compute') {
       if (!checkArtifact('raw-snapshot.md')) missing.push('raw-snapshot.md');
+    } else if (sid === 'websearch-fill') {
+      if (!checkArtifact('raw.json')) missing.push('raw.json');
+      if (!checkArtifact('provenance.json')) missing.push('provenance.json');
     } else if (sid === 'reason-b') {
       if (!checkArtifact('evidence-packet.json')) missing.push('evidence-packet.json');
       if (!checkArtifact('derived-snapshot.md')) missing.push('derived-snapshot.md');

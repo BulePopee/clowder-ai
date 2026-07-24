@@ -165,7 +165,7 @@ for (const [id, contract] of Object.entries(indicatorsToCheck)) {
         const restrictions = fbContract?.fallbackRestrictions?.[fb];
         if (restrictions?.forbiddenFor?.includes?.(id)) {
           ok(`${id}: fallback ${fb} correctly forbidden in source contract`);
-        } else if (restrictions?.allowedFor === 'non_critical_only' && contract.critical) {
+        } else if (Array.isArray(restrictions?.allowedFor) && restrictions.allowedFor.includes('non_critical_only') && contract.critical) {
           ok(`${id}: fallback ${fb} correctly restricted (non_critical_only vs critical)`);
         } else {
           fail(`${id}: indicator contract forbids fallback "${fb}" but source contract (${primarySource}) does not enforce this — add ${id} to ${primarySource}.fallbackRestrictions.${fb}.forbiddenFor`);
