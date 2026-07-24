@@ -46,7 +46,7 @@
 | N1 | US 3M T-Bill | 3.86 | 2026-07-20 | ifind |
 | N2 | SOFR | 3.59 | 2026-07-17 | ifind |
 | N6 | FRA-OIS利差 | -0.07 | 2026-07-17 | ifind |
-| N7 | TED利差 | 🔴 缺口 | - | ifind |
+| N7 | SOFR-IORB (TED已废弃) | 🔴 ifind null | -0.06bp(派生N2-N4) | ifind/compute |
 | N5 | MMF AUM | 7.893168999999999 | 2026-07-15 | ifind |
 
 ### F 美联储政策

@@ -1,46 +1,42 @@
 # ttfund-monitor 最新报告
 
-- 最新 runId: 20260721-1117-auto
-- 报告时间: 2026-07-21 03:22 UTC (11:22 CST)
+- 最新 runId: 20260724-1520-auto
+- 报告时间: 2026-07-24 07:35 UTC (15:35 CST)
 - 轮次: 常规轮 (routine)
-- 框架: v2.7.0 (P5-C depth probe hardening + Wind recovery)
-- 覆盖: 56 attempted | fresh:40 staleSuccess:3 staleGap:6 missing:4
-- WebSearch补采: 10项待补采 (B4/F3/N3/A3/N5等, F1/F2已由Wind覆盖)
+- 框架: v2.7.0
+- 覆盖: 56 total / 50 fresh / 4 staleGap / 0 missing
+- WebSearch: 7/7 filled / 0 pending / 2 blocked (F1/F2 by Wind contract)
 - Portfolio: S1=ok S2=empty S3=unavailable S4=empty
-- iFinD: 38 calls, 36 OK, 2 null (A1/N7)
-- Wind: 2 calls, 2 OK ✅ (F1=3.75%, F2=3.3654% June) — depth probe pass
 - Reason: A-layer ✅ (0 blockers, 2 warnings) + B-layer 3 blueprints ✅
-- Guard: 0 blockers / 2 warnings (G008: 6 staleGap / G009: portfolio data partial) → action_advice_allowed=true
-- 置信度: **中等** — 0个关键指标缺口，Wind F1/F2恢复→Fed政策评估权威性提升。降级因素：S1 VIX staleGap 4d、B4 FedWatch未采集
-- 操作建议: **HOLD 维持当前配置** — 防御触发仅1/5 (TIPS>2.0%)，组合事实防御(MMF 40.4%+债券15.5%=55.9%低风险)，FOMC 7/28-29仅7天→等待决议
-- 宏观判定: **Transitional (紧缩后期+地缘风险升温)** — TIPS 2.35%高位 + 曲线正利差+0.39bp + **Brent $89(+5.9% in 4d)新增通胀风险** + VIX 18.77(+3.1pt)情绪恶化
-- 防御信号: 1/5触发 (B8 TIPS>2.0%) + 曲线正利差削弱防御必要性 + 新增油价飙升但未触发新防御条件
-- 黄金判定: Moderately Bearish — 加权评分 **-0.665**(较上次-0.588恶化), CFTC **8.49:1**(较上次7.19:1拥挤加剧), COMEX $4014(+1.0%), 国内溢价从+1.09%转折价-0.44%
-- ⚠️ CFTC拥挤: 8.49:1创新高(上周7.19:1) — 投机多头在油价飙升时进一步加仓，回调风险加剧
-- 🔴 油价飙升: Brent $84→$89(+5.9% in 4d) — 本轮最大变化，地缘风险溢价(伊朗/霍尔木兹)，若>$90持续可能改变通胀预期路径
-- FOMC: 7/28-29(仅7天), F1=3.75%/F2=3.3654% June(Wind权威源), B4 FedWatch未采集
-- Wind: ✅ 恢复 — F1/F2从WebSearch升级至Wind权威源，F2首次提供6月核心PCE 3.3654%
-- 组合状态: 8只基金 ¥3,979.31(↓¥69.57/-1.7% vs 7/17), MMF 40.4%/黄金 15.1%/固收 15.5%/美股 5.8%/A股 14.6%/混合 8.6%/HQB 0%
-- 组合偏离: HQB 0%严重不足(但MMF 40.4%提供充足流动性), A股14.6%低于正常目标, 黄金超防御上限0.1pp(15.1%), 总资产缩水主因混合型宝盈↓¥42.81+股债齐跌
-- 资产变化: Nasdaq 28604(-3.4% vs 20MA, -5.9% from 6/18 high), 沪深300 4668(从4529反弹但-4.3% vs 20MA), 创业板3443(-16.0% vs 20MA, 自7/1暴跌19.2%)
-- 下一检查点: 7/30(FOMC会后), 事件触发: US 10Y>5.0%(FB-002)/TIPS>2.5%/Brent>$95持续3d/VIX>25/COMEX<$3800
-- 前置检查: ttfund=available iFinD=available Wind=available(✅ 恢复)
-- Depth probes: ttfund✅(G2 proxy可用) iFinD✅ Wind✅(F1/F2 OK)
-- Source contracts: validate-source-contract warn (4 fallback_violations: E1/X2/N2/M4 iFinD, 白名单需更新)
-- Temporal-diff: status=degraded | baseline=20260717-1520-auto (4d prior, degraded) | 21 compared, 0 new, 0 lost, 2 divergent | regime direction consistent
-- Feedback: 2 cross_refs (FB-001: E2 invalidate macro-regime, FB-002: B2>5.0% trigger portfolio) | action_advice_allowed=true
-- P5-C: Wind恢复→Fed数据权威性提升, ttfund G2 proxy机制有效
-- 完整报告: runs/20260721-1117-auto/report.md
+- Guard: 0 blockers / 2 warnings (G008: 4 staleGap / G009: portfolio data partial) → action_advice_allowed=true
+- 置信度: **Medium** — 数据覆盖率极高(50 fresh/0 missing)但市场极端事件(oil shock+FOMC 5天后)使宏观判断不确定
+- 操作建议: **HOLD 维持不动** — 防御触发2/7(TIPS>2.0%+Brent>$100)，组合事实防御(MMF 33.3%+债券14.9%=48.2%低风险)，FOMC 7/28-29仅5天→等待决议
+- 宏观判定: **Tightening Late-Cycle with Oil Shock** — TIPS 2.43%(+8bp)限制性强化 + Brent $101(+20.3% from Jul 17 $84)突破$100心理关口 + 伊朗/霍尔木兹地缘风险 + FOMC 5天后
+- 防御信号: 2/7触发 (TIPS>2.0% + Brent>$100[新增]) + TIPS接近2.5%触发线
+- 黄金判定: Moderately Bearish — 加权评分 **-0.72**(恶化 from -0.665), CFTC **8.49:1**(极端拥挤), COMEX $4048(+0.8%), 结构性+地缘买盘战胜利率压制
+- 🔴 油价冲击: Brent $84→$101(+20.3%) — 本轮核心变化，伊朗/霍尔木兹地缘升级驱动，改变通胀+利率路径预期
+- 🟡 VIX悖论: VIX 16.64(-2.13) — 油价$101情况下反直觉下降，市场可能underpricing伊朗尾部风险
+- 利率: US 2Y 4.37%(+16bp) / US 10Y 4.71%(+11bp) / TIPS 2.43%(+8bp) — 短期利率大幅上行反映市场重定价Fed加息概率
+- FOMC: 7/28-29(仅5天), F1=3.75%/F2=3.412% June(Wind权威源), B4 FedWatch 34.7% Jul / 82% Sep
+- 组合状态: 8只基金 ¥4,510.94(+13.4% vs 7/21 ¥3,979.31 — 主要为市场估值变动), MMF 33.3%/黄金 15.2%/固收 14.9%/美股 5.5%/A股 15.1%/混合 8.7%/其他 7.3%/HQB 0%
+- 组合偏离: HQB 0%严重不足(但MMF 33.3%提供流动性), 黄金微超防御上限0.2pp(15.2%)
+- 资产变化: Nasdaq 28455(-0.5%), 沪深300 4649(-0.6%), 创业板3481, 中美利差-2.97bp进一步扩大
+- 下一检查点: 2026-07-30 (FOMC 7/28-29会后), 失效条件: TIPS>2.5%/Brent>$105+FOMC加息/VIX>25/FOMC意外加息50bp
+- 前置检查: ttfund=available iFinD=available Wind=available
+- Source contracts: validate-source-contract-post PASS — 0 errors, 1 warning (A1 ifind null → WebSearch fallback OK)
+- P5-C: Wind F1/F2恢复✅, WebSearch 7/7 filled首次实现0 pending
+- 完整报告: runs/20260724-1520-auto/report.md
 
 ---
 ## P5 系列验收
 
 | 修复项 | 状态 | 效果 |
 |--------|:--:|------|
-| P4-A unit normalization | ✅ | G7 SPDR oz→吨 auto-normalized, unit-normalizer.cjs validated |
+| P4-A unit normalization | ✅ | G7 SPDR oz→吨 auto-normalized |
 | P4-B run contract | ✅ | 17-stage topology + verify.cjs |
 | P4-C source adapter contract | ✅ | source-contracts.json + probe gate + validate-source-contract |
 | P5-B indicator onboarding contract | ✅ | indicator-contracts.json + validate-indicator-contract 7-dimension gate |
-| P5-C depth probe hardening | ✅ | ttfund/iFinD/Wind real-data endpoint probes; exit 3=degraded continue |
-| P5-C data gap root cause fix (7/17) | ✅ | 4 root causes fixed — ttfund datePath(5), iFinD kline query(1), Wind→iFinD migration(5), WebSearch patch(9) |
-| P5-C Wind recovery (7/21) | ✅ | Wind depth probe pass — F1=3.75%/F2=3.3654% June from authoritative source |
+| P5-C depth probe hardening | ✅ | ttfund/iFinD/Wind real-data endpoint probes |
+| P5-C data gap root cause fix | ✅ | 4 root causes fixed |
+| P5-C Wind recovery | ✅ | Wind depth probe pass — F1=3.75%/F2=3.412% June |
+| P5-D WebSearch reflow pipeline | ✅ | 7/7 filled + 2 blocked, dual-gate validated, 0 pending (首次) |

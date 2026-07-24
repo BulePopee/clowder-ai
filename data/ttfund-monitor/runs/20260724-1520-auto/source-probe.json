@@ -1,7 +1,7 @@
 {
   "meta": {
-    "checkedAt": "2026-07-21T08:07:32.800Z",
-    "runId": "20260721-1117-auto",
+    "checkedAt": "2026-07-24T07:20:22.656Z",
+    "runId": "20260724-1520-auto",
     "version": "1.1.0",
     "pipelineVersion": "2.8.0"
   },
@@ -33,7 +33,7 @@
             "schemaOk": true,
             "valueOk": true,
             "dateOk": true,
-            "value": "4.6"
+            "value": "4.71"
           },
           {
             "checkId": "ttfund-macro_fiscal-trade_date",
@@ -43,7 +43,7 @@
             "schemaOk": true,
             "valueOk": true,
             "dateOk": true,
-            "value": "2026-07-21"
+            "value": "2026-07-23"
           },
           {
             "checkId": "ttfund-gold_quotes-au9999-close",
@@ -53,7 +53,7 @@
             "schemaOk": true,
             "valueOk": true,
             "dateOk": true,
-            "value": "886.95"
+            "value": "895.67"
           }
         ],
         "failures": [],
@@ -85,7 +85,7 @@
             "schemaOk": true,
             "valueOk": true,
             "dateOk": true,
-            "value": "2.35",
+            "value": "2.43",
             "failureClass": null,
             "details": null
           },
@@ -96,7 +96,7 @@
             "schemaOk": true,
             "valueOk": true,
             "dateOk": true,
-            "value": "2026-07-20",
+            "value": "2026-07-23",
             "failureClass": null,
             "details": null
           }

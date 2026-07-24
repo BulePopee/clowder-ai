@@ -12,7 +12,7 @@ Execute these 10 WebSearch queries. For each: record value, date, source URL.
 | A3 | 北向成交额 | `北向资金 今日成交额 2026年6月` | 亿元 | no |
 | F1 | 联邦基金利率上限 | `Federal funds rate target upper bound July 2026` | % | yes |
 | F2 | 核心PCE YoY | `US core PCE price index year-over-year June 2026` | % | yes |
-| N7 | TED利差 | `TED spread July 2026 latest value` | % | no |
+| N7 | ~~TED利差~~ → SOFR-IORB | 已废弃——N7已替换为派生指标(N2-N4) | — | DEPRECATED |
 | N5 | 美国MMF总规模 | `ICI US money market fund total assets July 2026` | T | no |
 | R3 | IG OAS | `US investment grade corporate bond OAS spread July 2026` | bp | no |
 
@@ -60,11 +60,11 @@ Execute these 10 WebSearch queries. For each: record value, date, source URL.
 - **Source URL**: 
 - **Notes**: 
 
-### N7 — TED利差
-- **Value**: 
-- **Date**: 
-- **Source URL**: 
-- **Notes**: 
+### N7 — SOFR-IORB (TED利差已废弃)
+- **Status**: DEPRECATED — N7已从TED利差(LIBOR)替换为SOFR-IORB派生指标(N2-N4=-0.06bp)。不再需要WebSearch补采。
+- **Value**: -0.06bp (derived)
+- **Date**: 2026-07-17
+- **Source URL**: computed (N2=3.59% - N4=3.65%)
 
 ### N5 — 美国MMF总规模
 - **Value**: 

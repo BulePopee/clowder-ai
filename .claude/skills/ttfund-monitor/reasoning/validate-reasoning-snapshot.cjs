@@ -1,8 +1,23 @@
-// reasoning/validate-reasoning-snapshot.cjs — ttfund-monitor v2.5.1
+// reasoning/validate-reasoning-snapshot.cjs — ttfund-monitor v2.7.2
 // Structural + semantic validation of reasoning-snapshot.json AND reasoning-snapshot.md.
 // Usage: node reasoning/validate-reasoning-snapshot.cjs --runId 20260630-1412-ragdoll-vzes
 // Exit code 0 = pass, 1 = blocked issues
 // P2-B: structural pass via reasoning/schema.json runs before semantic checks.
+//
+// v2.7.1 — Action leak v2: context-aware, not keyword-ban.
+//   Decision context (action_gate.reason, recommendation): action words still checked when blocked.
+//   Scenario context (scenarios[]): action words ALLOWED if trigger/probability present — these are
+//     conditional futures, not current recommendations. Scenarios describe "IF X happens THEN Y is best."
+//   Analysis context (weighted_score, claim, evidence): action words allowed — factor assessment.
+//   New: scenario quality check (trigger non-empty, probability present).
+//   New: action gate consistency check (blocked reason must be substantive, not just a flag).
+// v2.7.2 — Blocker coverage: scenario conclusions must cover current gate blockers.
+//   Parses action_gate.action_reason for blocker themes (CFTC/TIPS/DXY/仓位/FOMC/VIX),
+//   checks that scenario trigger addresses enough of them relative to conclusion strength.
+//   STRONG (最佳时机/best time): must cover 100% of detected blockers → error if not.
+//   MODERATE (加仓/buy/sell): must cover ≥50% → error if not, warning if below.
+//   WEAK (重新评估/re-assess): must cover ≥25% → warning only.
+//   CFTC matchTrigger uses CFTC-specific terms only (no bare 仓位 to avoid conflating with 仓位上限).
 
 const fs = require('fs');
 const path = require('path');
@@ -122,6 +137,33 @@ const allStrings = collectStrings(snapshot, 'root');
 const isGoldBlocked = snapshot.gold_rate_conflict?.action_gate?.action_allowed === false;
 const isPortfolioBlocked = snapshot.portfolio_action_gate?.action_advice_allowed === false;
 
+// ── Context classification (v2.7.1) ──────────────────────────
+// Decision: current actionable conclusion — still enforce action words when blocked.
+function isDecisionPath(strPath) {
+  return /action_gate\.(action_)?(reason|claim)/.test(strPath) ||
+         /\bportfolio_action_gate\.recommendation\b/.test(strPath) ||
+         /\bportfolio_action_gate\.action_gate\.reason\b/.test(strPath);
+}
+// Scenario: conditional future — "IF trigger THEN implication". Action words allowed.
+function isScenarioPath(strPath) {
+  return /scenarios\[\d+\]/.test(strPath) || /\bscenario\b/i.test(strPath);
+}
+// Analysis: factor assessment, evidence, model conflict — descriptive, action words allowed.
+function isAnalysisPath(strPath) {
+  return /weighted_score\./.test(strPath) ||
+         /\.claim\b/.test(strPath) ||
+         /model_conflict\./.test(strPath) ||
+         /supporting_evidence|opposing_evidence/.test(strPath) ||
+         /rationale\b/.test(strPath) ||
+         /steps\./.test(strPath) ||
+         /invalidate_if/.test(strPath);
+}
+// Conditions-to-act: these are future-triggered, not current — allow action words.
+function isConditionalPath(strPath) {
+  return /conditions_to_act/.test(strPath) ||
+         /deviation_analysis/.test(strPath);
+}
+
 // ── Check 1: Forbidden MMF language (all strings, all contexts) ──
 const forbiddenMmPatterns = [
   // English
@@ -157,7 +199,9 @@ for (const { path: strPath, value } of allStrings) {
   }
 }
 
-// ── Check 2: Action words in blocked sections ────────────────
+// ── Check 2: Action words in blocked sections (context-aware v2.7.1) ──
+// Decision paths in blocked sections: action words still FORBIDDEN.
+// Scenario/analysis/conditional paths: action words ALLOWED (describing future conditions, not current orders).
 const actionWords = [
   { pattern: /\badd\b/i, label: 'add' },
   { pattern: /加仓/, label: '加仓' },
@@ -188,7 +232,7 @@ function isConfidenceContext(str) {
   return /reduce\s+(?:gold\s+)?conviction|reduce\s+confidence/i.test(str);
 }
 
-// Check JSON strings under blocked sections
+// Check JSON strings under blocked sections — only DECISION paths
 const blockedPaths = [];
 if (isGoldBlocked) blockedPaths.push('gold_rate_conflict');
 if (isPortfolioBlocked) blockedPaths.push('portfolio_action_gate');
@@ -196,22 +240,173 @@ if (isPortfolioBlocked) blockedPaths.push('portfolio_action_gate');
 for (const blocked of blockedPaths) {
   for (const { path: strPath, value } of allStrings) {
     if (!strPath.includes(blocked)) continue;
+    // v2.7.1: only scan decision paths in blocked sections
+    if (isScenarioPath(strPath) || isAnalysisPath(strPath) || isConditionalPath(strPath)) continue;
     for (const { pattern, label } of actionWords) {
       if (pattern.test(value) && !isNegated(value) && !isConfidenceContext(value)) {
-        errors.push(`ACTION_LEAK(JSON ${strPath}): ${blocked} blocked but "${label}" — "${value.slice(0, 150)}"`);
+        errors.push(`ACTION_LEAK(DECISION ${strPath}): ${blocked} blocked but "${label}" — "${value.slice(0, 150)}"`);
       }
     }
   }
 }
 
-// ── Check 3: JSON scenario portfolio_implication ─────────────
+// ── Check 3: Scenario quality (replaces keyword-ban v2.7.1) ─────────────
+// Scenarios with action implications must have concrete triggers.
+// This checks substance, not mechanical keyword blocking.
+if (isGoldBlocked || isPortfolioBlocked) {
+  const allScenarios = [
+    ...(snapshot.gold_rate_conflict?.scenarios || []).map((s, i) => ({ s, i, section: 'gold' })),
+    ...(snapshot.portfolio_action_gate?.scenarios || []).map((s, i) => ({ s, i, section: 'portfolio' })),
+  ];
+
+  for (const { s, i, section } of allScenarios) {
+    const impl = s.portfolio_implication || '';
+    const trigger = s.trigger || '';
+    const prob = s.probability || '';
+    const goldImpact = s.gold_impact || '';
+
+    // Check: trigger must be non-empty (every scenario needs a trigger regardless)
+    if (!trigger.trim()) {
+      errors.push(`SCENARIO_QUALITY(${section}[${i}]): missing trigger — scenario describes an outcome without a clear triggering condition`);
+    }
+
+    // Check: probability must be present
+    if (!prob) {
+      warnings.push(`SCENARIO_QUALITY(${section}[${i}]): missing probability — scenario \"${s.scenario || '?'}\" has no probability assessment`);
+    }
+
+    // Check: if scenario contains action implications, verify trigger is concrete
+    const hasActionImplication = actionWords.some(({ pattern }) => pattern.test(impl) || pattern.test(goldImpact));
+    if (hasActionImplication && trigger.trim()) {
+      // Trigger is present — scenario is a proper conditional. Check it's substantive.
+      if (trigger.length < 8) {
+        warnings.push(`SCENARIO_QUALITY(${section}[${i}]): trigger is too short (${trigger.length} chars) — may not be a concrete condition: "${trigger}"`);
+      }
+      // Verify conditional framing in implication (若/if/when/after/一旦/触发/条件)
+      const hasConditionalFraming = /若|如果|当|一旦|触发|条件|if\b|when\b|after\b|upon\b/i.test(impl);
+      if (!hasConditionalFraming) {
+        warnings.push(`SCENARIO_QUALITY(${section}[${i}]): strong action implication but no conditional framing in text — consider adding \"若...\" / \"if...\" to clarify this is conditional: "${impl.slice(0, 120)}"`);
+      }
+    }
+
+    // Error: action implication WITHOUT trigger — this looks like a disguised current recommendation
+    if (hasActionImplication && !trigger.trim()) {
+      errors.push(`SCENARIO_QUALITY(${section}[${i}]): action implication without trigger — \"${impl.slice(0, 120)}\" reads as a current recommendation disguised as a scenario`);
+    }
+  }
+}
+
+// ── Check 3.5: Action gate consistency (v2.7.1) ─────────────────────
+// If action_allowed=false, the action_reason must be substantive (not just a flag).
 if (isGoldBlocked) {
-  const scenarios = snapshot.gold_rate_conflict?.scenarios || [];
-  for (let i = 0; i < scenarios.length; i++) {
-    const impl = scenarios[i].portfolio_implication || '';
-    for (const { pattern, label } of actionWords) {
-      if (pattern.test(impl) && !isNegated(impl)) {
-        errors.push(`ACTION_LEAK(scenario[${i}]): gold blocked but portfolio_implication "${label}" — "${impl}"`);
+  const reason = snapshot.gold_rate_conflict?.action_gate?.action_reason || '';
+  if (reason.length < 20) {
+    warnings.push(`GATE_CONSISTENCY(gold): action_allowed=false but action_reason is very short (${reason.length} chars) — may not explain WHY: "${reason}"`);
+  }
+  // Check: blocked reason should not itself contain action words (would be contradictory)
+  for (const { pattern, label } of actionWords) {
+    if (pattern.test(reason) && !isNegated(reason)) {
+      errors.push(`GATE_CONSISTENCY(gold): action_allowed=false but action_reason contains "${label}" — contradictory: "${reason.slice(0, 150)}"`);
+    }
+  }
+}
+if (isPortfolioBlocked) {
+  const reason = snapshot.portfolio_action_gate?.action_gate?.reason || '';
+  if (reason.length < 20) {
+    warnings.push(`GATE_CONSISTENCY(portfolio): action_advice_allowed=false but reason is very short (${reason.length} chars) — may not explain WHY: "${reason}"`);
+  }
+}
+
+// ── Check 3.6: Scenario trigger vs blocker coverage (v2.7.2) ─────────────
+// Strong conclusions in blocked sections must have triggers that cover the
+// current action_gate blockers — not just one of many.
+// "CFTC出清后是加仓黄金的最佳时机" is wrong when TIPS/DXY/FOMC/仓位 still block.
+if (isGoldBlocked) {
+  const reason = snapshot.gold_rate_conflict?.action_gate?.action_reason || '';
+  const blockerCategories = [
+    {
+      name: 'CFTC/仓位拥挤',
+      detect: /CFTC|仓位拥挤|多头.*空头|多头.*比|positioning|crowded|crowding/i,
+      matchTrigger: /CFTC|多头.{0,5}空头|出清|flush|positioning.*(?:ease|drop|fall|decline|reduce|normalize)/i,
+    },
+    {
+      name: 'TIPS/实际利率',
+      detect: /TIPS|实际利率|real\s*(rate|yield)|利率.*(?:压力|上行|新高|上升)/i,
+      matchTrigger: /TIPS|实际利率|利率.*(?:回落|下行|见顶|到顶)|ease|dovish|real\s*rate.*(?:down|fall|drop|decline)/i,
+    },
+    {
+      name: 'DXY/美元',
+      detect: /DXY|美元|USD|dollar|走强|升值/i,
+      matchTrigger: /DXY|美元|USD|dollar|走弱|贬值|疲软|weaken|decline|break.*below/i,
+    },
+    {
+      name: '仓位上限/超配',
+      detect: /上限|超配|overweight|仓位.{0,5}(?:限|满|高)|allocation\s*limit/i,
+      matchTrigger: /仓位.{0,5}(?:降至|下调|减至|调整)|上限.{0,5}(?:调整|放宽|下降)|allocation.*(?:drop|reduce|cut|limit.*ease)/i,
+    },
+    {
+      name: 'FOMC/政策不确定性',
+      detect: /FOMC|政策|决议|加息|利率路径|确认|uncertain|会后/i,
+      matchTrigger: /FOMC|政策|决议|利率.*路径|确认|会后|鸽|dov|路径.*明/i,
+    },
+    {
+      name: '流动性/恐慌(VIX)',
+      detect: /VIX|波动率|恐慌|volatility|panic/i,
+      matchTrigger: /VIX|波动率|恐慌.*(?:消退|解除|结束|缓和)|volatility.*(?:down|fall|drop|subside|ease)/i,
+    },
+  ];
+
+  // Determine which blockers are active in the action_reason
+  const activeBlockers = blockerCategories.filter(c => c.detect.test(reason));
+  const totalBlockers = activeBlockers.length;
+
+  if (totalBlockers > 0) {
+    const scenarios = snapshot.gold_rate_conflict?.scenarios || [];
+    for (let i = 0; i < scenarios.length; i++) {
+      const trigger = scenarios[i].trigger || '';
+      const impl = scenarios[i].portfolio_implication || '';
+      if (!trigger.trim()) continue; // already caught by Check 3
+
+      // Grade conclusion strength
+      let conclusionStrength = 'none';
+      if (/最佳时机|best\s*(time|opportunity|moment)|ideal\s*(time|moment)|最优|perfect\s*(time|moment)/i.test(impl)) {
+        conclusionStrength = 'STRONG';
+      } else if (actionWords.some(({ pattern }) => pattern.test(impl))) {
+        conclusionStrength = 'MODERATE';
+      } else if (/重新评估|观望|re.?assess|re.?evaluate|重新考虑/i.test(impl)) {
+        conclusionStrength = 'WEAK';
+      }
+
+      if (conclusionStrength === 'none') continue;
+
+      // Calculate blocker coverage
+      const blockersMatched = [];
+      const blockersUnmatched = [];
+      for (const blocker of activeBlockers) {
+        if (blocker.matchTrigger.test(trigger)) {
+          blockersMatched.push(blocker.name);
+        } else {
+          blockersUnmatched.push(blocker.name);
+        }
+      }
+      const coverage = blockersMatched.length / totalBlockers;
+      const pct = Math.round(coverage * 100);
+
+      // Threshold by strength
+      const threshold = conclusionStrength === 'STRONG' ? 1.0 :
+                       conclusionStrength === 'MODERATE' ? 0.50 : 0.25;
+
+      if (coverage < threshold) {
+        const msg = `BLOCKER_COVERAGE(gold[${i}]): ${conclusionStrength} conclusion "${impl.slice(0, 80)}" — ` +
+          `trigger covers only ${blockersMatched.length}/${totalBlockers} blockers (${pct}%, need ${Math.round(threshold * 100)}%). ` +
+          `Unresolved: ${blockersUnmatched.join(', ')}.`;
+        // STRONG: all blockers must be covered → any gap is an error
+        // MODERATE/WEAK: partial coverage is acceptable → warning
+        if (conclusionStrength === 'STRONG') {
+          errors.push(msg);
+        } else {
+          warnings.push(msg);
+        }
       }
     }
   }
@@ -236,12 +431,20 @@ if (mdText) {
         .replace(/(?:do\s+not|don'?t)\s+\w+/gi, '___NEG___')
         .replace(/仅重新评估/g, '___NEG___');
 
+      // v2.7.1: allow action words in scenario context (conditional framing within 60 chars before)
       for (const { pattern, label } of actionWords) {
         if (pattern.test(scrubbed)) {
           const m = goldSection.match(new RegExp(`.{0,60}${pattern.source}.{0,60}`, 'i'));
           const ctx = m?.[0]?.trim() || '?';
           if (!isConfidenceContext(ctx)) {
-            errors.push(`ACTION_LEAK(MD gold): gold blocked but "${label}" — "${ctx}"`);
+            // Check if action word appears in conditional/scenario context
+            const before = goldSection.slice(Math.max(0, goldSection.indexOf(ctx) - 80), goldSection.indexOf(ctx));
+            const isConditionalMd = /情景|scenario|若\s|如果|当.{0,5}时|一旦|触发|条件|if\s|when\s|after\s/i.test(before);
+            if (isConditionalMd) {
+              warnings.push(`ACTION_SCENARIO(MD gold): gold blocked but "${label}" in conditional context — "${ctx.slice(0, 120)}"`);
+            } else {
+              errors.push(`ACTION_LEAK(MD gold): gold blocked but "${label}" in non-conditional context — "${ctx.slice(0, 120)}"`);
+            }
           }
         }
       }
@@ -316,7 +519,7 @@ if (evidence) {
 }
 
 // ── Output ───────────────────────────────────────────────────
-console.log('=== reasoning-snapshot validator v1.3.0 ===');
+console.log('=== reasoning-snapshot validator v2.7.2 ===');
 console.log(`runId: ${runId}`);
 console.log(`scanned: ${schemaNote} | ${allStrings.length} JSON strings + ${mdText ? 'MD' : 'MD (missing)'}`);
 console.log(`blocked: gold=${isGoldBlocked} portfolio=${isPortfolioBlocked}\n`);
@@ -334,6 +537,8 @@ if (warnings.length > 0) {
 }
 if (errors.length === 0 && warnings.length === 0) {
   console.log('  ✅ All checks passed (structural + semantic).');
+} else if (errors.length === 0) {
+  console.log('  ✅ Structural + semantic checks passed (with warnings).');
 }
 
 console.log(`\nResult: ${errors.length} errors, ${warnings.length} warnings`);

@@ -1,12 +1,12 @@
 {
   "meta": {
     "version": "1.0.0",
-    "builtAt": "2026-07-24T01:47:06.671Z",
-    "runId": "20260721-1117-auto",
+    "builtAt": "2026-07-24T07:38:44.634Z",
+    "runId": "20260724-1520-auto",
     "inputs": {
-      "reasoningSnapshot": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260721-1117-auto\\reasoning-snapshot.json",
-      "temporalDiff": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260721-1117-auto\\temporal-diff.json",
-      "evidencePacket": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260721-1117-auto\\evidence-packet.json"
+      "reasoningSnapshot": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1520-auto\\reasoning-snapshot.json",
+      "temporalDiff": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1520-auto\\temporal-diff.json",
+      "evidencePacket": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1520-auto\\evidence-packet.json"
     },
     "temporalDiffStatus": "degraded"
   },
@@ -14,11 +14,11 @@
     {
       "id": "FB-001",
       "from_blueprint": "temporal-diff",
-      "from_field": "directional_changes[E2]",
+      "from_field": "directional_changes[B2]",
       "from_value": {
-        "indicator": "E2",
+        "indicator": "B2",
         "direction": "up",
-        "delta": 149.61,
+        "delta": 0.11,
         "magnitude": "significant"
       },
       "to_blueprint": "macro-regime",
@@ -31,19 +31,43 @@
         "delta": 1,
         "singleCap": 3,
         "cumulativeCap": 3,
-        "value": "E2 (沪深300) up +149.61 in 7d — may indicate regime shift starting",
-        "reason": "E2 showed significant up movement (+149.61) over 7d"
+        "value": "B2 (US 10Y) up +0.11pp in 0d — may indicate regime shift starting",
+        "reason": "B2 showed significant up movement (+0.11pp) over 0d"
       }
     },
     {
       "id": "FB-002",
       "from_blueprint": "temporal-diff",
+      "from_field": "directional_changes[B3]",
+      "from_value": {
+        "indicator": "B3",
+        "direction": "up",
+        "delta": 0.16,
+        "magnitude": "significant"
+      },
+      "to_blueprint": "macro-regime",
+      "to_field": "macro_regime.invalidate_if",
+      "signal": "",
+      "adjustment": {
+        "type": "add_invalidation_condition",
+        "target": "macro_regime.invalidate_if",
+        "unit": "text",
+        "delta": 1,
+        "singleCap": 3,
+        "cumulativeCap": 3,
+        "value": "B3 (US 2Y) up +0.16pp in 0d — may indicate regime shift starting",
+        "reason": "B3 showed significant up movement (+0.16pp) over 0d"
+      }
+    },
+    {
+      "id": "FB-003",
+      "from_blueprint": "temporal-diff",
       "from_field": "threshold_crossings.approaching[0]",
       "from_value": {
         "indicator": "B2",
         "threshold": "US 10Y > 5.0%",
-        "currentValue": 4.6,
-        "distance": "8%"
+        "currentValue": 4.71,
+        "distance": "6%"
       },
       "to_blueprint": "portfolio-action-gate",
       "to_field": "portfolio_action_gate.action_gate.conditions_to_act",
@@ -56,23 +80,23 @@
         "singleCap": 3,
         "cumulativeCap": 3,
         "value": "If B2 US 10Y > 5.0% → defensive trigger may activate, re-evaluate portfolio stance",
-        "reason": "B2 is 8% threshold US 10Y > 5.0%"
+        "reason": "B2 is 6% threshold US 10Y > 5.0%"
       }
     }
   ],
   "adjustment_summary": {
-    "total": 2,
+    "total": 3,
     "by_type": {
-      "add_invalidation_condition": 1,
+      "add_invalidation_condition": 2,
       "add_condition_to_act": 1
     },
     "by_target_blueprint": {
-      "macro-regime": 1,
+      "macro-regime": 2,
       "portfolio-action-gate": 1
     },
     "cumulative_caps": {
       "macro_regime.invalidate_if": {
-        "totalDelta": 1,
+        "totalDelta": 2,
         "cap": 3,
         "ok": true
       },

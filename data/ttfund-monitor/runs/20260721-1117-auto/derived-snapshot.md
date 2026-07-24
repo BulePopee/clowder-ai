@@ -1,7 +1,7 @@
-# 衍生指标 · 2026-07-21 03:32
+# 衍生指标 · 2026-07-24 01:46
 
 ## 元信息
-- 计算时间：2026-07-21T03:32:40.041Z
+- 计算时间：2026-07-24T01:46:55.664Z
 - 数据基础：raw-snapshot.md (56 indicators)
 - 公式来源：compute/formulas.md (v2.5.2)
 
@@ -38,7 +38,8 @@
 
 | 编号 | 名称 | 公式 | 值 | 单位 | 状态 |
 |:--:|------|------|------|------|------|
-| D10 | SOFR-IORB | N2 - N4 | -0.06 | bp | staleDerived |
+| D10 | SOFR-IORB | N2 - N4 | -6.00 | bp | staleDerived |
+| N7 | SOFR-IORB利差 | N2 - N4 | -6.00 | bp | staleDerived |
 
 ## 黄金衍生
 
@@ -72,14 +73,14 @@
 | D21 | Credit Spread AAA-Govt 3Y | A2a - A2g | 0.3 | bp | freshDerived |
 | D22 | TIPS+BE vs Nominal | B8+B9 vs B2 | 4.60 | % | freshDerived |
 | D23 | Gold Futures-Spot Basis | G5 - G1_pm | 🔴 缺失 | 元/克 | missingDerived |
-| D24 | MMF CN-US Spread | N3 - M3 | 🔴 缺失 | bp | missingDerived |
+| D24 | MMF CN-US Spread | N3 - M3 | 1.9 | bp | freshDerived |
 
 ## 汇总
 
 | 类别 | 数量 |
 |------|------|
-| freshDerived | 14 |
-| staleDerived | 2 |
-| missingDerived | 8 |
+| freshDerived | 15 |
+| staleDerived | 3 |
+| missingDerived | 7 |
 
-> 总公式数: 24 | freshDerived: 14 | staleDerived: 2 | missingDerived: 8
+> 总公式数: 25 | freshDerived: 15 | staleDerived: 3 | missingDerived: 7

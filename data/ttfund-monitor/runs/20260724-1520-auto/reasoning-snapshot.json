@@ -1,0 +1,139 @@
+{
+  "meta": {
+    "runId": "20260724-1520-auto",
+    "generatedAt": "2026-07-24T07:35:00.000Z",
+    "framework": "ttfund-monitor v2.7.0 Reason B-layer",
+    "blueprints_rendered": ["macro-regime", "gold-rate-conflict", "portfolio-action-gate"],
+    "blueprints_degraded": [],
+    "guard_blockers": [],
+    "guard_warnings": ["G008: 辅助指标 S1, N2, B10, N6 数据过期(staleGap)", "G009: 组合收益/分析数据部分缺失(S2 empty, S3 unavailable)"],
+    "action_advice_allowed": true,
+    "data_coverage": "50 fresh / 4 staleGap / 0 missing / 56 total / 0 websearchPending / 7 websearchFilled / 2 blocked(F1,F2)"
+  },
+  "macro_regime": {
+    "regime_claim": "Tightening late-cycle with oil-driven inflation shock — TIPS 2.43%新高达限制性强化，曲线维持正利差+0.34bp确认紧缩后期。Brent原油3日暴涨$84→$101(+20.3% from Jul 17 low)突破$100心理关口——伊朗/霍尔木兹地缘风险推动的油价冲击正在改变通胀预期路径。短期利率大幅上行(US 2Y +16bp to 4.37%、3M T-Bill +9bp to 3.95%)反映市场对Fed被迫加息的定价。FOMC 7/28-29仅剩5天——这是本轮最关键的政策节点。",
+    "confidence": "medium",
+    "rationale": "TIPS 2.43%限制性强化(较上周+8bp) + 曲线正利差+0.34bp + Core PCE 3.412%(June Wind更新)远高于2%目标 = 紧缩后期不变。但核心新增变量：Brent突破$100(+20.3% from $84 on Jul 17)是regime-level change——地缘风险(伊朗/霍尔木兹)推动的油价冲击远超上周$89水平。B9 Breakeven升至2.28%(+3bp)、短期利率大幅上行(2Y +16bp)表明市场正快速重定价Fed政策路径。VIX反直觉降至16.64(-2.13)——市场选择'担心但不对冲'(buy the rumor of oil shock but not yet hedging tail risk)。Nasdaq继续小幅下滑至28455(-0.5%)、HS300 4649(A股从暴跌反弹至震荡)。FOMC 7/28-29仅剩5天→7月加息概率34.7% vs 9月82%——市场定价7月按兵不动、9月行动的基准情景。",
+    "steps": {
+      "step1_real_rate": { "assessment": "限制性强化", "tips": "2.43%", "trend": "上升(+8bp from 2.35%)", "breakeven": "2.28%", "driver": "实际利率+通胀预期双双上行——油价冲击同时推高real rate(紧缩预期)和breakeven(通胀风险)", "implication": "金融条件进一步收紧——TIPS 2.43%接近2.5%触发线，若突破将确认Risk-Off" },
+      "step2_usd_liquidity": { "assessment": "温和偏紧", "dxy": "101.44", "sofr": "3.62%", "iorb": "3.65%", "spread": "-0.03bp", "china_dr007": "1.4323%", "implication": "SOFR仍略低于IORB，流动性正常；DXY升至101.44(+0.48)增加外部压力；短期利率上行(3M T-Bill 3.95%)反映加息预期" },
+      "step3_risk_sentiment": { "assessment": "矛盾信号——油价冲击 vs VIX下降", "vix": "16.64", "fg": "39.69", "fedwatch": "34.7% hike prob Jul + 82% Sep (CME FedWatch, Jul 24)", "nasdaq": "28454.81", "implication": "VIX反直觉降至16.64(上周18.77)——市场在油价>$100情况下仍未恐慌，可能反映了'油价冲击是短暂的'或'Fed会控制通胀'的信念。但F&G仍在Fear区间(39.69→接近40边界)。Nasdaq从6/18高点30406回落6.4%。AAII从32.87升至42.30——散户情绪改善。" },
+      "step4_china_factors": { "assessment": "弱势震荡", "hs300": "4649.19 (7/23)", "chinext": "3480.87", "cny": "6.7906", "cn_us_spread": "-2.97bp", "implication": "HS300从上周4678小幅回落至4649，仍在20MA(4879)以下。创业板3481。CNY 6.7906 stable。中美利差-2.97bp(CN 10Y 1.7453% - US 10Y 4.71%)进一步扩大——资本外流压力增加。A股从暴跌(7/16-17)后进入弱势震荡格局。" },
+      "step5_regime_classification": { "classification": "Tightening Late-Cycle with Oil Shock", "rationale": "紧缩后期基本格局不变(TIPS 2.43%+曲线正利差+0.34bp)。核心变化：Brent $84→$101(+20.3%)是regime-level shock——不仅推高通胀预期(B9 2.25→2.28%)，更驱动市场重定价Fed路径(2Y +16bp、FedWatch Sep 82%)。油价>$100改变了'Fed何时降息'的讨论框架→现在的问题是'Fed是否需要加息'。但信用利差仍极窄(HY OAS 2.68%/IG OAS 80bp)、VIX 16.64说明市场尚未定价全面Risk-Off。FOMC 7/28-29(仅5天)是短期最关键验证点。" },
+      "step6_confidence": { "level": "medium", "downgrades": ["油价仅3天数据→趋势持续性不确定", "S1 VIX 16.64与油价>$100的矛盾→市场可能underpricing risk", "FOMC 7/28-29决议仅5天后→regime判断需等待FOMC验证"], "upgrades": ["Wind F1/F2恢复→Fed政策评估权威性确认", "50 fresh / 0 missing→数据覆盖率极高", "B4 FedWatch数据更新至7/24→加息概率精确度提升"], "net": "medium — 等待FOMC 7/28-29决议确认利率路径" }
+    },
+    "supporting_evidence": [
+      { "indicator": "B8", "value": "2.43%", "signal": "TIPS限制性新高——金融条件进一步收紧" },
+      { "indicator": "B2-B3 spread", "value": "+0.34bp", "signal": "曲线维持正利差——紧缩后期信号持续" },
+      { "indicator": "F1", "value": "3.75%", "signal": "Fed维持利率上限在限制性水平(Wind权威源)" },
+      { "indicator": "F2", "value": "3.412% (June)", "signal": "核心PCE 3.41%仍远超2%目标→降息尚早(Wind June数据)" },
+      { "indicator": "O1", "value": "$100.69", "signal": "Brent突破$100(+20.3% from Jul 17 $84)——伊朗/霍尔木兹地缘风险推动，油价冲击改变通胀+利率路径预期" },
+      { "indicator": "B3", "value": "4.37%", "signal": "US 2Y +16bp至4.37%——短期利率大幅上行反映市场重定价Fed加息概率" },
+      { "indicator": "B4", "value": "34.7% Jul / 82% Sep", "signal": "CME FedWatch——7月加息概率略降(38→34.7%)但9月82%维持高位(WebSearch 7/24)" },
+      { "indicator": "A1", "value": "68.16", "signal": "MOVE指数68.16——债券波动率中等偏低(WebSearch Investing.com)" },
+      { "indicator": "N3", "value": "3.45%", "signal": "Crane 100 MMF收益率3.45%——首次跌破3.50%(自2022年11月以来)(WebSearch)" },
+      { "indicator": "N5", "value": "$7.861T", "signal": "US MMF总规模$7.861万亿——从记录高位$7.948T回落但仍处历史高位(WebSearch ICI)" },
+      { "indicator": "R3", "value": "80bp", "signal": "IG OAS 80bp——25年极低水平附近(WebSearch ICE BofA)" }
+    ],
+    "opposing_evidence": [
+      { "indicator": "S1", "value": "16.64", "signal": "VIX不升反降——油价>$100情况下市场未恐慌(可能underpricing tail risk)" },
+      { "indicator": "B10", "value": "2.68%", "signal": "HY OAS进一步收窄——信用市场不仅未定价衰退，反而更乐观" },
+      { "indicator": "N6", "value": "-0.07bp", "signal": "FRA-OIS负值——银行间流动性充裕，无系统性压力" },
+      { "indicator": "G4", "value": "4047.70", "signal": "黄金在TIPS上升+美元走强背景下仍上涨→结构性买盘强劲" }
+    ],
+    "stale_or_missing_data": ["S1 VIX staleGap 2d", "N2 SOFR staleGap 2d", "N7 SOFR-IORB=-0.03bp (派生自N2-N4)"],
+    "invalidate_if": [
+      "TIPS突破2.5% → Risk-Off确认，防御升级",
+      "Brent持续>$105且FOMC 7/29加息 → stagflation风险，所有风险资产减仓",
+      "VIX突破25 → 恐慌模式",
+      "FOMC 7/28-29意外加息50bp → 紧缩加速，风险资产重新定价",
+      "TIPS回落至1.8%以下 + 油价回落<$90 → Risk-On，重新评估权益敞口"
+    ]
+  },
+  "gold_rate_conflict": {
+    "claim": "黄金在利率压力加剧(TIPS 2.35→2.43%)+美元走强(DXY 100.96→101.44)背景下仍上涨$4014→$4048(+0.8%)——结构性+地缘需求战胜传统利率模型。CFTC拥挤度维持极端8.49:1——回调风险未解除。油价冲破$100为黄金提供通胀对冲需求但同时也驱动Fed鹰派预期——双重效应抵消加剧。国内溢价仍需观察。",
+    "confidence": "medium",
+    "model_conflict": {
+      "traditional_model_signal": "bearish (worsening)",
+      "actual_price_signal": "resilient-above-4000",
+      "conflict_resolution": "TIPS升至2.43%(+8bp)+DXY升至101.44应在传统模型中将金价压制至$3900以下。但COMEX从$4014升至$4048——结构性买盘(SPDR 1003.59吨+央行7544万oz)叠加伊朗/霍尔木兹地缘对冲需求正在战胜利率压制。CFTC 8.49:1维持极端拥挤——这仍是多头最大风险。油价>$100对黄金的双刃效应：通胀对冲需求↑(bullish) vs Fed被迫鹰派↑(bearish)。综合评分从-0.665恶化至-0.72。"
+    },
+    "weighted_score": {
+      "real_rates_score": { "weight": 0.35, "score": -1.8, "reason": "TIPS 2.43% — 较上周+8bp至新高，历史高位对金价压力加剧" },
+      "usd_score": { "weight": 0.20, "score": -0.7, "reason": "DXY 101.44 — 较上周+0.48进一步走强，美元升值压制金价" },
+      "positioning_score": { "weight": 0.20, "score": -0.9, "reason": "CFTC 8.49:1 — 维持极端拥挤，回调风险依旧严峻" },
+      "structural_score": { "weight": 0.15, "score": 1.2, "reason": "央行7544万oz + SPDR 1003.59吨 + 伊朗地缘避险→结构性+地缘需求增强" },
+      "china_premium_score": { "weight": 0.10, "score": -0.1, "reason": "国内溢价预估仍为折价区域——中国买盘偏弱" },
+      "total": -0.72,
+      "interpretation": "Moderately bearish — 较上周-0.665进一步恶化。TIPS升至2.43%是主要降级因素(+8bp)。金价虽从$4014升至$4048(+0.8%)但这是在油价$101+地缘升级背景下的表现——如果在TIPS 2.43%+DXY 101.44环境下金价仍能守住$4000，说明结构性买盘极强。但CFTC 8.49:1的极端拥挤+利率压力加剧意味着上行空间有限、下行风险不对称。"
+    },
+    "action_gate": {
+      "action_allowed": false,
+      "action_reason": "黄金信号矛盾进一步加深：结构性+地缘支撑使金价维持$4048 vs 利率压力加剧(TIPS 2.43%)+仓位极端拥挤(CFTC 8.49:1)+美元走强(DXY 101.44)。当前黄金仓位已在防御上限(15.1%)。CFTC拥挤+利率上行构成明确的回调风险——不宜追加。等待仓位出清或FOMC 7/28-29确认利率路径后才能重新评估。"
+    },
+    "scenarios": [
+      { "scenario": "Iran de-escalation + oil retreat", "trigger": "Brent < $90, 外交突破", "probability": "medium", "gold_impact": "bearish (-3~-5%)", "portfolio_implication": "地缘溢价消退→黄金短期承压，现有仓位可承受回撤" },
+      { "scenario": "FOMC July hold + dovish signal", "trigger": "7/29 FOMC维持不变+暗示9月也不一定加息", "probability": "medium-high", "gold_impact": "bullish short-term", "portfolio_implication": "利率压力缓解→gold action gate可重新评估" },
+      { "scenario": "Oil-driven stagflation", "trigger": "Brent > $110, FOMC被迫加息, 增长放缓", "probability": "low-medium", "gold_impact": "bullish (通胀对冲+避险双重驱动)", "portfolio_implication": "stagflation是黄金最利好情景——现有15.1%仓位最适合此情景" },
+      { "scenario": "Positioning flush", "trigger": "CFTC多头/空头比降至3:1以下 + FOMC确认利率路径 + TIPS不再上行 + DXY不再走强", "probability": "medium", "gold_impact": "bearish (-5~-10%)", "portfolio_implication": "若CFTC仓位出清且FOMC确认利率路径且TIPS不再上行且DXY不再走强，黄金加仓条件成熟——等待signal" },
+      { "scenario": "Full-scale military conflict", "trigger": "霍尔木兹海峡封锁/美伊直接冲突", "probability": "low", "gold_impact": "strongly bullish", "portfolio_implication": "极端避险→黄金大幅上涨，现有仓位获利，但需评估整体组合风险" }
+    ]
+  },
+  "portfolio_action_gate": {
+    "action_advice_allowed": true,
+    "recommendation": "hold",
+    "confidence": "medium",
+    "blocker_detail": [],
+    "current_allocation": {
+      "total_assets": 4510.94,
+      "hqb_pct": 0.0,
+      "hqb_assets": 0,
+      "mmf_assets": 1500.97,
+      "mmf_note": "货币基金(长城收益宝货币C ¥895.97 + 富国收益宝交易型货币B ¥605.00)计入基金持仓，非现金",
+      "mmf_pct": 33.3,
+      "equity_a_share_pct": 15.1,
+      "equity_us_pct": 5.5,
+      "gold_pct": 15.2,
+      "fixed_income_pct": 14.9,
+      "mixed_pct": 8.7
+    },
+    "deviation_analysis": {
+      "target_regime": "defensive",
+      "deviations": [
+        { "asset": "HQB(活期宝)", "current": "0%", "target": "35-40%", "gap": "严重偏低——MMF 33.3%提供流动性缓冲(较上周40.4%下降，因总资产从¥3979升至¥4511)" },
+        { "asset": "A股权益", "current": "15.1%", "target": "15-20%", "gap": "在区间下限" },
+        { "asset": "美股权益", "current": "5.5%", "target": "5-10%", "gap": "在区间内(接近下限)" },
+        { "asset": "黄金", "current": "15.2%", "target": "10-15%", "gap": "微超上限(+0.2pp)" },
+        { "asset": "债券", "current": "14.9%", "target": "10-15%", "gap": "在区间上限" }
+      ],
+      "total_deviation": "minimal — 总资产增长至¥4511(+13.4%)主要来自市场估值变动"
+    },
+    "macro_alignment": {
+      "defensive_triggers_assessable": 7,
+      "defensive_triggers_active": 2,
+      "details": [
+        { "indicator": "B8 TIPS > 2.0%", "current": "2.43%", "triggered": true },
+        { "indicator": "Brent > $100 (新增触发)", "current": "$100.69", "triggered": true },
+        { "indicator": "DXY > 102", "current": "101.44", "triggered": false },
+        { "indicator": "VIX > 25", "current": "16.64", "triggered": false },
+        { "indicator": "US 10Y-2Y inversion", "current": "+0.34bp (un-inverted)", "triggered": false },
+        { "indicator": "HY OAS > 4.0%", "current": "2.68%", "triggered": false },
+        { "indicator": "US 2Y > 4.5% (新增)", "current": "4.37%", "triggered": false }
+      ],
+      "summary": "防御触发从1/5升至2/7(TIPS>2.0% + Brent>$100)。Brent突破$100是新增宏观触发条件——油价冲击同时推高通胀预期和Fed加息概率。TIPS 2.43%接近2.5%触发线。FOMC 7/28-29仅5天——如果Fed加息25bp→US 2Y可能突破4.5%→触发第三条防御条件。VIX 16.64与油价$101的矛盾值得警惕——市场可能在underpricing伊朗尾部风险。"
+    },
+    "degraded_portfolio_warnings": ["S2_profit=empty — 无法验证当前收益", "S3_analysis=unavailable — 组合分析不可用(ttfund HTTP 403)", "S4_trade=empty — 无法获取近期交易", "HQB=0 — 活期宝余额为零是结构性问题"],
+    "action_gate": {
+      "action_type": "hold",
+      "reason": "防御触发从1/5升至2/7(TIPS>2.0%+Brent>$100)。组合处于事实防御状态(MMF 33.3%+债券14.9%=48.2%低风险)。HQB=0是结构性问题但MMF提供流动性缓冲。新增两个关键风险：(1)油价$101突破心理关口→通胀+利率双重上行压力；(2)FOMC 7/28-29仅5天→如果意外加息将改变所有资产定价框架。当前不宜操作——等待FOMC决议确认利率路径后再评估调仓。VIX 16.64与油价矛盾暗示市场可能在underpricing risk→也不宜加仓风险资产。",
+      "next_checkpoint": "2026-07-30 (FOMC 7/28-29会后)",
+      "conditions_to_act": [
+        "FOMC 7/28-29决议确认利率路径(维持/加息/鸽派信号)",
+        "Brent是否持续>$100或回落→影响通胀预期和Fed政策方向",
+        "TIPS是否突破2.5%触发线→确认全面Risk-Off",
+        "VIX是否从16.64跳升→市场是否开始定价油价冲击",
+        "S2利润数据恢复可用以验证当前收益"
+      ]
+    }
+  }
+}
