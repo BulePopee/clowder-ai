@@ -1,14 +1,14 @@
 {
   "meta": {
     "runId": "20260721-1117-auto",
-    "generatedAt": "2026-07-21T03:22:00.000Z",
+    "generatedAt": "2026-07-24T01:50:00.000Z",
     "framework": "ttfund-monitor v2.7.0 Reason B-layer",
     "blueprints_rendered": ["macro-regime", "gold-rate-conflict", "portfolio-action-gate"],
     "blueprints_degraded": [],
     "guard_blockers": [],
     "guard_warnings": ["G008: 辅助指标 S1, AG, N2, B10, N6, R3 数据过期(staleGap)", "G009: 组合收益/分析数据部分缺失(S2 empty, S3 unavailable)"],
     "action_advice_allowed": true,
-    "data_coverage": "40 fresh / 3 staleSuccess / 6 staleGap / 4 missing / 56 total / 10 websearchPending"
+    "data_coverage": "40 fresh / 3 staleSuccess / 6 staleGap / 4 missing / 56 total / 0 websearchPending / 7 websearchFilled / 2 blocked(F1,F2)"
   },
   "macro_regime": {
     "regime_claim": "Transitional (tightening late-cycle + oil-driven inflation risk emerging) — TIPS 2.35%维持限制性高位，曲线维持正利差+0.39bp确认紧缩后期。Wind恢复后F1=3.75%/F2=3.3654%(June Core PCE)从权威源确认。但Brent油价4日暴涨$5(+5.9%至$89.22)引入新的通胀上行风险——若油价持续高位可能改变Fed利率路径预期。",
@@ -17,17 +17,22 @@
     "steps": {
       "step1_real_rate": { "assessment": "限制性", "tips": "2.35%", "trend": "维持高位", "breakeven": "2.25%", "driver": "实际利率维持限制性+通胀预期小幅回升(2.22→2.25%)", "implication": "金融条件偏紧——紧缩后期，注意breakeven上升信号" },
       "step2_usd_liquidity": { "assessment": "温和偏紧", "dxy": "100.96", "sofr": "3.59%", "iorb": "3.65%", "spread": "-0.06bp", "china_dr007": "1.4323%", "implication": "SOFR略低于IORB，流动性正常；DXY微升至100.96略增外部压力" },
-      "step3_risk_sentiment": { "assessment": "温和紧张——从低波动转向", "vix": "18.77", "fg": "37.51", "fedwatch": "N/A (B4未采集)", "nasdaq": "28604.23", "implication": "VIX突破18、F&G跌入Fear区间(37.51)——情绪明显恶化但未到恐慌。Nasdaq自6/18高点30406回落5.9%。油价飙升是新增风险因子。" },
+      "step3_risk_sentiment": { "assessment": "温和紧张——从低波动转向", "vix": "18.77", "fg": "37.51", "fedwatch": "38% hike prob (CME FedWatch via WebSearch, Jul 23)", "nasdaq": "28604.23", "implication": "VIX突破18、F&G跌入Fear区间(37.51)——情绪明显恶化但未到恐慌。Nasdaq自6/18高点30406回落5.9%。油价飙升是新增风险因子。" },
       "step4_china_factors": { "assessment": "止跌企稳", "hs300": "4668.84 (7/21, 从7/17低点4529反弹3.1%)", "chinext": "3443.10", "cny": "6.7948", "cn_us_spread": "-2.9bp", "implication": "A股从7/17日内低点反弹，但K线7/20仅4598→仍在20MA(4879)以下。创业板7/16-17暴跌(3692→3429)后反弹至3443。中国市场从'暴跌'转为'弱势震荡'。" },
       "step5_regime_classification": { "classification": "Transitional", "rationale": "紧缩后期基本格局不变(TIPS高位+曲线正利差)。新增两个升温信号：(1)油价$84→$89(+5.9%)→地缘风险溢价推动，若Brent>$90持续可能改变通胀预期路径；(2)VIX 15.67→18.77→市场紧张程度上升。但信用利差仍然极窄(HY OAS 2.73%/IG OAS 66bp)、FRA-OIS -0.07bp无流动性压力→不支持全面Risk-Off判断。最恰当描述：紧缩后期+地缘尾部风险升温。" },
-      "step6_confidence": { "level": "medium", "downgrades": ["S1 VIX staleGap 4d → 降一级", "B4 FedWatch未采集→无法量化加息概率变化", "油价走势仅4天数据→趋势能否持续不确定"], "upgrades": ["Wind F1/F2恢复→Fed政策评估从WebSearch提升至权威源", "Core PCE June 3.3654%首次可用→通胀数据更新"], "net": "medium" }
+      "step6_confidence": { "level": "medium", "downgrades": ["S1 VIX staleGap 4d → 降一级", "油价走势仅4天数据→趋势能否持续不确定"], "upgrades": ["Wind F1/F2恢复→Fed政策评估从WebSearch提升至权威源", "Core PCE June 3.3654%首次可用→通胀数据更新"], "net": "medium" }
     },
     "supporting_evidence": [
       { "indicator": "B8", "value": "2.35%", "signal": "TIPS限制性高位——金融条件偏紧" },
       { "indicator": "B2-B3 spread", "value": "+0.39bp", "signal": "曲线维持正利差——紧缩后期信号持续" },
       { "indicator": "F1", "value": "3.75%", "signal": "Fed维持利率上限在限制性水平(Wind恢复→权威源)" },
       { "indicator": "F2", "value": "3.3654% (June)", "signal": "核心PCE 3.37%仍远超2%目标→降息尚早(Wind首次提供June数据)" },
-      { "indicator": "O1", "value": "$89.22", "signal": "Brent 4日+$5(5.9%)——地缘风险溢价显著上升，新增通胀上行风险" }
+      { "indicator": "O1", "value": "$89.22", "signal": "Brent 4日+$5(5.9%)——地缘风险溢价显著上升，新增通胀上行风险" },
+      { "indicator": "B4", "value": "38%", "signal": "CME FedWatch 7月加息概率38%——市场定价温和加息可能(WebSearch补采)" },
+      { "indicator": "A1", "value": "70.25", "signal": "MOVE指数70.25——债券波动率中等偏低(WebSearch ifind fallback)" },
+      { "indicator": "N3", "value": "3.46%", "signal": "Crane 100 MMF收益率3.46%——货币基金收益稳定在3.4-3.5%区间(WebSearch primary)" },
+      { "indicator": "N5", "value": "$7.893T", "signal": "US MMF总规模$7.893万亿——仍处历史高位(WebSearch ifind fallback)" },
+      { "indicator": "R3", "value": "74bp", "signal": "IG OAS 74bp——投资级信用利差接近数十年低点(WebSearch ifind fallback)" }
     ],
     "opposing_evidence": [
       { "indicator": "S1", "value": "18.77", "signal": "VIX虽上升但仍在20以下——紧张但非恐慌" },
@@ -35,7 +40,7 @@
       { "indicator": "N6", "value": "-0.07bp", "signal": "FRA-OIS负值——银行间流动性充裕" },
       { "indicator": "E2", "value": "4668.84", "signal": "A股从7/17暴跌反弹3.1%——中国端有所企稳" }
     ],
-    "stale_or_missing_data": ["S1 VIX staleGap 4d", "N7 TED利差 missing (LIBOR已废弃)", "A1 MOVE missing", "B4 FedWatch未采集"],
+    "stale_or_missing_data": ["S1 VIX staleGap 4d", "N7 SOFR-IORB=-0.06bp (派生自N2-N4, 已替代废弃TED利差)"],
     "invalidate_if": [
       "TIPS突破2.5% → Risk-Off确认，防御升级",
       "Brent突破$95且持续3日 → 通胀预期失控风险，Fed可能被迫鹰派",

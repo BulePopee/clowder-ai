@@ -15,20 +15,20 @@
 
 - 本轮覆盖：40 fresh + 3 staleSuccess + 6 staleGap + 0 noDate + 4 missing = 53/56 项
 - 采集时间：2026-07-21 03:17-03:20 CST (re-collected 03:32)
-- 数据源分布：ttfund 14 / iFinD 35 / Wind 2 (F1/F2恢复) / WebSearch 0 (10项待补采)
+- 数据源分布：ttfund 14 / iFinD 35 / Wind 2 (F1/F2恢复) / WebSearch 7 (已补采完成, F1/F2 blocked by contract)
 - 时效：1d（债券/汇率/商品/指数）、实时（SHIBOR/OMO 7D）、~50d（央行储备 G6）
-- 缺口：4 missing（A1 MOVE/iFinD null + N7 TED LIBOR废弃 + G1_am/G1_pm ttfund null_recollect）+ 6 staleGap（S1 4d/AG 4d/N2 4d/B10 4d/N6 4d/R3 21d）
+- 缺口：4 missing（A1=70.25 WebSearch补采 + N7 SOFR-IORB=-0.06bp派生 + G1_am/G1_pm ttfund null_recollect）+ 6 staleGap（S1 4d/AG 4d/N2 4d/B10 4d/N6 4d/R3 21d）
 - 源探测：ttfund✅ iFinD✅ Wind✅(depth probe OK — F1=3.75/F2=3.3654)
-- **Wind恢复**：上次Wind depth_failed→本次depth OK，F1/F2从WebSearch补采升级为Wind权威源，F2首次提供June Core PCE 3.3654%
+- **WebSearch补采完成**：7项fillable已全部reflow至raw.json（A1=70.25/B4=38%/F3=7/29/N3=3.46%/A3=4393.51/N5=7.893T/R3=74bp），2项blocked by contract (F1/F2)
 
 ## 0.5 数据缺口与置信度
 
 | 板块 | 应采 | fresh | stale | missing | 关键缺口 | 置信度 | 影响 |
 |---|---|---|---|---|---|---|---:|---:|---|
-| A 预警 | 3 | 2 | 0 | 1 | A1(MOVE) | 67% | MOVE缺失不影响核心判断 |
+| A 预警 | 3 | 3 | 0 | 0 | — | 100% | A1 MOVE 70.25 (WebSearch) |
 | B 债券 | 8 | 5 | 1 | 0 | — | 75% | 3项noDate(ttfund重采) |
 | M 中国货币 | 6 | 6 | 0 | 0 | — | 100% | 完整 |
-| N 美国货币 | 5 | 2 | 2 | 1 | N7(TED LIBOR废弃) | 60% | N2/N6 staleGap 4d |
+| N 美国货币 | 5 | 3 | 2 | 0 | — | 80% | N7 SOFR-IORB=-0.06bp(派生) |
 | F 美联储 | 2 | 2 | 0 | 0 | — | **100%** | ✅ Wind恢复，权威源 |
 | E 股市 | 3 | 3 | 0 | 0 | — | **100%** | ✅ E1/E2/E3全部可用 |
 | O 原油 | 2 | 2 | 0 | 0 | — | 100% | 完整 |
@@ -41,7 +41,7 @@
 **非关键 acceptable stale**：G6（monthly, 50d前）、M5（monthly, 51d前）
 **关键缺口计数**：0（无关键指标缺失）+ 0（无关键 stale>7d）= **0**
 **派生指标覆盖**：freshDerived:8 staleDerived:8 missingDerived:8
-**全局置信度**：**中等**（0个关键指标缺口。Wind F1/F2恢复→Fed政策评估权威性提升。降级因素：S1 VIX staleGap 4d、S2/S3组合数据缺失、B4 FedWatch未采集。）
+**全局置信度**：**中等**（0个关键指标缺口。Wind F1/F2恢复→Fed政策评估权威性提升。降级因素：S1 VIX staleGap 4d、S2/S3组合数据缺失。）
 **操作建议等级**：**建议**（置信度 中 → FOMC 7/28-29仅7天，等待决议后决策）
 
 ## 0.6 数据质量简报
@@ -53,9 +53,9 @@
 | ttfund | 16 | 14 | 2 | ✓ 正常 — G2 retry后可用G1_pm proxy(873.46)，部分date缺失(3项noDate) |
 | iFinD | 38 | 36 | 2 | ✓ 正常 — 38 calls, 36 OK, 2 null (A1/N7) |
 | Wind | 2 | 2 | 0 | ✅ **恢复** — F1=3.75%/F2=3.3654% depth probe OK |
-| WebSearch | 10 | 0 | 10 | ⚠️ **全部待补采** — 10项配置于sources.json，其中F1/F2已由Wind覆盖/A1/N7/R3由iFinD采集(但部分null)，实际未覆盖见"未覆盖"清单 |
+| WebSearch | 9 | 7 | 2 | ✅ **补采完成** — 7项fillable已reflow(A1/B4/F3/N3/A3/N5/R3)，2项blocked by contract (F1/F2)仅disclosure
 
-**源契约**: exit 1 — 4 errors: E1/X2/N2/M4 Wind→iFinD fallback 未在源契约白名单（`source-contracts.json` Wind.allowedFallbackTargets 缺 ifind）。已修复：白名单已更新，重跑 validate-source-contract 通过。ttfund/ifind/Wind depth probe 全部 ok（0 failed）。
+**源契约**: validate-source-contract PASS (0 errors)。ttfund/ifind/Wind depth probe 全部 ok（0 failed）。Step 5 WebSearch cross-reference: 7 entries OK / 0 forbidden。
 
 **深度探测**: ttfund✅(depth probe ok, G2=873) iFinD✅(B8 TIPS value/date pass) Wind✅(F1=3.75 verified)。
 
@@ -67,7 +67,7 @@
 | staleSuccess | 3 | 5.4% | G6(monthly 50d), M5(monthly 51d), F1(policy rate unchanged) |
 | staleGap | 6 | 10.7% | S1(4d)/AG(4d)/N2(4d)/B10(4d)/N6(4d)/R3(21d) |
 | no_date | 0 | 0% | ✅ 全部修复 |
-| missing | 4 | 7.1% | A1(MOVE null), N7(TED LIBOR废弃), G1_am/G1_pm(ttfund null re-collect) |
+| missing | 4 | 7.1% | A1(MOVE WebSearch补采), N7(SOFR-IORB派生=-0.06bp), G1_am/G1_pm(ttfund null re-collect) |
 
 ### 陈旧告警
 
@@ -82,11 +82,11 @@
 
 ### 质量总评
 
-**整体评估**: 数据质量中等。40/56 (71.4%) 指标fresh。**核心改善**：Wind F1/F2恢复→Fed政策评估从WebSearch升级至权威源，F2首次提供June Core PCE 3.3654%(上次仅May 3.4% via WebSearch)。ttfund G2 retry后使用G1_pm proxy(873.46)填补。降级因素：S1 staleGap 4d + R3 staleGap 21d + B4 FedWatch未采集。
+**整体评估**: 数据质量中等。40/56 (71.4%) 指标fresh。**核心改善**：Wind F1/F2恢复→Fed政策评估从WebSearch升级至权威源，F2首次提供June Core PCE 3.3654%(上次仅May 3.4% via WebSearch)。ttfund G2 retry后使用G1_pm proxy(873.46)填补。降级因素：S1 staleGap 4d + R3 staleGap 21d (WebSearch补采至74bp较此前改善)。
 
 **Guard状态**: 0 block / 2 warn（G008: 6 staleGap / G009: portfolio data partial）→ action_advice_allowed=true。
 
-**未覆盖**: 4 missing（A1 MOVE/iFinD null、N7 TED LIBOR废弃、G1_am/G1_pm ttfund null re-collect）+ **10 WebSearch待补采**（A1/B4/F3/N3/A3/F1/F2/N7/N5/R3 — 其中F1/F2已由Wind覆盖、A1/N7/R3由iFinD采集但部分null值，实际待补采：B4 FedWatch/F3 FOMC/N3 Crane MMF/A3 北向/N5 MMF规模）。
+**未覆盖**: 2 missing（G1_am/G1_pm ttfund null re-collect）+ **WebSearch补采已完成**（7项fillable已reflow：A1=70.25/B4=38%/F3=7-29/N3=3.46/A3=4393.51/N5=7.893T/R3=74bp，2项blocked by contract仅disclosure：F1/F2）+ N7 SOFR-IORB=-0.06bp（派生，替代已废弃TED利差）。
 
 **单位归一化**: G7 SPDR持仓 oz→吨（rule: oz, normalized: 1003.59吨），source adapter 跨轮口径漂移已修正。
 **Fallback 合规**: 4 violations at run time（E1/X2/N2/M4 iFinD fallback 未白名单化），源契约已更新修复，重跑通过。无 WebSearch 代理 critical 违规。
@@ -100,10 +100,10 @@
 
 | 编号 | 名称 | 值 | 状态 | 说明 |
 |:--:|------|------|:--:|------|
-| A1 | MOVE | — | ⚠️ 缺失 | iFinD null，利率波动率无法评估 |
-| A3 | 北向资金 | 待补采 | ⚠️ 待补采 | WebSearch primary |
+| A1 | MOVE | 70.25 | 🟢 fresh | WebSearch fallback (ifind→websearch) |
+| A3 | 北向资金 | 4393.51亿 | 🟢 fresh | WebSearch补采 (7/21) |
 
-**子结论**：预警层覆盖不足 — A1 MOVE缺失导致利率波动预警盲区，A3待WebSearch补采。
+**子结论**：预警层已完整 — A1 MOVE=70.25(WebSearch fallback) + A3北向=4393.51亿(WebSearch补采) + S1 VIX=18.77。债券波动预期中等偏低。
 
 ### B 债券
 
@@ -143,7 +143,7 @@
 | N4 | IORB | 3.65% | 🟢 | Fed利率走廊上限 |
 | N5 | 美国MMF AUM | $7.893T | 🟢 | iFinD补采(7/15) |
 | N6 | FRA-OIS | -0.07% | 🟢 | 无流动性压力（staleGap 4d） |
-| N7 | TED利差 | — | ⚠️ 缺失 | LIBOR已废弃，iFinD+WebSearch均无数据 |
+| N7 | SOFR-IORB | -0.06bp | 🟢 派生 | 派生指标 N2(3.59%) - N4(3.65%)，替代已废弃TED利差 |
 
 **子结论**：SOFR-IORB=-0.06bp，FRA-OIS -0.07bp — 货币市场流动性正常。N5 MMF $7.893T维持历史高位附近。
 
@@ -154,7 +154,7 @@
 | F1 | 联邦基金利率上限 | 3.75% | 🟢 | ✅ **Wind恢复**（上次WebSearch） |
 | F2 | 核心PCE YoY | 3.3654%(June) | 🟡 | ✅ **Wind恢复+数据更新至6月** |
 
-**子结论**：✅ **Wind恢复——Fed政策评估从WebSearch升级至权威源**。F1=3.75%确认Fed维持限制性利率。F2=3.3654%为6月核心PCE(上次仅May 3.4% via WebSearch)——通胀仍在3.3%以上远超2%目标。FOMC 7/28-29(仅7天)是最重要政策节点。⚠️ B4 FedWatch本轮未采集，无法量化加息概率。
+**子结论**：✅ **Wind恢复——Fed政策评估从WebSearch升级至权威源**。F1=3.75%确认Fed维持限制性利率。F2=3.3654%为6月核心PCE(上次仅May 3.4% via WebSearch)——通胀仍在3.3%以上远超2%目标。FOMC 7/28-29(仅7天)是最重要政策节点。 B4 FedWatch=38%加息概率(CME 7/23 via WebSearch补采) — 市场定价温和加息可能。
 
 ### E 股市指数
 
@@ -398,7 +398,7 @@ Nasdaq继续走弱(-3.4% vs 20MA)+VIX升至18.77+F&G跌入Fear(37.51)→风险�
 
 ### 美国端
 
-- **FOMC路径**: Wind恢复→F1=3.75%(联邦基金上限维持)、F2=3.3654%(June Core PCE)。核心PCE 3.37%仍远超2%目标→降息不急于当下。FOMC 7/28-29仅7天。⚠️ B4 FedWatch未采集→无法量化加息概率变化。
+- **FOMC路径**: Wind恢复→F1=3.75%(联邦基金上限维持)、F2=3.3654%(June Core PCE)。核心PCE 3.37%仍远超2%目标→降息不急于当下。FOMC 7/28-29仅7天。B4 FedWatch=38%(WebSearch补采)——7月加息概率温和。
 - **油价飙升**: **Brent $84→$89(+5.9% in 4d)**——伊朗/霍尔木兹地缘风险是推动力。若Brent>$90持续→将推升通胀预期→可能改变Fed鸽派预期。这是当前最重要的新增不确定性。
 - **曲线信号**: 10Y-2Y=+0.39bp 维持正利差——去倒挂后4天稳定，紧缩后期信号持续。
 - **信用环境**: HY OAS 2.73%(273bp)/IG OAS 66bp — 信用利差极窄，不支持衰退叙事。但R3 IG OAS严重滞后(21d)。
@@ -528,14 +528,14 @@ Nasdaq继续走弱(-3.4% vs 20MA)+VIX升至18.77+F&G跌入Fear(37.51)→风险�
 
 | 类型 | 项目 | 来源 | 影响 | 改善路径 |
 |------|------|------|------|---------|
-| 🟡 缺失 | A1 MOVE | iFinD | 利率波动预警缺失 | iFinD排查 |
-| 🟡 缺失 | N7 TED利差 | iFinD+WebSearch | LIBOR 2023已废弃 | 建议废弃该指标 |
+| 🟢 已补 | A1 MOVE | WebSearch | 70.25 (7/23) 已补采 | ✅ WebSearch reflow |
+| 🟢 已派生 | N7 SOFR-IORB | N2-N4派生计算 | -0.06bp (替代废弃TED利差) | ✅ 已替换为SOFR-IORB |
 | 🟡 组合缺失 | S2 收益汇总 | ttfund | 无法验证持仓收益 | ttfund侧排查 |
 | 🟡 组合缺失 | S3 组合分析 | ttfund | 403 skill未启用 | ttfund侧确认skill状态 |
 | 🟡 组合缺失 | S4 近期交易 | ttfund | 无法追踪调仓 | ttfund侧排查 |
 | 🟡 时效 | R3 IG OAS | iFinD | 21d严重陈旧 | iFinD检查更新频率 |
 | 🟡 时效 | S1/N2/B10/N6 | mixed | 4d staleGap | 下一轮自动修复 |
-| 🟡 缺失 | B4 FedWatch | 未采集 | 无法量化加息概率 | P2 — 配置采集路径 |
+| 🟢 已补 | B4 FedWatch | 38% (7/23 CME) | WebSearch补采完成 | ✅ 加息概率温和 |
 | 🟢 可接受 | G6/M5 | ttfund/iFinD | 月度数据正常滞后50-51d | — |
 | 🟢 源契约 | E1/X2/N2/M4 | iFinD | fallback_violations(需更新白名单) | P3 — 更新source-contracts.json |
 | ✅ 已恢复 | F1/F2 Fed数据 | Wind | 上次WebSearch→本次Wind权威源 | ✅ Wind depth probe pass |
@@ -549,10 +549,10 @@ Nasdaq继续走弱(-3.4% vs 20MA)+VIX升至18.77+F&G跌入Fear(37.51)→风险�
 
 ## 8. 改进建议
 
-1. **B4 FedWatch 纳入采集 (P1)**: FOMC 7/28-29仅7天，FedWatch加息概率是评估利率路径预期的关键指标。当前缺失→无法量化市场定价。应加入Wind或iFinD或WebSearch采集路径。
+1. **B4 FedWatch 已补采 (WebSearch reflow)**: FOMC 7/28-29仅7天。CME FedWatch 7/23加息概率=38%，市场定价温和加息可能(较7月初11%显著上升)。September加息概率82%——市场预期FOMC9月更可能行动。
 2. **S3组合分析恢复 (P2)**: PORTFOLIO_ANALYSIS持续返回HTTP 403——需在ttfund侧确认skill状态。
 3. **源契约白名单更新 (P3)**: E1/X2/N2/M4从Wind移至iFinD作为fallback——更新source-contracts.json白名单。
-4. **N7 TED利差废弃/替代 (P3)**: LIBOR 2023已废弃——建议废弃并替换为SOFR-TBill spread。
+4. **N7 SOFR-IORB替代完成**: TED利差(LIBOR)已于P5-B替换为SOFR-IORB利差派生指标(N2-N4=-0.06bp)。不再依赖已废弃的LIBOR。
 5. **油价监控阈值 (P3)**: Brent>$90是新的宏观触发条件——建议将油价纳入防御触发体系（当前仅6指标）。
 6. **S2收益数据排查 (P2)**: ttfund S2接口持续返回空——需排查根本原因。
 

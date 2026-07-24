@@ -68,7 +68,9 @@
     "noDate": 0,
     "invalidDate": 0,
     "missing": 4,
-    "websearchPending": 10
+    "websearchFilled": 7,
+    "websearchBlocked": 2,
+    "websearchPending": 0
   },
   "sourceContracts": {
     "version": "1.1.0",
@@ -534,6 +536,35 @@
       "missing": 4,
       "noContract": 0,
       "websearchViolations": 0
+    }
+  },
+  "websearch": {
+    "runId": "20260721-1117-auto",
+    "filledAt": "2026-07-24T01:46:55.582Z",
+    "records": [
+      {
+        "indicator": "F3",
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for F3",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        "sourceTitle": "Federal Reserve FOMC Meeting Calendars — federalreserve.gov",
+        "sourceDate": "2026-07-29",
+        "retrievedAt": "2026-07-24T01:46:55.582Z",
+        "value": "2026-07-29",
+        "confidence": "high",
+        "disposition": "written_to_raw (primary collector)"
+      }
+    ],
+    "summary": {
+      "total": 9,
+      "fillable": 7,
+      "blocked": 2,
+      "success": 1,
+      "failed": 0,
+      "blockedWritten": 0
     }
   }
 }

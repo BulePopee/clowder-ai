@@ -1,0 +1,210 @@
+{
+  "runId": "20260721-1117-auto",
+  "generatedAt": "2026-07-24T01:45:10.241Z",
+  "filledAt": "2026-07-24T01:46:55.582Z",
+  "items": [
+    {
+      "id": "A1",
+      "name": "MOVE",
+      "query": "ICE BofA MOVE index latest value",
+      "unit": "",
+      "critical": false,
+      "status": "reflowed",
+      "value": 70.25,
+      "date": "2026-07-07",
+      "sourceUrl": "http://finance.fyicenter.com/1000140_NYSE_%5EMOVE-ICE_BofAML_MOVE_Index.html",
+      "sourceTitle": "ICE BofAML MOVE Index — Yahoo Finance via FYIcenter",
+      "confidence": "medium",
+      "failureClass": null,
+      "notes": "Yahoo Finance historical data for ICE BofA MOVE Index (^MOVE). Value from July 7, 2026 — ~2 weeks before run date. Moderate bond market volatility at ~70 level, well below the ~140 spikes seen in early 2025.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for A1",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "ICE BofAML MOVE Index — Yahoo Finance via FYIcenter",
+        "sourceDate": "2026-07-07",
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "B4",
+      "name": "FedWatch",
+      "query": "CME FedWatch latest rate hike probability",
+      "unit": "%",
+      "critical": false,
+      "status": "reflowed",
+      "value": 38,
+      "date": "2026-07-23",
+      "sourceUrl": "https://www.cnbc.com/2026/07/23/fed-interest-rate-odds-oil-jobless-claims.html",
+      "sourceTitle": "Odds of Federal Reserve rate hike surge as oil prices rip higher — CNBC",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "CME FedWatch probability for 25bp hike at July 28-29 meeting. Surged from ~11% in early July to ~38% by July 23 driven by Strait of Hormuz blockade + 20% toll on Iranian oil cargo. September hike probability ~82%.",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for B4",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Odds of Federal Reserve rate hike surge as oil prices rip higher — CNBC",
+        "sourceDate": "2026-07-23",
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "F3",
+      "name": "下次FOMC",
+      "query": "FOMC meeting schedule 2026 next meeting date",
+      "unit": "",
+      "critical": false,
+      "status": "reflowed",
+      "value": "2026-07-29",
+      "date": "2026-07-29",
+      "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "sourceTitle": "Federal Reserve FOMC Meeting Calendars — federalreserve.gov",
+      "confidence": "high",
+      "failureClass": "missing_fields",
+      "notes": "Next FOMC meeting: July 28-29, 2026. Decision at 2:00pm ET July 29. Press conference 2:30pm. This is meeting #5 of 8 in 2026. Next after this: September 15-16 (with dot plot/SEP).",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for F3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Federal Reserve FOMC Meeting Calendars — federalreserve.gov",
+        "sourceDate": "2026-07-29",
+        "retrievedAt": "2026-07-24T01:46:55.582Z"
+      }
+    },
+    {
+      "id": "N3",
+      "name": "Crane 100 MMF",
+      "query": "Crane 100 money fund yield index latest",
+      "unit": "%",
+      "critical": false,
+      "status": "reflowed",
+      "value": 3.46,
+      "date": "2026-07-17",
+      "sourceUrl": "https://cranedata.com/publications/archives/crane-index/issue/2026-06-01-/",
+      "sourceTitle": "Crane Data — Crane 100 Money Fund Index (7-day annualized simple net yield)",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "Week ended July 17, 2026. Crane 100 Index = 3.46% (up 1bp from 3.45%). Steady ~3.45-3.47% range since early 2026. Down from 5.20% peak (Nov 2023) after 150bp of Fed cuts.",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for N3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Crane Data — Crane 100 Money Fund Index (7-day annualized simple net yield)",
+        "sourceDate": "2026-07-17",
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "A3",
+      "name": "北向成交额",
+      "query": "北向资金 今日成交额",
+      "unit": "亿元",
+      "critical": false,
+      "status": "reflowed",
+      "value": 4393.51,
+      "date": "2026-07-21",
+      "sourceUrl": "https://finance.jrj.com.cn/2026/07/21174157860479.shtml",
+      "sourceTitle": "7月21日北向资金追踪 — 金融界 (JRJ)",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "Northbound net turnover July 21: 4,393.51亿元 (14.86% of total A-share turnover). Top stocks: 中际旭创 72.37亿, 宁德时代 49.61亿, 寒武纪 33.69亿. Cumulative northbound turnover surpassed 246万亿 for first time.",
+      "contractEnforcement": {
+        "expectedSource": "mx-data",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for A3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "7月21日北向资金追踪 — 金融界 (JRJ)",
+        "sourceDate": "2026-07-21",
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "N5",
+      "name": "美国MMF总规模",
+      "query": "ICI US money market fund total assets latest",
+      "unit": "T",
+      "critical": false,
+      "status": "reflowed",
+      "value": 7.893,
+      "date": "2026-07-15",
+      "sourceUrl": "https://www.ici.org/research/stats/mmf",
+      "sourceTitle": "ICI — Money Market Fund Assets (Weekly)",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "ICI weekly data, week ended July 15, 2026. US MMF total assets $7.893 trillion (down $59.9B from record $7.953T on July 8). Government funds ~82.5% ($6.5T). Institutional ~61% of total.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for N5",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "ICI — Money Market Fund Assets (Weekly)",
+        "sourceDate": "2026-07-15",
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "R3",
+      "name": "IG OAS",
+      "query": "US investment grade corporate bond OAS spread latest",
+      "unit": "bp",
+      "critical": false,
+      "status": "reflowed",
+      "value": 74,
+      "date": "2026-07-01",
+      "sourceUrl": "https://www.breckinridge.com/insights/q3-2026-corporate-bond-market-outlook",
+      "sourceTitle": "Breckinridge Capital Advisors — Q3 2026 Corporate Bond Market Outlook",
+      "confidence": "medium",
+      "failureClass": null,
+      "notes": "ICE BofA US Corporate Index OAS at +74bp as of July 1, 2026 (end Q2). Tightened 14bp during Q2. Close to multi-decade lows (1st percentile over 20yr). Long-term avg ~130bp. BBB OAS ~95bp. Absolute IG yields ~5.3% still attractive vs 15yr avg 3.2%.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "ifind allows websearch for non-critical indicators",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Breckinridge Capital Advisors — Q3 2026 Corporate Bond Market Outlook",
+        "sourceDate": "2026-07-01",
+        "retrievedAt": null
+      }
+    }
+  ],
+  "disclosures": [
+    {
+      "id": "F1",
+      "name": "联邦基金利率上限",
+      "query": "Federal funds rate target upper bound latest",
+      "writePolicy": "blocked_by_contract",
+      "contractReason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+      "disclosureNote": "Searched for context: Federal funds rate target upper bound is 3.75% (3.50-3.75% range). Fed holding steady at this level since Dec 2025. Next decision July 29, 2026. CME FedWatch shows ~38% probability of hike to 4.00%. This is disclosure only — value NOT written to raw.json per source contract.",
+      "disclosureDate": "2026-07-24"
+    },
+    {
+      "id": "F2",
+      "name": "核心PCE YoY",
+      "query": "US core PCE price index year-over-year latest",
+      "writePolicy": "blocked_by_contract",
+      "contractReason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+      "disclosureNote": "Searched for context: Core PCE YoY for June 2026 not yet released (due late July). May 2026 Core PCE was ~2.8% YoY per last BEA release. Oil price surge + Hormuz blockade could push June/July readings higher. This is disclosure only — value NOT written to raw.json per source contract.",
+      "disclosureDate": "2026-07-24"
+    }
+  ],
+  "summary": {
+    "total": 9,
+    "fillable": 7,
+    "blocked": 2,
+    "reflowed": 7,
+    "failed": 0,
+    "pending": 0
+  }
+}

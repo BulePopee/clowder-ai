@@ -5,7 +5,7 @@
 **Blueprints**: macro-regime, gold-rate-conflict, portfolio-action-gate
 **Guard**: 0 blockers, 2 warnings (G008 stale aux data, G009 partial portfolio)
 **Action advice**: allowed
-**Data quality**: 40 fresh / 3 staleSuccess / 6 staleGap / 4 missing (Wind恢复后Fed数据权威性提升, WebSearch 10项待补采)
+**Data quality**: 40 fresh / 3 staleSuccess / 6 staleGap / 4 missing / 0 websearchPending / 7 websearchFilled / 2 blocked(F1,F2 by contract)
 
 ---
 

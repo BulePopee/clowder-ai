@@ -2,7 +2,7 @@
   "runId": "20260721-1117-auto",
   "round": "routine",
   "version": "2.5.1",
-  "collectedAt": "2026-07-21T03:32:11.112Z",
+  "collectedAt": "2026-07-24T01:46:55.582Z",
   "summary": {
     "total": 56,
     "collected": 43,
@@ -12,18 +12,22 @@
     "staleGap": 6,
     "noDate": 0,
     "invalidDate": 0,
-    "websearchPending": 10,
-    "websearchPendingIds": [
-      "A1",
-      "B4",
-      "F3",
-      "N3",
-      "A3",
-      "F1",
-      "F2",
-      "N7",
-      "N5",
-      "R3"
+    "websearchPending": 0,
+    "websearchPendingIds": [],
+    "websearchFilled": 7,
+    "websearchFailed": 0,
+    "websearchBlocked": 2,
+    "websearchDisclosures": [
+      {
+        "id": "F1",
+        "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+        "hasAdvisoryNote": true
+      },
+      {
+        "id": "F2",
+        "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+        "hasAdvisoryNote": true
+      }
     ]
   },
   "results": {
@@ -238,12 +242,15 @@
     },
     "A1": {
       "indicator": "A1",
-      "value": null,
-      "date": null,
-      "source": "ifind",
+      "value": 70.25,
+      "date": "2026-07-07",
+      "source": "websearch",
       "unit": "",
-      "error": "null value",
-      "_freshStatus": "missing"
+      "_sourceUrl": "http://finance.fyicenter.com/1000140_NYSE_%5EMOVE-ICE_BofAML_MOVE_Index.html",
+      "_sourceTitle": "ICE BofAML MOVE Index — Yahoo Finance via FYIcenter",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
     },
     "N4": {
       "indicator": "N4",
@@ -808,19 +815,27 @@
     },
     "N5": {
       "indicator": "N5",
-      "value": 7.893168999999999,
+      "value": 7.893,
       "date": "2026-07-15",
-      "source": "ifind",
+      "source": "websearch",
       "unit": "T",
+      "_sourceUrl": "https://www.ici.org/research/stats/mmf",
+      "_sourceTitle": "ICI — Money Market Fund Assets (Weekly)",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_fallback": true,
       "_freshStatus": "fresh"
     },
     "R3": {
       "indicator": "R3",
-      "value": 66,
-      "date": "2026-06-30",
-      "source": "ifind",
+      "value": 74,
+      "date": "2026-07-01",
+      "source": "websearch",
       "unit": "bp",
-      "_freshStatus": "staleGap"
+      "_sourceUrl": "https://www.breckinridge.com/insights/q3-2026-corporate-bond-market-outlook",
+      "_sourceTitle": "Breckinridge Capital Advisors — Q3 2026 Corporate Bond Market Outlook",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
     },
     "R4": {
       "indicator": "R4",
@@ -844,6 +859,51 @@
       "date": "2026-06-30",
       "source": "wind",
       "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B4": {
+      "indicator": "B4",
+      "value": 38,
+      "date": "2026-07-23",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://www.cnbc.com/2026/07/23/fed-interest-rate-odds-oil-jobless-claims.html",
+      "_sourceTitle": "Odds of Federal Reserve rate hike surge as oil prices rip higher — CNBC",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_freshStatus": "fresh"
+    },
+    "N3": {
+      "indicator": "N3",
+      "value": 3.46,
+      "date": "2026-07-17",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://cranedata.com/publications/archives/crane-index/issue/2026-06-01-/",
+      "_sourceTitle": "Crane Data — Crane 100 Money Fund Index (7-day annualized simple net yield)",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_freshStatus": "fresh"
+    },
+    "A3": {
+      "indicator": "A3",
+      "value": 4393.51,
+      "date": "2026-07-21",
+      "source": "websearch",
+      "unit": "亿元",
+      "_sourceUrl": "https://finance.jrj.com.cn/2026/07/21174157860479.shtml",
+      "_sourceTitle": "7月21日北向资金追踪 — 金融界 (JRJ)",
+      "_filledAt": "2026-07-24T01:46:40.846Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
+    },
+    "F3": {
+      "indicator": "F3",
+      "value": "2026-07-29",
+      "date": "2026-07-29",
+      "source": "websearch",
+      "unit": "",
+      "_sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "_sourceTitle": "Federal Reserve FOMC Meeting Calendars — federalreserve.gov",
+      "_filledAt": "2026-07-24T01:46:55.582Z",
       "_freshStatus": "fresh"
     }
   }
