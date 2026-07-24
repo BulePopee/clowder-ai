@@ -17,11 +17,11 @@
           "S1":  { "path": "risk_indicators.vix.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.vix.date" },
           "X1":  { "path": "risk_indicators.dxy.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.dxy.date" },
           "X3":  { "path": "risk_indicators.exchprice.EXCHPRICE",    "unit": "",   "critical": true,  "datePath": "risk_indicators.exchprice.date" },
-          "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
-          "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
+          "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
+          "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
           "G2":  { "path": "gold_quotes.au9999.close",               "unit": "元/克", "critical": true,  "datePath": "gold_quotes.au9999.date" },
           "G3":  { "path": "gold_quotes.au_td.close",                "unit": "元/克", "critical": false, "datePath": "gold_quotes.au_td.date" },
-          "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false, "datePath": "gold_quotes.au9999.date" },
+          "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
           "G6":  { "path": "gold_quotes.central_bank_gold.gold_reserves", "unit": "万盎司", "critical": false, "datePath": "gold_quotes.central_bank_gold.date" },
           "CPI": { "path": "macro_fiscal.cpi_yoy.value",             "unit": "%",  "critical": false, "datePath": "macro_fiscal.trade_date" }
         }

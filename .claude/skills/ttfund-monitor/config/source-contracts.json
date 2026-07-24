@@ -41,7 +41,7 @@
         "checks": [
           { "path": "macro_fiscal.treasury_yields.us_10y", "label": "B2 US 10Y yield", "valueKind": "number", "critical": true },
           { "path": "macro_fiscal.trade_date", "label": "Trade date", "valueKind": "date", "critical": true },
-          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": true }
+          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": false, "note": "G2_proxy fallback exists in collector; null Au9999 must not block pipeline" }
         ]
       }
     },

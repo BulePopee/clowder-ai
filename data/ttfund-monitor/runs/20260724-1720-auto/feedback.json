@@ -1,0 +1,87 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "builtAt": "2026-07-24T09:31:09.922Z",
+    "runId": "20260724-1720-auto",
+    "inputs": {
+      "reasoningSnapshot": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1720-auto\\reasoning-snapshot.json",
+      "temporalDiff": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1720-auto\\temporal-diff.json",
+      "evidencePacket": "D:\\clowder-ai\\packages\\api\\data\\ttfund-monitor\\runs\\20260724-1720-auto\\evidence-packet.json"
+    },
+    "temporalDiffStatus": "degraded"
+  },
+  "cross_refs": [
+    {
+      "id": "FB-001",
+      "from_blueprint": "temporal-diff",
+      "from_field": "directional_changes[G2]",
+      "from_value": {
+        "indicator": "G2",
+        "direction": "down",
+        "delta": -12.01,
+        "magnitude": "significant"
+      },
+      "to_blueprint": "gold-rate-conflict",
+      "to_field": "gold_rate_conflict.invalidate_if",
+      "signal": "",
+      "adjustment": {
+        "type": "add_invalidation_condition",
+        "target": "gold_rate_conflict.invalidate_if",
+        "unit": "text",
+        "delta": 1,
+        "singleCap": 3,
+        "cumulativeCap": 3,
+        "value": "G2 (Au99.99) down -12.01 in 0d — may indicate regime shift starting",
+        "reason": "G2 showed significant down movement (-12.01) over 0d"
+      }
+    },
+    {
+      "id": "FB-002",
+      "from_blueprint": "temporal-diff",
+      "from_field": "threshold_crossings.approaching[0]",
+      "from_value": {
+        "indicator": "B2",
+        "threshold": "US 10Y > 5.0%",
+        "currentValue": 4.71,
+        "distance": "6%"
+      },
+      "to_blueprint": "portfolio-action-gate",
+      "to_field": "portfolio_action_gate.action_gate.conditions_to_act",
+      "signal": "",
+      "adjustment": {
+        "type": "add_condition_to_act",
+        "target": "portfolio_action_gate.action_gate.conditions_to_act",
+        "unit": "text",
+        "delta": 1,
+        "singleCap": 3,
+        "cumulativeCap": 3,
+        "value": "If B2 US 10Y > 5.0% → defensive trigger may activate, re-evaluate portfolio stance",
+        "reason": "B2 is 6% threshold US 10Y > 5.0%"
+      }
+    }
+  ],
+  "adjustment_summary": {
+    "total": 2,
+    "by_type": {
+      "add_invalidation_condition": 1,
+      "add_condition_to_act": 1
+    },
+    "by_target_blueprint": {
+      "gold-rate-conflict": 1,
+      "portfolio-action-gate": 1
+    },
+    "cumulative_caps": {
+      "gold_rate_conflict.invalidate_if": {
+        "totalDelta": 1,
+        "cap": 3,
+        "ok": true
+      },
+      "portfolio_action_gate.action_gate.conditions_to_act": {
+        "totalDelta": 1,
+        "cap": 3,
+        "ok": true
+      }
+    },
+    "action_advice_allowed": true
+  }
+}

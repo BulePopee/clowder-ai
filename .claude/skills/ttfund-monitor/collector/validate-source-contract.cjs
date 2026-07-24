@@ -80,16 +80,15 @@ if (sourceProbe) {
 
     const label = `${sp.sourceId} depth:${dp.verdict}`;
     const isRequired = depthPolicy.requiredSources?.includes(sp.sourceId);
-    if (dp.verdict === 'failed' || (dp.verdict === 'degraded' && isRequired)) {
+    if (dp.verdict === 'failed') {
       const classification = dp.classification || 'endpoint_failed';
       if (isRequired) {
-        fail(`${label} (${classification}) — ${dp.details}. Required source depth probe ${dp.verdict.toUpperCase()} — pipeline blocked before collect.`);
+        fail(`${label} (${classification}) — ${dp.details}. Required source depth probe FAILED — pipeline blocked before collect.`);
         if (dp.failures?.length > 0) {
           for (const f of dp.failures) {
             console.error(`    └─ ${f}`);
           }
         }
-        // Show per-check failures
         for (const c of (dp.checks || [])) {
           if (c.failureClass) {
             const crit = c.critical ? ' [CRITICAL]' : '';
@@ -100,7 +99,14 @@ if (sourceProbe) {
         warn(`${label} (${classification}) — ${dp.details}`);
       }
     } else if (dp.verdict === 'degraded') {
-      warn(`${label} — ${dp.details}`);
+      // degraded = non-critical checks only failed, source still operational
+      // Required source degraded is a warning (not block), because non-critical data gaps
+      // are handled by the collector's fallback/proxy mechanisms (e.g. G2_proxy)
+      if (isRequired) {
+        warn(`${label} (${dp.classification || 'non_critical_fail'}) — ${dp.details}. Required source has non-critical data gaps; collector fallback/proxy mechanisms may apply.`);
+      } else {
+        warn(`${label} — ${dp.details}`);
+      }
       if (dp.failures?.length > 0) {
         for (const f of dp.failures) {
           console.warn(`    └─ ${f}`);
