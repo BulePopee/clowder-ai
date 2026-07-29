@@ -1,0 +1,170 @@
+{
+  "meta": {
+    "runId": "20260729-0948-auto",
+    "generatedAt": "2026-07-29T02:05:00.000Z",
+    "framework": "ttfund-monitor v2.7.0 Reason B-layer",
+    "blueprints_rendered": ["macro_regime", "gold_rate_conflict", "portfolio_action_gate"],
+    "blueprints_degraded": [],
+    "guard_blockers": [],
+    "guard_warnings": [
+      "G008: 辅助指标 S1, N2, B10, N6, R3 数据过期（staleGap），相关分析的置信度已降低。",
+      "G009: 组合收益/分析数据部分缺失，基于组合的分析置信度已降低。"
+    ],
+    "action_advice_allowed": true,
+    "data_coverage": "44 fresh / 5 staleGap / 1 missing / 55 total"
+  },
+  "macro_regime": {
+    "regime_claim": "紧缩后期 — 油价冲击解除，FOMC今日决议",
+    "confidence": "medium",
+    "rationale": "Brent从$100.69暴跌至$84.09(-16.5%)——伊朗/霍尔木兹风险溢价瓦解。Brent>$100防御触发解除。利率全曲线下行(US 10Y -10bp至4.61%)。盈亏平衡通胀率降至2.20%(-8bp)确认通胀预期随油价回落。TIPS 2.41%仍限制性。VIX稳定18.67(2d stale)。FOMC Jul 28-29今日——上次报告的'4天后复检'已到。",
+    "steps": {
+      "step1_real_rate": {
+        "tips_10y": 2.41,
+        "tips_trend": "stable (-2bp from 2.43%)",
+        "breakeven_10y": 2.20,
+        "breakeven_trend": "falling (-8bp from 2.28%)",
+        "nominal_10y": 4.61,
+        "real_rate_assessment": "TIPS 2.41% still restrictive. Breakeven falling faster than nominal → inflation expectations dropping with oil crash.",
+        "implication": "tightening financial conditions"
+      },
+      "step2_usd_liquidity": {
+        "dxy": 101.42,
+        "sofr": 3.64,
+        "iorb": 3.65,
+        "sofr_iorb_spread_bp": -1,
+        "t_bill_3m": 3.90,
+        "liquidity_assessment": "Stable, slight easing — short-end rates declining (3M T-Bill 3.95→3.90%). SOFR-IORB narrowing from -3bp to -1bp."
+      },
+      "step3_risk_sentiment": {
+        "vix": 18.67,
+        "vix_staleness": "2d stale",
+        "move": "missing",
+        "fedwatch_jul_hike_pct": 31.5,
+        "nasdaq_100": 27763,
+        "nasdaq_trend": "down -2.4%",
+        "sentiment_assessment": "Cautious — equities selling off pre-FOMC. VIX stable but not declining. FedWatch minority hike probability."
+      },
+      "step4_china_factors": {
+        "hs300": 4534,
+        "hs300_vs_20ma": "below (20MA 4886)",
+        "cn_10y": 1.7351,
+        "cn_us_spread_bp": -2.9,
+        "usd_cny": 6.7928,
+        "cnh_cny": -0.0218,
+        "dr007": 1.4676,
+        "china_assessment": "A-shares weak, diverging negatively. CN-US spread near extreme -2.9bp. DR007 higher → mild domestic tightening."
+      },
+      "step5_regime_classification": {
+        "regime": "Transitional — Oil shock resolved, awaiting FOMC resolution",
+        "classification_rationale": "Oil crash clears stagflation tail risk. But real rates remain restrictive (TIPS 2.41%), FOMC resolution pending today. Too soon to declare new regime — transitional until post-FOMC market response."
+      },
+      "step6_confidence": {
+        "level": "medium",
+        "downgrades": ["VIX 2d stale", "MOVE missing", "5 staleGap indicators", "FOMC outcome unknown (today)"],
+        "note": "Confidence medium — macro data quality good but FOMC resolution TODAY is a binary event that will validate or overturn this assessment."
+      }
+    },
+    "supporting_evidence": [
+      {"indicator": "O1 Brent", "value": "$84.09", "signal": "Oil crash -16.5% in 5 days — Iran/Hormuz risk premium collapsed"},
+      {"indicator": "B8 TIPS", "value": "2.41%", "signal": "Real rates still restrictive — tightening regime intact"},
+      {"indicator": "B2 US 10Y", "value": "4.61%", "signal": "-10bp drop — market repricing lower inflation on oil crash"},
+      {"indicator": "B9 Breakeven", "value": "2.20%", "signal": "-8bp confirms inflation expectations falling with oil"}
+    ],
+    "opposing_evidence": [
+      {"indicator": "S1 VIX", "value": "18.67", "signal": "Stable despite oil crash — not pricing panic"},
+      {"indicator": "B10 HY OAS", "value": "2.68%", "signal": "Credit spreads extremely tight — credit market calm"}
+    ],
+    "stale_or_missing_data": ["A1 MOVE (missing)", "S1 VIX (2d stale)", "R3 IG OAS (29d stale iFinD)", "N2/B10/N6 (2-3d staleGap)"],
+    "invalidate_if": [
+      "If FOMC surprises with 25bp hike today → regime shifts to Aggressive Tightening",
+      "If TIPS breaks above 2.5% → tightening intensifies regardless of oil",
+      "If oil rebounds above $95 → Iran risk premium returns, partial reversal"
+    ]
+  },
+  "gold_rate_conflict": {
+    "claim": "Gold structural bid intact despite restrictive real rates; oil crash marginally improves gold's rate outlook",
+    "confidence": "medium",
+    "model_conflict": {
+      "traditional_model_signal": "bearish (TIPS 2.41% restrictive)",
+      "actual_price_signal": "neutral (COMEX -0.5% to $4029, stable near $4000)",
+      "conflict_resolution": "Oil crash removes inflation-hedge urgency (bearish) but also reduces rate pressure via lower nominal yields (bullish). Net effect: slightly less bearish than previous run. CFTC 8.5:1 crowding remains extreme — positioning flush is primary downside risk."
+    },
+    "weighted_score": {
+      "real_rates_score": {"value": -1.0, "reason": "TIPS 2.41% restrictive — traditional model bearish for gold", "weight_pct": 35},
+      "usd_score": {"value": -0.5, "reason": "DXY 101.42 above 100 — mild headwind", "weight_pct": 20},
+      "positioning_score": {"value": -1.5, "reason": "CFTC 8.5:1 extreme crowding — correction risk elevated", "weight_pct": 20},
+      "structural_score": {"value": 1.0, "reason": "SPDR 1009t (+5.5t) + PBOC 7544万oz — durable structural bid", "weight_pct": 15},
+      "china_premium_score": {"value": 0, "reason": "G2 Au99.99 null (second consecutive run) — cannot calculate domestic premium", "weight_pct": 10},
+      "total": -0.57,
+      "interpretation": "Moderately bearish, slightly improved from -0.78 (previous run). Oil crash marginally helps via lower rates, but CFTC crowding and TIPS 2.41% remain headwinds."
+    },
+    "action_gate": {
+      "action_allowed": false,
+      "action_reason": "Gold score -0.57 (moderately bearish). CFTC 8.5:1 extreme crowding + TIPS 2.41% + G2 null second run. Do not add gold. Wait for FOMC resolution + G2 recovery."
+    },
+    "scenarios": [
+      {"scenario": "FOMC hold + dovish", "trigger": "FOMC holds, Powell signals future cuts", "probability": "medium-high", "gold_impact": "bullish", "portfolio_implication": "Consider trimming gold from 18.8% to 15% on rally"},
+      {"scenario": "FOMC hike 25bp", "trigger": "Surprise July hike", "probability": "low (31.5%)", "gold_impact": "bearish short term", "portfolio_implication": "Hold — TIPS likely spikes, gold corrects"},
+      {"scenario": "Positioning flush", "trigger": "CFTC ratio normalizes to <3:1", "probability": "medium", "gold_impact": "bearish -5% to -10%", "portfolio_implication": "Reduce to target if flush begins"}
+    ]
+  },
+  "portfolio_action_gate": {
+    "action_advice_allowed": true,
+    "recommendation": "hold — FOMC resolution TODAY, then re-evaluate",
+    "confidence": "medium",
+    "blocker_detail": [],
+    "current_allocation": {
+      "total_assets": 3540.41,
+      "hqb_pct": 0,
+      "hqb_assets": 0,
+      "mmf_assets": 676.83,
+      "mmf_note": "长城收益宝货币C ¥451 + 富国收益宝交易型货币B ¥226 = 货币基金 ¥677，计入基金持仓非现金",
+      "mmf_pct": 19.1,
+      "equity_a_share_pct": 25.1,
+      "equity_us_pct": 7.0,
+      "gold_pct": 18.8,
+      "fixed_income_pct": 12.7,
+      "mixed_pct": 17.2
+    },
+    "deviation_analysis": {
+      "target_regime": "defensive (TIPS>2.0% + VIX>18 active, 2/6 triggers)",
+      "deviations": [
+        {"asset": "HQB", "current": 0, "target": "35-40%", "gap": "结构性缺失 — 活期宝¥0，无现金等价物。MMF赎回资金可能停留在监控范围外的银行账户。"},
+        {"asset": "Gold", "current": 18.8, "target": "10-15%", "gap": "超配+3.8pp — 显著超过防御上限"},
+        {"asset": "A-share Equity", "current": 25.1, "target": "15-20%", "gap": "超配+5.1pp — 超过防御上限"},
+        {"asset": "US Equity", "current": 7.0, "target": "5-10%", "gap": "范围内"},
+        {"asset": "Fixed Income", "current": 12.7, "target": "10-15%", "gap": "范围内（但从¥672→¥451，大幅减少）"}
+      ],
+      "total_deviation": "significant — gold +3.8pp, A-share +5.1pp, HQB结构性缺失。但MMF赎回(-¥639)可能是投资者主动调仓，需确认意图。"
+    },
+    "macro_alignment": {
+      "defensive_triggers_assessable": 6,
+      "defensive_triggers_active": 2,
+      "details": [
+        {"indicator": "B8 TIPS>2.0%", "value": "2.41%", "triggered": true},
+        {"indicator": "DXY>102", "value": "101.42", "triggered": false},
+        {"indicator": "VIX>25", "value": "18.67", "triggered": false},
+        {"indicator": "FOMC hike>40%", "value": "31.5%", "triggered": false},
+        {"indicator": "10Y-2Y<0", "value": "+0.4bp", "triggered": false},
+        {"indicator": "HY OAS>4%", "value": "2.68%", "triggered": false}
+      ],
+      "summary": "2/6防御触发vs上次3/8——Brent>$100已清除。油价冲击防御信号解除，但TIPS 2.41%+VIX>18仍维持防御姿态。"
+    },
+    "degraded_portfolio_warnings": [
+      "S2收益数据为空——无法验证持仓收益",
+      "S3组合分析unavailable(403)——无风险指标",
+      "S4交易记录为空——无法确认MMF赎回是否为主动操作"
+    ],
+    "action_gate": {
+      "action_type": "hold",
+      "reason": "FOMC Jul 28-29决议今日公布——上次报告（Jul 24）的'4天后复检'已到。组合发生重大变化(MMF+债券赎回¥860)。在以下三点明确前不做任何操作：(1)FOMC结果已知，(2)MMF赎回是主动调仓还是数据异常，(3)post-FOMC市场反应可观测。黄金超配18.8%但gold-rate-conflict action gate blocked——不加仓也不减仓。",
+      "next_checkpoint": "2026-07-30 (post-FOMC — 验证Fed决议和市场反应)",
+      "conditions_to_act": [
+        "FOMC hold + dovish → 可考虑将MMF赎回资金重新部署至A股(H300近支撑位)",
+        "FOMC hike + hawkish → 维持剩余低风险配置，不重新部署",
+        "Gold CFTC ratio正常化至<5:1 → 考虑将黄金从18.8%减至15%",
+        "确认MMF赎回是否为投资者主动操作——若为数据异常，忽略配置偏差"
+      ]
+    }
+  }
+}

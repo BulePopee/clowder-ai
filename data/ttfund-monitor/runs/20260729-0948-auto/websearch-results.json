@@ -1,0 +1,210 @@
+{
+  "runId": "20260729-0948-auto",
+  "generatedAt": "2026-07-29T01:51:55.663Z",
+  "filledAt": "2026-07-29T01:53:12.899Z",
+  "items": [
+    {
+      "id": "A1",
+      "name": "MOVE",
+      "query": "ICE BofA MOVE index latest value",
+      "unit": "",
+      "critical": false,
+      "status": "failed",
+      "value": 75.03,
+      "date": "2026-07-14",
+      "sourceUrl": "https://markets.ft.com/data/indices/tearsheet/summary?s=MOVE:PSE",
+      "sourceTitle": "ICE BofA US Bond Market Option Volatility Estimate Index — FT",
+      "confidence": "medium",
+      "failureClass": "forbidden_news_article",
+      "notes": "FT/LSEG firm data: 75.03 on Jul 14. Reuters Breakingviews Jul 22 article noted MOVE 'risen modestly to ~78' (news context, not exchange-sourced). 15d stale.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for A1",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "ICE BofA US Bond Market Option Volatility Estimate Index — FT",
+        "sourceDate": "2026-07-14",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    },
+    {
+      "id": "B4",
+      "name": "FedWatch",
+      "query": "CME FedWatch latest rate hike probability",
+      "unit": "%",
+      "critical": false,
+      "status": "reflowed",
+      "value": 31.5,
+      "date": "2026-07-28",
+      "sourceUrl": "https://www.nasdaq.com/articles/will-new-fed-chair-kevin-warsh-shock-market-and-deliver-surprise-rate-hike-feds-july",
+      "sourceTitle": "Nasdaq — CME FedWatch Jul 28-29 FOMC preview",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "Pre-meeting Jul hike probability 31.5-37.9%. Majority (62-68.5%) priced hold at 3.50-3.75%. Sep ~75.8-82% hike probability. FOMC Jul 28-29 is CURRENT meeting — resolution imminent.",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for B4",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Nasdaq — CME FedWatch Jul 28-29 FOMC preview",
+        "sourceDate": "2026-07-28",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    },
+    {
+      "id": "F3",
+      "name": "下次FOMC",
+      "query": "FOMC meeting schedule 2026 next meeting date",
+      "unit": "",
+      "critical": false,
+      "status": "reflowed",
+      "value": "Sep 15-16, 2026",
+      "date": "2026-07-29",
+      "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "sourceTitle": "Federal Reserve — FOMC Meeting Calendar 2026",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "Current FOMC Jul 28-29 underway. Remaining 2026: Sep 15-16 (with SEP), Oct 27-28, Dec 8-9 (with SEP). FOMC Jul 28-29 resolution TODAY.",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for F3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Federal Reserve — FOMC Meeting Calendar 2026",
+        "sourceDate": "2026-07-29",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    },
+    {
+      "id": "N3",
+      "name": "Crane 100 MMF",
+      "query": "Crane 100 money fund yield index latest",
+      "unit": "%",
+      "critical": false,
+      "status": "reflowed",
+      "value": 3.47,
+      "date": "2026-07-24",
+      "sourceUrl": "https://cranedata.us/publications/archives/crane-index/issue/2026-05-01-/",
+      "sourceTitle": "Crane Data — Crane 100 Money Fund Index",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "Week ended Jul 24: 3.47% (unchanged). Up from 3.45% Jul 10. Well below 5.20% Nov 2023 peak. Not below 3.50% since Nov 2022. MMF assets hit record $8.404T early Jul.",
+      "contractEnforcement": {
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for N3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "Crane Data — Crane 100 Money Fund Index",
+        "sourceDate": "2026-07-24",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    },
+    {
+      "id": "A3",
+      "name": "北向成交额",
+      "query": "北向资金 今日成交额",
+      "unit": "亿元",
+      "critical": false,
+      "status": "failed",
+      "value": null,
+      "date": null,
+      "sourceUrl": null,
+      "sourceTitle": null,
+      "confidence": null,
+      "failureClass": "data_not_found",
+      "notes": "WebSearch only found 南向(港股通) data — net outflow 24.95B HKD Jul 29. No 北向(沪股通/深股通) data available via web search. Recommend enabling mx-data or accepting gap.",
+      "contractEnforcement": {
+        "expectedSource": "mx-data",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for A3",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": null,
+        "sourceDate": null,
+        "retrievedAt": null
+      }
+    },
+    {
+      "id": "N5",
+      "name": "美国MMF总规模",
+      "query": "ICI US money market fund total assets latest",
+      "unit": "T",
+      "critical": false,
+      "status": "reflowed",
+      "value": 7.86,
+      "date": "2026-07-24",
+      "sourceUrl": "http://stock.10jqka.com.cn/20260724/c678396748.shtml",
+      "sourceTitle": "同花顺 — ICI: 美国货币市场基金资产降至7.86万亿美元 (Jul 24)",
+      "confidence": "high",
+      "failureClass": null,
+      "notes": "ICI Jul 24 report: $7.86T, down from $7.953T record peak (Jul 8). MMF AUM retreated from all-time high but still near historic extremes.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for N5",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "同花顺 — ICI: 美国货币市场基金资产降至7.86万亿美元 (Jul 24)",
+        "sourceDate": "2026-07-24",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    },
+    {
+      "id": "R3",
+      "name": "IG OAS",
+      "query": "US investment grade corporate bond OAS spread latest",
+      "unit": "bp",
+      "critical": false,
+      "status": "reflowed",
+      "value": 78,
+      "date": "2026-07-16",
+      "sourceUrl": "https://therighttrader.com/macro/investment-grade-spread",
+      "sourceTitle": "The Right Trader — US Investment Grade Spread (OAS)",
+      "confidence": "medium",
+      "failureClass": null,
+      "notes": "ICE BofA US IG OAS: 78bp Jul 16. Q2 close 74bp (1st percentile vs 20yr). Breckinridge: IG OAS ~74bp end Q2 with YTW 5.22%. Both far below 20yr avg ~130bp. 13d stale. iFinD R3 66bp Jun 30 is 29d stale.",
+      "contractEnforcement": {
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "ifind allows websearch for non-critical indicators",
+        "writePolicy": "write_to_raw",
+        "sourceTitle": "The Right Trader — US Investment Grade Spread (OAS)",
+        "sourceDate": "2026-07-16",
+        "retrievedAt": "2026-07-29T01:53:12.899Z"
+      }
+    }
+  ],
+  "disclosures": [
+    {
+      "id": "F1",
+      "name": "联邦基金利率上限",
+      "query": "Federal funds rate target upper bound latest",
+      "writePolicy": "blocked_by_contract",
+      "contractReason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+      "disclosureNote": "FOMC Jul 28-29 decision TODAY — rate likely held at 3.50-3.75% (62-68.5% probability). FOMC statement will be definitive.",
+      "disclosureDate": "2026-07-29"
+    },
+    {
+      "id": "F2",
+      "name": "核心PCE YoY",
+      "query": "US core PCE price index year-over-year latest",
+      "writePolicy": "blocked_by_contract",
+      "contractReason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
+      "disclosureNote": "June 2026 Core PCE at 3.4% (per news context, above 2% target). FOMC decision TODAY may reference latest PCE data.",
+      "disclosureDate": "2026-07-29"
+    }
+  ],
+  "summary": {
+    "total": 9,
+    "fillable": 7,
+    "blocked": 2,
+    "reflowed": 5,
+    "failed": 2,
+    "pending": 0
+  }
+}

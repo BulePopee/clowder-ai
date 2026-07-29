@@ -1,0 +1,540 @@
+{
+  "runId": "20260729-0948-auto",
+  "round": "routine",
+  "startTime": "2026-07-29T02:03:35.135Z",
+  "sources": {
+    "ttfund": {
+      "calls": [
+        {
+          "call": "GOLD_INFO",
+          "durationMs": 6690,
+          "extracted": 13,
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "INDEX_INFO_000300",
+          "durationMs": 1011,
+          "extracted": 1,
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "HUOQIBAO_LIST",
+          "durationMs": 828,
+          "extracted": 1,
+          "attempts": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    "ifind": {
+      "totalCalls": 37,
+      "success": 36,
+      "failed": 1,
+      "retried": 36,
+      "batchCount": 8
+    },
+    "wind": {
+      "calls": [
+        {
+          "call": "F1",
+          "durationMs": 1761,
+          "indicator": "F1",
+          "attempts": 1,
+          "status": "ok"
+        },
+        {
+          "call": "F2",
+          "durationMs": 1685,
+          "indicator": "F2",
+          "attempts": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    "mxdata": {
+      "status": "skipped",
+      "note": "A3 via WebSearch (EastMoney primary)"
+    }
+  },
+  "endTime": "2026-07-29T02:06:33.382Z",
+  "summary": {
+    "totalItems": 56,
+    "activeItems": 36,
+    "fresh": 34,
+    "staleSuccess": 2,
+    "staleGap": 6,
+    "noDate": 8,
+    "invalidDate": 0,
+    "missing": 2,
+    "websearchPending": 7,
+    "websearchBlocked": 2
+  },
+  "sourceContracts": {
+    "version": "1.1.0",
+    "indicatorContracts": {
+      "B1": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "B2": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "B3": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "B6": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "S1": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "X1": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "X3": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G1_am": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G1_pm": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G2": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "missing",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G3": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G5": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G6": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "CPI": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G2_proxy": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "E2": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "M3": {
+        "expectedSource": "ttfund",
+        "actualSource": "ttfund",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ttfund"
+        ]
+      },
+      "G4": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "G4b": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "AG": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "O1": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "O2": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "G7": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "G8l": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "G8s": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "A2a": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "A2g": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "A1": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "missing",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "N4": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "X4": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "B8": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "B9": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "M1": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "M2": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "M2a": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "N1": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "B5": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "B7": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "E1": {
+        "expectedSource": "wind",
+        "actualSource": "ifind",
+        "contractStatus": "fallback_ok",
+        "fallbackChain": [
+          "wind",
+          "ifind"
+        ]
+      },
+      "X2": {
+        "expectedSource": "wind",
+        "actualSource": "ifind",
+        "contractStatus": "fallback_ok",
+        "fallbackChain": [
+          "wind",
+          "ifind"
+        ]
+      },
+      "N2": {
+        "expectedSource": "wind",
+        "actualSource": "ifind",
+        "contractStatus": "fallback_ok",
+        "fallbackChain": [
+          "wind",
+          "ifind"
+        ]
+      },
+      "E3": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "M4": {
+        "expectedSource": "wind",
+        "actualSource": "ifind",
+        "contractStatus": "fallback_ok",
+        "fallbackChain": [
+          "wind",
+          "ifind"
+        ]
+      },
+      "E1_kl": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "E2_kl": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "E3_kl": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "B10": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "N6": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "S3": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "S2": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "M5": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "N5": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "R3": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "R4": {
+        "expectedSource": "ifind",
+        "actualSource": "ifind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "ifind"
+        ]
+      },
+      "F1": {
+        "expectedSource": "wind",
+        "actualSource": "wind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "wind"
+        ]
+      },
+      "F2": {
+        "expectedSource": "wind",
+        "actualSource": "wind",
+        "contractStatus": "ok",
+        "fallbackChain": [
+          "wind"
+        ]
+      }
+    },
+    "summary": {
+      "totalWithContract": 56,
+      "ok": 50,
+      "fallbackOk": 4,
+      "fallbackViolation": 0,
+      "missing": 2,
+      "noContract": 0,
+      "websearchViolations": 0
+    }
+  }
+}
