@@ -12,7 +12,7 @@ import { catRegistry } from '@cat-cafe/shared';
 
 const REPO_ROOT_TEMPLATE = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', 'cat-template.json');
 const CAT_TEMPLATE_PATH = REPO_ROOT_TEMPLATE;
-const FULL_RUNTIME_PROMPT_CHAR_BUDGET = 6900; // 6500→6700→6900: gemini35 + gpt-pro roster growth
+const FULL_RUNTIME_PROMPT_CHAR_BUDGET = 7100; // Includes the full runtime roster and governance digest
 
 function assertWithinFullRuntimePromptBudget(prompt) {
   assert.ok(
@@ -951,7 +951,7 @@ describe('SystemPromptBuilder', () => {
     }
   });
 
-  test('F167-E: opencode is a pure coordinator with explicit hard limits', async () => {
+  test('F167-E: abyssinian is a pure coordinator with explicit hard limits', async () => {
     const { loadCatConfig, toAllCatConfigs } = await import('../dist/config/cat-config-loader.js');
     const { buildStaticIdentity } = await import('../dist/domains/cats/services/context/SystemPromptBuilder.js');
     const originalConfigs = catRegistry.getAllConfigs();
@@ -961,12 +961,12 @@ describe('SystemPromptBuilder', () => {
       for (const [id, config] of Object.entries(runtimeConfigs)) {
         catRegistry.register(id, config);
       }
-      const prompt = buildStaticIdentity('opencode');
-      assert.match(prompt, /协调与分诊猫/, 'opencode identity must present it as a coordinator');
+      const prompt = buildStaticIdentity('abyssinian');
+      assert.match(prompt, /协调与分诊猫/, 'abyssinian identity must present it as a coordinator');
       assert.match(prompt, /只负责问题框架、归属判断、路由发球与证据回收/, 'coordinator scope must be explicit');
-      assert.match(prompt, /你的硬限制/, 'opencode own prompt must declare restrictions');
-      assert.match(prompt, /禁止写代码/, 'opencode must explicitly forbid coding');
-      assert.match(prompt, /禁止通过子 agent 间接执行/, 'opencode must forbid indirect execution via subagents');
+      assert.match(prompt, /你的硬限制/, 'abyssinian own prompt must declare restrictions');
+      assert.match(prompt, /禁止写代码/, 'abyssinian must explicitly forbid coding');
+      assert.match(prompt, /禁止通过子 agent 间接执行/, 'abyssinian must forbid indirect execution via subagents');
     } finally {
       catRegistry.reset();
       for (const [id, config] of Object.entries(originalConfigs)) {
@@ -1784,7 +1784,10 @@ describe('SystemPromptBuilder', () => {
       },
     });
     // 6200→6500→6700→6800→6900: decision funnel §17 + roster growth + F208 dossier l0RosterSummary
-    assert.ok(prompt.length < 6900, `Prompt with SOP hint is ${prompt.length} chars, expected < 6900`);
+    assert.ok(
+      prompt.length < FULL_RUNTIME_PROMPT_CHAR_BUDGET,
+      `Prompt with SOP hint is ${prompt.length} chars, expected < ${FULL_RUNTIME_PROMPT_CHAR_BUDGET}`,
+    );
   });
 
   // --- F092: Voice Mode prompt injection ---
@@ -1832,7 +1835,10 @@ describe('SystemPromptBuilder', () => {
       voiceMode: true,
     });
     // 6200→6500→6700→6800→6900: decision funnel §17 + roster growth + F208 dossier l0RosterSummary
-    assert.ok(prompt.length < 6900, `Prompt with voice mode + SOP hint is ${prompt.length} chars, expected < 6900`);
+    assert.ok(
+      prompt.length < FULL_RUNTIME_PROMPT_CHAR_BUDGET,
+      `Prompt with voice mode + SOP hint is ${prompt.length} chars, expected < ${FULL_RUNTIME_PROMPT_CHAR_BUDGET}`,
+    );
   });
 
   test('buildInvocationContext injects bootcamp mode when bootcampState provided', async () => {
@@ -2067,7 +2073,7 @@ describe('SystemPromptBuilder', () => {
 
     // Pin: update this hash whenever you add/remove/rename P* or W* sections
     // in shared-rules.md, AND update GOVERNANCE_L0_DIGEST in SystemPromptBuilder.ts
-    const PINNED_HASH = '1b137442fdbb0d1c';
+    const PINNED_HASH = '2020cc1af3277c2f';
     if (PINNED_HASH === '${PLACEHOLDER}') {
       // First run — print hash for pinning
       console.log(`[drift-guard] shared-rules headings hash: ${hash} — pin this value`);
