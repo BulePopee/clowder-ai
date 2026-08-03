@@ -270,6 +270,29 @@ test('#840: empty systemPrompt does not produce any append-system-prompt flag', 
   assert.ok(!args.includes('--append-system-prompt-file'));
 });
 
+test('timeout error identifies the invoked Claude cat instead of hardcoding 布偶猫', async () => {
+  const spawnCliOverride = () =>
+    (async function* () {
+      yield {
+        __cliTimeout: true,
+        timeoutMs: 300_000,
+        message: 'CLI 响应超时 (300s)',
+        command: 'claude',
+        firstEventAt: Date.now(),
+        lastEventAt: Date.now(),
+        silenceDurationMs: 300_000,
+        processAlive: true,
+      };
+    })();
+  const service = createClaudeAgentService({ catId: 'cat-g7k98t5f', model: 'claude-test-model' });
+
+  const events = await collect(service.invoke('hi', { spawnCliOverride }));
+  const error = events.find((event) => event.type === 'error');
+
+  assert.equal(error?.error, 'cat-g7k98t5f CLI 响应超时 (300s)');
+  assert.doesNotMatch(error?.error ?? '', /布偶猫/);
+});
+
 // --- #840 R2 finding (砚砚): main prompt must not ride argv either ---
 
 test('#840 R2: long main prompt is delivered via stdin, not as argv element (-p carrier)', async () => {
