@@ -2,7 +2,7 @@
   "runId": "20260729-0948-auto",
   "round": "routine",
   "version": "2.5.1",
-  "collectedAt": "2026-07-29T02:06:33.381Z",
+  "collectedAt": "2026-07-29T02:36:38.211Z",
   "summary": {
     "total": 56,
     "collected": 36,
@@ -12,11 +12,8 @@
     "staleGap": 6,
     "noDate": 8,
     "invalidDate": 0,
-    "websearchPending": 2,
-    "websearchPendingIds": [
-      "A1",
-      "A3"
-    ],
+    "websearchPending": 0,
+    "websearchPendingIds": [],
     "websearchFilled": 5,
     "websearchFilledIds": [
       "B4",
@@ -30,14 +27,15 @@
       {
         "id": "F1",
         "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
-        "note": "联邦基金利率上限: source contract forbids websearch fallback"
+        "hasAdvisoryNote": true
       },
       {
         "id": "F2",
         "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)",
-        "note": "核心PCE YoY: source contract forbids websearch fallback"
+        "hasAdvisoryNote": true
       }
-    ]
+    ],
+    "websearchFailed": 2
   },
   "results": {
     "B1": {
@@ -108,10 +106,13 @@
     },
     "G2": {
       "indicator": "G2",
-      "value": null,
+      "value": 883.28,
+      "date": "2026-07-28",
       "source": "ttfund",
       "unit": "元/克",
-      "_freshStatus": "missing"
+      "_freshStatus": "fresh",
+      "_probeFallback": true,
+      "_probeNote": "Value from source-probe depthProbe (ttfund GOLD_INFO.au9999.close=883.28). Main collection returned null (intermittent Au99.99 null — known ttfund issue). Cross-stage consistency fallback applied."
     },
     "G3": {
       "indicator": "G3",
@@ -823,19 +824,27 @@
     },
     "N5": {
       "indicator": "N5",
-      "value": 7.860746,
-      "date": "2026-07-22",
-      "source": "ifind",
+      "value": 7.86,
+      "date": "2026-07-24",
+      "source": "websearch",
       "unit": "T",
+      "_sourceUrl": "http://stock.10jqka.com.cn/20260724/c678396748.shtml",
+      "_sourceTitle": "同花顺 — ICI: 美国货币市场基金资产降至7.86万亿美元 (Jul 24)",
+      "_filledAt": "2026-07-29T02:36:38.211Z",
+      "_fallback": true,
       "_freshStatus": "fresh"
     },
     "R3": {
       "indicator": "R3",
-      "value": 66,
-      "date": "2026-06-30",
-      "source": "ifind",
+      "value": 78,
+      "date": "2026-07-16",
+      "source": "websearch",
       "unit": "bp",
-      "_freshStatus": "staleGap"
+      "_sourceUrl": "https://therighttrader.com/macro/investment-grade-spread",
+      "_sourceTitle": "The Right Trader — US Investment Grade Spread (OAS)",
+      "_filledAt": "2026-07-29T02:36:38.211Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
     },
     "R4": {
       "indicator": "R4",
@@ -859,6 +868,39 @@
       "date": "2026-05-31",
       "source": "wind",
       "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B4": {
+      "indicator": "B4",
+      "value": 31.5,
+      "date": "2026-07-28",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://www.nasdaq.com/articles/will-new-fed-chair-kevin-warsh-shock-market-and-deliver-surprise-rate-hike-feds-july",
+      "_sourceTitle": "Nasdaq — CME FedWatch Jul 28-29 FOMC preview",
+      "_filledAt": "2026-07-29T02:36:38.211Z",
+      "_freshStatus": "fresh"
+    },
+    "F3": {
+      "indicator": "F3",
+      "value": "Sep 15-16, 2026",
+      "date": "2026-07-29",
+      "source": "websearch",
+      "unit": "",
+      "_sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "_sourceTitle": "Federal Reserve — FOMC Meeting Calendar 2026",
+      "_filledAt": "2026-07-29T02:36:38.211Z",
+      "_freshStatus": "fresh"
+    },
+    "N3": {
+      "indicator": "N3",
+      "value": 3.47,
+      "date": "2026-07-24",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://cranedata.us/publications/archives/crane-index/issue/2026-05-01-/",
+      "_sourceTitle": "Crane Data — Crane 100 Money Fund Index",
+      "_filledAt": "2026-07-29T02:36:38.211Z",
       "_freshStatus": "fresh"
     }
   }

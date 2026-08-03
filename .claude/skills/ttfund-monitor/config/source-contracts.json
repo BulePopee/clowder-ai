@@ -39,9 +39,9 @@
         "timeoutMs": 30000,
         "responseParser": { "type": "jsonPath", "path": "data.raw_result.body.data" },
         "checks": [
-          { "path": "macro_fiscal.treasury_yields.us_10y", "label": "B2 US 10Y yield", "valueKind": "number", "critical": true },
+          { "path": "macro_fiscal.treasury_yields.us_10y", "label": "B2 US 10Y yield", "valueKind": "number", "critical": true, "indicatorId": "B2" },
           { "path": "macro_fiscal.trade_date", "label": "Trade date", "valueKind": "date", "critical": true },
-          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": false, "note": "G2_proxy fallback exists in collector; null Au9999 must not block pipeline" }
+          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": false, "indicatorId": "G2", "note": "G2_proxy fallback exists in collector; null Au9999 must not block pipeline" }
         ]
       }
     },
@@ -79,7 +79,7 @@
         "timeoutMs": 25000,
         "functionCall": { "export": "call", "args": ["edb", "get_edb_data", { "query": "美国通胀保值国债收益率 10年期" }] },
         "checks": [
-          { "path": "value", "label": "B8 TIPS 10Y value", "valueKind": "number", "critical": true },
+          { "path": "value", "label": "B8 TIPS 10Y value", "valueKind": "number", "critical": true, "indicatorId": "B8" },
           { "path": "date", "label": "B8 date", "valueKind": "date", "critical": true }
         ]
       }
@@ -112,7 +112,7 @@
         "timeoutMs": 30000,
         "responseParser": { "type": "json" },
         "checks": [
-          { "path": "$any", "label": "F1 Fed funds rate (any response field)", "valueKind": "number", "critical": true }
+          { "path": "$any", "label": "F1 Fed funds rate (any response field)", "valueKind": "number", "critical": true, "indicatorId": "F1" }
         ]
       }
     },

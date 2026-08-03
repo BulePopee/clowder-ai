@@ -74,7 +74,7 @@
       {"indicator": "S1 VIX", "value": "18.67", "signal": "Stable despite oil crash — not pricing panic"},
       {"indicator": "B10 HY OAS", "value": "2.68%", "signal": "Credit spreads extremely tight — credit market calm"}
     ],
-    "stale_or_missing_data": ["A1 MOVE (missing)", "S1 VIX (2d stale)", "R3 IG OAS (29d stale iFinD)", "N2/B10/N6 (2-3d staleGap)"],
+    "stale_or_missing_data": ["A1 MOVE (WebSearch rejected — forbidden_news_article, iFinD no response)", "S1 VIX (2d stale)", "R3 IG OAS (29d stale iFinD)", "N2/B10/N6 (2-3d staleGap)"],
     "invalidate_if": [
       "If FOMC surprises with 25bp hike today → regime shifts to Aggressive Tightening",
       "If TIPS breaks above 2.5% → tightening intensifies regardless of oil",

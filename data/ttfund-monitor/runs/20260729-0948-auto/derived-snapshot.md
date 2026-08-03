@@ -1,7 +1,7 @@
-# 衍生指标 · 2026-07-29 02:07
+# 衍生指标 · 2026-07-29 02:37
 
 ## 元信息
-- 计算时间：2026-07-29T02:07:02.271Z
+- 计算时间：2026-07-29T02:37:36.344Z
 - 数据基础：raw-snapshot.md (56 indicators)
 - 公式来源：compute/formulas.md (v2.5.2)
 
@@ -47,7 +47,7 @@
 |:--:|------|------|------|------|------|
 | D11 | Gold/Oil Ratio | G4 / O1 | 47.91 | ratio | freshDerived |
 | D12 | Gold/Silver Ratio | G4 / AG | 66.99 | ratio | staleDerived |
-| D13 | G11 CN Premium | (G2*31.1035/X3)/G4-1 | 🔴 缺失 | % | missingDerived |
+| D13 | G11 CN Premium | (G2*31.1035/X3)/G4-1 | 0.39 | % | freshDerived |
 
 ## 汇率衍生
 
@@ -73,14 +73,14 @@
 | D21 | Credit Spread AAA-Govt 3Y | A2a - A2g | 0.3 | bp | freshDerived |
 | D22 | TIPS+BE vs Nominal | B8+B9 vs B2 | 4.61 | % | freshDerived |
 | D23 | Gold Futures-Spot Basis | G5 - G1_pm | -8.09 | 元/克 | staleDerived |
-| D24 | MMF CN-US Spread | N3 - M3 | 🔴 缺失 | bp | missingDerived |
+| D24 | MMF CN-US Spread | N3 - M3 | 1.9 | bp | freshDerived |
 
 ## 汇总
 
 | 类别 | 数量 |
 |------|------|
-| freshDerived | 7 |
+| freshDerived | 9 |
 | staleDerived | 10 |
-| missingDerived | 8 |
+| missingDerived | 6 |
 
-> 总公式数: 25 | freshDerived: 7 | staleDerived: 10 | missingDerived: 8
+> 总公式数: 25 | freshDerived: 9 | staleDerived: 10 | missingDerived: 6

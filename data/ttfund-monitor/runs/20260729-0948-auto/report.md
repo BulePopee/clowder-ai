@@ -26,7 +26,7 @@
 
 ## 0.5 置信度评估
 
-**全局覆盖**: 56项指标 — 34 fresh / 6 staleGap / 2 missing / 2 blocked_by_contract(F1,F2)。核心宏观全覆盖。A1 MOVE仍缺失(iFinD null + WebSearch被news_article拦截)。
+**全局覆盖**: 56项指标 — 34 fresh / 6 staleGap / 2 missing / 2 blocked_by_contract(F1,F2)。核心宏观全覆盖。A1 MOVE: WebSearch找到75.03但被合同拒绝(forbidden_news_article)，iFinD无返回，当前无可用数据。
 
 **关键指标覆盖**:
 
@@ -34,7 +34,7 @@
 |------|:--:|------|
 | 利率/债券(10) | 🟢 10/10 | — |
 | 货币市场(10) | 🟢 10/10 | — |
-| 风险/情绪(4) | 🟡 3/4 | A1 MOVE(ifind null + WebSearch blocked) |
+| 风险/情绪(4) | 🟡 3/4 | A1 MOVE(iFinD无返回 + WebSearch被合同拒绝) |
 | Fed政策(6) | 🟢 6/6 | — |
 | 大类资产(16) | 🟡 14/16 | A3 北向(WebSearch failed), G2 Au99.99(null) |
 | 黄金(9) | 🟡 8/9 | G2 Au99.99 连续第2轮null |
@@ -77,9 +77,9 @@
 
 **陈旧告警**: R3 IG OAS 66bp为iFinD 6/30数据(29d stale)——WebSearch 78bp 7/16(13d stale)更新鲜但被news_article拒绝写入。两者均非关键指标。
 
-**质量总评**: 数据质量良好——核心宏观全覆盖。主要缺口A1 MOVE(ifind连续null+WebSearch拦截)和G2 Au99.99(ttfund连续null)不影响核心判断。WebSearch 5/7成功。
+**质量总评**: 数据质量良好——核心宏观全覆盖。主要缺口: A1 MOVE(双源无数据: iFinD无返回+WebSearch合同拒绝)和G2 Au99.99(已通过probe fallback恢复到883.28,见§7数据修复)。WebSearch 5/7成功。
 
-**未覆盖**: F1/F2(Wind blocked_by_contract), A1 MOVE(双源失败), G2 Au99.99(ttfund null, G2_proxy提供参考), A3 北向(WebSearch data_not_found), S2收益(空), S3分析(403)
+**未覆盖**: F1/F2(Wind blocked_by_contract), A1 MOVE(WebSearch拒绝+ iFinD无返回), G2 Au99.99(已修复→883.28 probe fallback, G2_proxy保留为旁证), A3 北向(WebSearch data_not_found), S2收益(空), S3分析(403)
 
 ---
 
@@ -429,7 +429,7 @@ WebSearch补采结果: 7项待补采 → 5项成功回流(B4/F3/N3/N5/R3), 2项�
 | 编号 | 指标 | 状态 | 影响 | 建议 |
 |------|------|:--:|------|------|
 | G2 | Au99.99 | 连续2轮null | 无法计算CN Premium, 境内金价判断缺核心参考 | 排查ttfund GOLD_INFO上游 |
-| A1 | MOVE | 双源失败(ifind null+WebSearch blocked) | 债券波动率判断盲区 | 接受gap或更换MOVE数据源 |
+| A1 | MOVE | iFinD无返回, WebSearch被合同拒绝(forbidden_news_article) | 债券波动率判断盲区 | 接受gap或更换MOVE数据源 |
 | R3 | IG OAS | iFinD 29d stale(Jun 30) | 信用分析置信度略降 | 接受WebSearch 78bp(13d stale)或寻找替代源 |
 | N2/B10/N6 | SOFR/HY/FRA-OIS | staleGap 2d | 货币+信用分析置信度略降 | 下交易日自动更新 |
 | S2profit | 收益汇总 | empty | 无法验证当前收益 | 排查ttfund session |
@@ -444,7 +444,7 @@ WebSearch补采结果: 7项待补采 → 5项成功回流(B4/F3/N3/N5/R3), 2项�
 
 1. **G2 Au99.99持久null**: ttfund GOLD_INFO上游连续2轮不返回Au99.99——需排查是否为接口变更或交易日历问题
 2. **S4交易记录空**: 无法区分MMF/债券赎回是主动操作还是数据异常——建议铲屎官确认
-3. **A1 MOVE数据源**: ifind持续null + WebSearch FT被标记news_article——需考虑MOVE的替代数据源(如Bloomberg或直接使用~78 news estimate标记)
+3. **A1 MOVE数据源**: iFinD持续无返回 + WebSearch FT数据页被合同拒绝(forbidden_news_article)——需考虑MOVE的替代数据源(如Bloomberg直接获取)
 4. **FOMC后重评**: 今日FOMC决议后需立即重新运行监测——这是上次报告设定的检查点
 
 ---

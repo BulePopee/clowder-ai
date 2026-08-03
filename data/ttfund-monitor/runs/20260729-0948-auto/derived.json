@@ -1,13 +1,13 @@
 {
   "meta": {
     "runId": "20260729-0948-auto",
-    "computedAt": "2026-07-29T02:07:02.271Z",
+    "computedAt": "2026-07-29T02:37:36.344Z",
     "version": "1.0.0",
     "totalFormulas": 25,
     "counts": {
-      "freshDerived": 7,
+      "freshDerived": 9,
       "staleDerived": 10,
-      "missingDerived": 8
+      "missingDerived": 6
     }
   },
   "derived": {
@@ -157,11 +157,11 @@
     "D13": {
       "name": "G11 CN Premium",
       "formula": "(G2*31.1035/X3)/G4-1",
-      "value": null,
+      "value": "0.39",
       "unit": "%",
-      "freshness": "missingDerived",
+      "freshness": "freshDerived",
       "components": {
-        "G2": "missing",
+        "G2": "fresh",
         "X3": "fresh",
         "G4": "fresh"
       }
@@ -274,11 +274,11 @@
     "D24": {
       "name": "MMF CN-US Spread",
       "formula": "N3 - M3",
-      "value": null,
+      "value": "1.9",
       "unit": "bp",
-      "freshness": "missingDerived",
+      "freshness": "freshDerived",
       "components": {
-        "N3": "missing",
+        "N3": "fresh",
         "M3": "fresh"
       }
     }

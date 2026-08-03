@@ -14,7 +14,7 @@
 | AG | COMEX白银 | 60.14 | 2026-07-27 | ifind |
 | A2a | AAA企业债3Y | 1.6288 | 2026-07-28 | ifind |
 | A2g | 国债3Y | 1.2836 | 2026-07-28 | ifind |
-| A1 | MOVE | 🔴 缺口 | - | ifind |
+| A1 | MOVE | 🔴 缺口 (WebSearch rejected: forbidden_news_article) | - | ifind + websearch |
 
 ### B 债券
 | 编号 | 名称 | 值 | 数据日期 | 来源 |
@@ -75,11 +75,11 @@
 |:--:|------|------|------|------|
 | G1_am | SGE基准价(上午) | 894.47 | - | ttfund |
 | G1_pm | SGE基准价(下午) | 893.19 | - | ttfund |
-| G2 | Au99.99 | 🔴 缺口 | - | ttfund |
+| G2 | Au99.99 | 883.28 | 2026-07-28 | ttfund (_probeFallback — depth probe value, main collection returned null) |
 | G3 | Au(T+D) | 882.78 | 2026-07-28 | ttfund |
 | G5 | 期货主力 | 885.1 | - | ttfund |
 | G6 | 央行黄金储备 | 7544 | 2026-06-01 | ttfund |
-| G2_proxy | G2_proxy | 893.19 | - | ttfund proxy: G1_pm (SGE evening benchmark) — Au99.99 unavailable, substitute for domestic gold reference only |
+| G2_proxy | G2_proxy | 893.19 | - | ttfund proxy: G1_pm (SGE evening benchmark) — Au99.99 now restored via probe fallback, G2_proxy retained as cross-check only |
 | G4 | COMEX黄金 | 4028.8 | 2026-07-28 | ifind |
 | G4b | LBMA午盘定盘价 | 4022.2 | 2026-07-28 | ifind |
 | G7 | SPDR持仓 | 32431577.14 | 2026-07-28 | ifind |

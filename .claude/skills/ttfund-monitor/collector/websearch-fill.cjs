@@ -620,7 +620,7 @@ function modeValidate() {
     // TED利差 only when NOT in deprecation context (check both before and after)
     { pattern: /(?<!废弃.{0,30}|DEPRECATED.{0,30}|替换.{0,30}|替代.{0,30})TED利差(?!.{0,30}(?:废弃|DEPRECATED|替换|派生|替代|SOFR))/g, label: 'TED利差 as active (N7已替换为SOFR-IORB)' },
     { pattern: /TED\s*LIBOR\s*废弃/g, label: 'TED LIBOR废弃 — N7已替换为SOFR-IORB派生' },
-    { pattern: /A1.{0,20}MOVE.{0,20}(?:null|🔴|缺口|missing|缺失)/gi, label: 'A1 MOVE null/missing (WebSearch已补采=70.25)' },
+    { pattern: /A1.{0,20}MOVE.{0,20}(?:null|🔴|缺口|missing|缺失)(?!.{0,80}(?:rejected|news_article|blocked|contract|拒绝|拦截|合同))/gi, label: 'A1 MOVE null/gap WITHOUT rejection context — WebSearch attempted fill, verify if genuinely blocked or filler missed it' },
     { pattern: /WebSearch\s*10\s*项\s*待补采/g, label: 'WebSearch 10项待补采 (7已reflow/2blocked)' },
     { pattern: /10\s*WebSearch\s*待补采/g, label: '10 WebSearch待补采 (7已reflow/2blocked)' },
     { pattern: /B4\s*FedWatch\s*未采集/g, label: 'B4 FedWatch未采集 (WebSearch已补采38%)' },

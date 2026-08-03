@@ -1,7 +1,7 @@
 {
   "runId": "20260729-0948-auto",
   "generatedAt": "2026-07-29T01:51:55.663Z",
-  "filledAt": "2026-07-29T01:53:12.899Z",
+  "filledAt": "2026-07-29T02:36:38.211Z",
   "items": [
     {
       "id": "A1",
@@ -25,7 +25,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "ICE BofA US Bond Market Option Volatility Estimate Index — FT",
         "sourceDate": "2026-07-14",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": null
       }
     },
     {
@@ -50,7 +50,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "Nasdaq — CME FedWatch Jul 28-29 FOMC preview",
         "sourceDate": "2026-07-28",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": "2026-07-29T02:36:38.211Z"
       }
     },
     {
@@ -75,7 +75,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "Federal Reserve — FOMC Meeting Calendar 2026",
         "sourceDate": "2026-07-29",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": "2026-07-29T02:36:38.211Z"
       }
     },
     {
@@ -100,7 +100,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "Crane Data — Crane 100 Money Fund Index",
         "sourceDate": "2026-07-24",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": "2026-07-29T02:36:38.211Z"
       }
     },
     {
@@ -150,7 +150,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "同花顺 — ICI: 美国货币市场基金资产降至7.86万亿美元 (Jul 24)",
         "sourceDate": "2026-07-24",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": "2026-07-29T02:36:38.211Z"
       }
     },
     {
@@ -175,7 +175,7 @@
         "writePolicy": "write_to_raw",
         "sourceTitle": "The Right Trader — US Investment Grade Spread (OAS)",
         "sourceDate": "2026-07-16",
-        "retrievedAt": "2026-07-29T01:53:12.899Z"
+        "retrievedAt": "2026-07-29T02:36:38.211Z"
       }
     }
   ],

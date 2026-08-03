@@ -68,8 +68,9 @@
     "noDate": 8,
     "invalidDate": 0,
     "missing": 2,
-    "websearchPending": 7,
-    "websearchBlocked": 2
+    "websearchPending": 0,
+    "websearchBlocked": 2,
+    "websearchFilled": 5
   },
   "sourceContracts": {
     "version": "1.1.0",
@@ -535,6 +536,95 @@
       "missing": 2,
       "noContract": 0,
       "websearchViolations": 0
+    }
+  },
+  "websearch": {
+    "runId": "20260729-0948-auto",
+    "filledAt": "2026-07-29T02:36:38.211Z",
+    "records": [
+      {
+        "indicator": "B4",
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for B4",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "https://www.nasdaq.com/articles/will-new-fed-chair-kevin-warsh-shock-market-and-deliver-surprise-rate-hike-feds-july",
+        "sourceTitle": "Nasdaq — CME FedWatch Jul 28-29 FOMC preview",
+        "sourceDate": "2026-07-28",
+        "retrievedAt": "2026-07-29T02:36:38.211Z",
+        "value": 31.5,
+        "confidence": "high",
+        "disposition": "written_to_raw (primary collector)"
+      },
+      {
+        "indicator": "F3",
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for F3",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+        "sourceTitle": "Federal Reserve — FOMC Meeting Calendar 2026",
+        "sourceDate": "2026-07-29",
+        "retrievedAt": "2026-07-29T02:36:38.211Z",
+        "value": "Sep 15-16, 2026",
+        "confidence": "high",
+        "disposition": "written_to_raw (primary collector)"
+      },
+      {
+        "indicator": "N3",
+        "expectedSource": "websearch",
+        "actualSource": "websearch",
+        "contractDecision": "fillable_websearch",
+        "contractReason": "websearch is designated primary collector for N3",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "https://cranedata.us/publications/archives/crane-index/issue/2026-05-01-/",
+        "sourceTitle": "Crane Data — Crane 100 Money Fund Index",
+        "sourceDate": "2026-07-24",
+        "retrievedAt": "2026-07-29T02:36:38.211Z",
+        "value": 3.47,
+        "confidence": "high",
+        "disposition": "written_to_raw (primary collector)"
+      },
+      {
+        "indicator": "N5",
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "websearch is designated fallback for N5",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "http://stock.10jqka.com.cn/20260724/c678396748.shtml",
+        "sourceTitle": "同花顺 — ICI: 美国货币市场基金资产降至7.86万亿美元 (Jul 24)",
+        "sourceDate": "2026-07-24",
+        "retrievedAt": "2026-07-29T02:36:38.211Z",
+        "value": 7.86,
+        "confidence": "high",
+        "disposition": "written_to_raw (fallback)"
+      },
+      {
+        "indicator": "R3",
+        "expectedSource": "ifind",
+        "actualSource": "websearch",
+        "contractDecision": "fallback_allowed",
+        "contractReason": "ifind allows websearch for non-critical indicators",
+        "writePolicy": "write_to_raw",
+        "sourceUrl": "https://therighttrader.com/macro/investment-grade-spread",
+        "sourceTitle": "The Right Trader — US Investment Grade Spread (OAS)",
+        "sourceDate": "2026-07-16",
+        "retrievedAt": "2026-07-29T02:36:38.211Z",
+        "value": 78,
+        "confidence": "medium",
+        "disposition": "written_to_raw (fallback)"
+      }
+    ],
+    "summary": {
+      "total": 9,
+      "fillable": 7,
+      "blocked": 2,
+      "reflowed": 5,
+      "failed": 2,
+      "pending": 0
     }
   }
 }

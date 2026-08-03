@@ -382,6 +382,7 @@ function probeTtfundDepth(cliPath, dpConfig) {
     const checkResult = {
       checkId: `ttfund-${check.path.replace(/\./g, '-').replace(/[\[\]]/g, '')}`,
       label: check.label,
+      indicatorId: check.indicatorId || null,
       critical: !!check.critical,
       callable: true,
       schemaOk: true,
@@ -496,6 +497,7 @@ function probeIfindDepth(entryPath, cwd, dpConfig) {
   checks.push({
     checkId: 'ifind-b8-value',
     label: 'B8 TIPS 10Y value',
+    indicatorId: 'B8',
     callable: true,
     schemaOk: true,
     valueOk: vc.ok,
@@ -610,6 +612,7 @@ function probeWindDepth(entryPath, cwd, dpConfig) {
     checks: [{
       checkId: 'wind-ffr-probe',
       label: 'F1 Fed funds rate (via parseWind rows)',
+      indicatorId: 'F1',
       callable: true,
       schemaOk: hasData,
       valueOk,

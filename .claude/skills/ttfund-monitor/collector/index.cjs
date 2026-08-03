@@ -676,6 +676,80 @@ async function main() {
     websearchViolations: Object.values(indicatorContracts).filter(c => c.websearchViolations?.length > 0).length
   };
 
+  // ════════════ CROSS-STAGE CONSISTENCY (P4-D) ════════════
+  // Reads source-probe.json and fills gaps where depth probe has a value
+  // but main collection returned null. This catches intermittent null returns
+  // (e.g., Au99.99 known ttfund issue) by reusing probe values with explicit provenance.
+  const probePath = path.join(RUN_DIR, 'source-probe.json');
+  let probeFallbackCount = 0;
+  const isNumeric = v => v != null && v !== '' && !isNaN(Number(v));
+  if (fs.existsSync(probePath)) {
+    try {
+      const probeData = JSON.parse(fs.readFileSync(probePath, 'utf8'));
+
+      // Find the actual probe data date from the probe output (not collector run time).
+      // Priority: 1) explicit date field on any check (wind pattern)
+      //           2) value of a check whose label mentions "date" or "trade"
+      //           3) null (collector will use result.date or now as last resort)
+      const dateRe = /^\d{4}-\d{2}-\d{2}/;
+      function findProbeDate(sources) {
+        for (const src of sources) {
+          for (const check of (src.depthProbe?.checks || [])) {
+            if (check.date && dateRe.test(String(check.date))) return String(check.date);
+          }
+        }
+        for (const src of sources) {
+          for (const check of (src.depthProbe?.checks || [])) {
+            if (check.value && /date|trade/i.test(check.label || '') && dateRe.test(String(check.value))) {
+              return String(check.value);
+            }
+          }
+        }
+        return null;
+      }
+      const probeDate = findProbeDate(probeData.sources || []);
+
+      for (const src of (probeData.sources || [])) {
+        if (!src.depthProbe?.checks) continue;
+        for (const check of src.depthProbe.checks) {
+          if (!check.valueOk || check.value == null) continue;
+
+          // Use explicit indicatorId from depthProbe config (P5-D); label regex as backward compat
+          const indicatorId = check.indicatorId || (() => {
+            const idMatch = check.label?.match(/^([A-Z]\d+[a-z]?)/);
+            return idMatch ? idMatch[1] : null;
+          })();
+          if (!indicatorId || !results[indicatorId]) continue;
+
+          const result = results[indicatorId];
+          if (result.value != null && !result.error) continue; // already has value, skip
+
+          // Probe has value but collector got null → reuse probe value with provenance
+          const probeValue = isNumeric(check.value) ? parseFloat(check.value) : check.value;
+          const dateSource = result.date || probeDate || now.toISOString().slice(0, 10);
+          const dateFrom = result.date ? 'result' : probeDate ? 'probe' : 'now';
+
+          results[indicatorId] = {
+            ...result,
+            value: probeValue,
+            date: dateSource,
+            source: result.source || src.sourceId,
+            _freshStatus: 'fresh',
+            _probeFallback: true,
+            _probeNote: `Value from source-probe depthProbe (${src.sourceId} ${check.label}=${check.value}). Main collection returned null. Cross-stage consistency fallback. Date source: ${dateFrom}.`
+          };
+          probeFallbackCount++;
+          console.log(`  PROBE-FALLBACK: ${indicatorId} — main collection null, probe=${check.value} (date=${dateSource} from ${dateFrom}) → written with _probeFallback`);
+        }
+      }
+    } catch (e) {
+      console.warn(`  WARN: Could not read source-probe.json for cross-stage check: ${e.message}`);
+    }
+  }
+  if (probeFallbackCount > 0) {
+    console.log(`  Cross-stage consistency: ${probeFallbackCount} indicator(s) recovered from probe`);
+  }
+
   // ════════════ WRITE OUTPUTS ════════════
   console.log('\n── Writing outputs ──');
 
