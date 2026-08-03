@@ -25,8 +25,8 @@ const BUILTIN_CLIENT_LABELS: Record<BuiltinAccountClient, string> = {
   openai: 'Codex',
   google: 'Gemini',
   kimi: 'Kimi',
-  dare: 'Dare',
   opencode: 'OpenCode',
+  acp: 'ACP',
 };
 
 function uniqueTags(tags: string[]): string[] {
@@ -47,8 +47,6 @@ function fallbackAccountRef(cat: CatData): string | null {
       return 'gemini';
     case 'kimi':
       return 'kimi';
-    case 'dare':
-      return 'dare';
     case 'opencode':
       return 'opencode';
     default:
@@ -67,13 +65,13 @@ function memberTagsForAccount(cats: CatData[], accountId: string): string[] {
   );
 }
 
-function builtinQuotaItems(accountId: string, quota: QuotaResponse | null): CodexUsageItem[] {
-  switch (accountId) {
-    case 'claude':
+function builtinQuotaItems(clientId: BuiltinAccountClient | undefined, quota: QuotaResponse | null): CodexUsageItem[] {
+  switch (clientId) {
+    case 'anthropic':
       return quota?.claude.usageItems ?? [];
-    case 'codex':
+    case 'openai':
       return quota?.codex.usageItems ?? [];
-    case 'gemini':
+    case 'google':
       return quota?.gemini?.usageItems ?? [];
     case 'kimi':
       return quota?.kimi?.usageItems ?? [];
@@ -82,17 +80,15 @@ function builtinQuotaItems(accountId: string, quota: QuotaResponse | null): Code
   }
 }
 
-function builtinEmptyText(accountId: string): string {
-  switch (accountId) {
-    case 'claude':
-    case 'codex':
+function builtinEmptyText(clientId: BuiltinAccountClient | undefined): string {
+  switch (clientId) {
+    case 'anthropic':
+    case 'openai':
       return '暂无数据，点击刷新获取';
-    case 'gemini':
+    case 'google':
       return '暂无数据（需 ClaudeBar 推送）';
     case 'kimi':
       return '默认通过 Kimi CLI /usage 获取；如需 API 降级，配置 KIMI_QUOTA_API_FALLBACK_ENABLED=1 与 KIMI_AUTH_TOKEN';
-    case 'dare':
-      return 'Dare 不单独上报官方额度，实际额度取决于绑定账号';
     case 'opencode':
       return 'OpenCode 不单独上报官方额度，实际额度取决于绑定账号';
     default:
@@ -110,9 +106,9 @@ export function buildAccountQuotaGroups(
   const builtinPools = oauthProfiles.map<AccountQuotaPool>((profile) => ({
     id: profile.id,
     title: profile.displayName || BUILTIN_CLIENT_LABELS[profile.clientId ?? 'anthropic'],
-    items: builtinQuotaItems(profile.id, quota),
+    items: builtinQuotaItems(profile.clientId, quota),
     memberTags: memberTagsForAccount(cats, profile.id),
-    emptyText: builtinEmptyText(profile.id),
+    emptyText: builtinEmptyText(profile.clientId),
   }));
 
   const apiKeyPools = profiles
@@ -143,7 +139,7 @@ export function buildAccountQuotaGroups(
     {
       id: 'builtin',
       title: 'OAuth 账号额度（按账号配置）',
-      description: 'OAuth 账号包括 Claude / Codex / Gemini / Kimi / Dare / OpenCode，每个账号下方反向显示绑定成员。',
+      description: 'OAuth 账号包括 Claude / Codex / Gemini / Kimi / OpenCode，每个账号下方反向显示绑定成员。',
       pools: builtinPools,
     },
     {

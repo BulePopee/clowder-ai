@@ -35,7 +35,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 |---|---|---|---|
 | `workspace-navigator` | ✅ `cat_cafe_workspace_navigate` typed MCP（底层 `/api/workspace/navigate`，action `reveal\|open`） | 真 Tier B | 主路径改 typed MCP；reachability 修完后才轮到 hook |
 | `rich-messaging` | ✅ `cat_cafe_create_rich_block` MCP，同 `cat_cafe_post_message` callback 路径（本 session post_message 多次 routed ok）；未单独直调（避免 thread 噪声） | 真 Tier B（纯文字零摩擦抢活） | 候选 forcing-function（hook：长纯文字回复 + 无 rich block → 提醒） |
-| `browser-preview` | ✅ `cat_cafe_preview_open` typed MCP（底层 `/api/preview/auto-open`）；同文件共 6 个 cat-callable POST（`/validate-port` `/open` `/close` `/navigate` `/auto-open` `/screenshot`，全是 `app.post<{...}>(...)` 泛型签名） | 真 Tier B | 跟另两个一致：补可达性认知（cat 主动打开，不是"等 Hub 检测/等铲屎官点"）+ 候选 hook |
+| `browser-preview` | ✅ `cat_cafe_preview_open` typed MCP（底层 `/api/preview/auto-open`）；同文件共 6 个 cat-callable POST（`/validate-port` `/open` `/close` `/navigate` `/auto-open` `/screenshot`，全是 `app.post<{...}>(...)` 泛型签名） | 真 Tier B | 跟另两个一致：补可达性认知（cat 主动打开，不是"等 Hub 检测/等operator点"）+ 候选 hook |
 
 **这张表本身就是 reachability 前置筛的价值**：三个"看着该 Tier B"的，过筛后**全是可达的真 Tier B**——workspace / rich-messaging / browser-preview 各有 typed cat path（`cat_cafe_workspace_navigate` / `cat_cafe_create_rich_block` / `cat_cafe_preview_open`）。筛子的价值是**逼出每个的实测调用方式**，把"以为够不着"的误判挡在 hook 决策之外，不是脑补"哪个无 API"。
 
@@ -51,9 +51,9 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 **坏直觉**：默认纯文字回复（开发系猫习惯）
 **场景 trigger**：
 - 想发一堆文字 / 日志 / 步骤
-- 给铲屎官展示 diff / 选项 / 列表
-- 庆祝 / 仪式感 / 给铲屎官惊喜
-- 给铲屎官听 / 看（语音 / 图 / 视频）
+- 给operator展示 diff / 选项 / 列表
+- 庆祝 / 仪式感 / 给operator惊喜
+- 给operator听 / 看（语音 / 图 / 视频）
 
 **用法**：`cat_cafe_create_rich_block` + 字段 `kind` / `v` / `id`
 **完整 schema**：`cat_cafe_get_rich_block_rules`
@@ -63,7 +63,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 **坏直觉**：改完前端发"开浏览器看 http://localhost:5102/foo"
 **场景 trigger**：
-- 改了前端代码想让铲屎官看效果
+- 改了前端代码想让operator看效果
 - 前端 component / 页面 / 布局 review
 - dev server 已起来想 demo
 
@@ -85,8 +85,8 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 **坏直觉**：报文件路径 "见 `packages/web/foo.tsx`"（+ 误判"这是 Hub 专属、terminal 调不了"）
 **场景 trigger**：
-- 铲屎官说"打开 X" / "看看那个文件"
-- 想让铲屎官直接看到目标文件
+- operator说"打开 X" / "看看那个文件"
+- 想让operator直接看到目标文件
 - 文档 / 代码 / 设计图
 
 **用法（reachability — 别误判成 Hub 专属！）**：`cat_cafe_workspace_navigate({ path, action: "open" | "reveal", worktreeId, threadId })`
@@ -106,9 +106,9 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 ### 6. `guide-interaction` — 场景式引导
 
-**坏直觉**：丢一大段 README 让铲屎官自己看
+**坏直觉**：丢一大段 README 让operator自己看
 **场景 trigger**：
-- 铲屎官问"这个怎么用 / 怎么配置 / 怎么操作"
+- operator问"这个怎么用 / 怎么配置 / 怎么操作"
 - 配置类 / 流程类 / 多步骤任务
 - 新手 onboarding
 
@@ -121,24 +121,24 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 - 架构决定（需要多视角校验）
 - bug 死磕无解
 - 技术趋势 / 竞品 / 行业分析
-- 铲屎官说"帮我分析一下"
+- operator说"帮我分析一下"
 
 **用法**：`expert-panel` 多猫专家辩论 / `collaborative-thinking` 单猫独立思考
 
 ### 8. `cat_cafe_propose_thread` — 提议创建新 thread（F128）
 
-**坏直觉**：口头说"你新开一个 thread"让铲屎官手动操作
+**坏直觉**：口头说"你新开一个 thread"让operator手动操作
 **场景 trigger**：
 - 想做新 issue 独立调查
 - 子任务需要 isolated context
 - 长讨论已超出当前 thread scope
 
-**用法**：propose-first 流程 — 猫填好 thread 信息 → 卡片让铲屎官确认或编辑 → 系统创建
+**用法**：propose-first 流程 — 猫填好 thread 信息 → 卡片让operator确认或编辑 → 系统创建
 **ADR 锚点**：ADR-035
 
 ### 9. F211 外部 runtime session 查询
 
-**坏直觉**：问铲屎官"截图给我看" / "你刚在哪说的"
+**坏直觉**：问operator"截图给我看" / "你刚在哪说的"
 **场景 trigger**：
 - Antigravity / 孟加拉 / IDE-direct 会话像丢了
 - cross-runtime session transparency 需要
@@ -155,7 +155,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 - 用户视角 only 一行 error message
 
 **Tools**：读 `cliDiagnostics` / safe excerpt / `debugRef`
-**Fallback**：直接 ssh 到 runtime worktree 看 stderr log（铲屎官 ops only）
+**Fallback**：直接 ssh 到 runtime worktree 看 stderr log（operator ops only）
 
 ### 11. F192 Eval Hub / Verdict Handoff
 
@@ -190,7 +190,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 **场景 trigger**：
 - feature 推进到新 stage
 - 想给下一棒猫看到当前 stage 状态
-- 想给铲屎官 Hub visibility
+- 想给operator Hub visibility
 
 **用法**：推 stage → 告示牌更新 → Mission Control panel 反映
 **Schema 真相源**：F203 #748 SopDefinition (`sop-definitions/development.yaml`)
@@ -241,7 +241,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 ### 18. `hyperfocus-brake` — 健康提醒
 
-**坏直觉**：铲屎官连续肝代码 / 情绪波动时硬干
+**坏直觉**：operator连续肝代码 / 情绪波动时硬干
 **场景 trigger**：hook 触发 / 连续工作时长超阈值 / 情绪信号
 **用法**：三猫撒娇打断 hyperfocus
 
@@ -251,7 +251,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 **场景 trigger**：
 - 技术问题需要多源调查
 - 设计决策需要证据
-- 铲屎官说"调研" / "research"
+- operator说"调研" / "research"
 
 **Pipeline**：Web Deep Research + Coder 合成 + 云端模型咨询
 
@@ -284,7 +284,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 ## MCP capability 快扫（underused cat_cafe_* 工具）
 
-> 铲屎官 2026-05-27 提醒："盘点 skills + features 还不够，MCP 也得盘"。~75 个 `cat_cafe_*` 里大多数是 plumbing（`ack_mentions` / `get_thread_cats` / `list_*` / `update_task` 等机制类，不算 capability-wakeup）；下面是"做了但猫忘了用"的**能力类** MCP，按坏直觉列：
+> operator 2026-05-27 提醒："盘点 skills + features 还不够，MCP 也得盘"。~75 个 `cat_cafe_*` 里大多数是 plumbing（`ack_mentions` / `get_thread_cats` / `list_*` / `update_task` 等机制类，不算 capability-wakeup）；下面是"做了但猫忘了用"的**能力类** MCP，按坏直觉列：
 
 | 坏直觉 | 该用的 MCP | 说明 |
 |---|---|---|
@@ -293,6 +293,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 | expert-panel / review 报告只发聊天 | `cat_cafe_generate_document` | 生成正式 DOCX/PDF 文档（凭证不过期、可存档、可对外） |
 | 想重开一条已知调查路线 | `cat_cafe_run_perspective` | git-backed Perspective live query 计划重放（advanced/niche，返回 route hints + anchors，仍需 typed reader 取证据） |
 | review 后 lesson 散在脑子里 | `cat_cafe_review_distillation` | 蒸馏 review 结论沉淀（配合 mark_generalizable） |
+| operator说了 Magic Word / 直说"记一下/以后这样" / 同类被纠正 ≥2 次 / 做对了被明确表扬 / operator分享个人近况 | `cat_cafe_propose_profile_update` | 提议更新 per-cat 关系画像 primer（F231 Phase C），operator 在 Hub 卡片审批；工具在 deferred list 需先 `tool_search` 加载（已进 L0 §8 Tier 1） |
 
 > **MCP 完整速查**：L0 §7 是 quick index（记忆 / 协作 / 任务 / Rich block / Drill-down 5 类）；本表补"能力类但易忘"的。完整工具集 `tool_search` 精确搜或读 `packages/mcp-server/src/tools/`。
 
@@ -300,7 +301,7 @@ opus-47 原把 `workspace-navigator` / `rich-messaging` / `browser-preview` 一�
 
 ## 维护协议
 
-- **新增 capability**：当家里 ship 一个独有 feature/skill 且铲屎官观察到"做了但猫不知道用" → 加进本文档 Tier 2；连续 N 周 eval verdict miss rate > 30% → promote Tier 1（进 L0 §8）
+- **新增 capability**：当家里 ship 一个独有 feature/skill 且operator观察到"做了但猫不知道用" → 加进本文档 Tier 2；连续 N 周 eval verdict miss rate > 30% → promote Tier 1（进 L0 §8）
 - **降级 capability**：F192 `eval:capability-wakeup` verdict 显示某条 Tier 1 miss rate < 5% 持续 4 周 → demote Tier 2（出 L0 §8）
 - **删除 capability**：feature sunset / skill 退役 → 同步删本文档对应条目
 - **数据源**：F192 Phase F `eval:capability-wakeup` weekly verdict bundle（依赖 #748 后 ship）

@@ -64,6 +64,13 @@ export class InMemoryFrustrationIssueStore implements IFrustrationIssueStore {
     }
   }
 
+  async setCommunityIssueDraftId(issueId: string, draftId: string): Promise<void> {
+    const issue = this.issues.get(issueId);
+    if (issue) {
+      issue.communityIssueDraftId = draftId;
+    }
+  }
+
   async listByThread(threadId: string): Promise<FrustrationIssue[]> {
     return Array.from(this.issues.values())
       .filter((i) => i.threadId === threadId)
@@ -75,6 +82,19 @@ export class InMemoryFrustrationIssueStore implements IFrustrationIssueStore {
     return Array.from(this.issues.values())
       .filter((i) => i.userId === userId && i.status === 'confirmed')
       .sort((a, b) => (b.confirmedAt ?? 0) - (a.confirmedAt ?? 0))
+      .map(clone);
+  }
+
+  async listConfirmedInWindow(sinceMs: number, untilMs: number): Promise<FrustrationIssue[]> {
+    return Array.from(this.issues.values())
+      .filter(
+        (i) =>
+          i.status === 'confirmed' &&
+          typeof i.confirmedAt === 'number' &&
+          i.confirmedAt >= sinceMs &&
+          i.confirmedAt < untilMs,
+      )
+      .sort((a, b) => (a.confirmedAt ?? 0) - (b.confirmedAt ?? 0))
       .map(clone);
   }
 

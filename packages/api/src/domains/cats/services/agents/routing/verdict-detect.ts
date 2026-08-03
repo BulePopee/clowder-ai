@@ -13,6 +13,13 @@
  * shared-rules §10 已落地，本模块是不依赖猫配合的兜底信号。
  */
 
+import { stripTrailingCatSignatures } from './cat-signature-strip.js';
+import { finalRoutingSlot } from './final-routing-slot.js';
+
+// 2026-06-20 verdict eval:a2a C2 void-hold English fix: signature stripping
+// extracted to `cat-signature-strip.ts` so void-hold-detect.ts can share the
+// same source of truth. See that module for the regex + helper.
+
 /**
  * Review verdict 关键词。保守集，避免常见日常用语误报：
  * - 英文：LGTM / approved (past-tense only — see tuning note) / reject(ed) / P1: / P2:
@@ -53,30 +60,55 @@ const VERDICT_PATTERNS: ReadonlyArray<{ readonly name: string; readonly pattern:
 ] as const;
 
 /**
- * Detect whether the output text contains a review verdict keyword.
+ * Detect whether the output's **final routing slot** contains a review verdict keyword.
  *
- * Scope: output text only. No context awareness (quotations, code blocks not excluded)
- * because the warning is prompt-first non-blocking — occasional false positives are
- * acceptable and won't break link routing.
+ * 2026-06-16 actionable fix (砚砚 eval:a2a verdict
+ * `2026-06-16-eval-a2a-c2-verdict-context-false-positive-fix`):
+ * Previously this scanned the entire stored output text. The 06-16 eval showed
+ * 6/89 = 6.7% false-positive ratio on `verdict_without_pass` because cats writing
+ * status updates ("PR #X 已放行", "P1: foo 已修", "approved by Y") tripped the
+ * keyword scan even though the message's actual final paragraph was a status
+ * summary — no verdict was being **given** right then.
+ *
+ * Fix: scope detection to the **final routing slot** via `finalRoutingSlot()`
+ * (same Phase H mechanism that scopes inline-@ detection — KD-24 mechanical, no
+ * semantic classifier). Narrative body verdicts no longer fire; verdict-in-slot
+ * still does. True positives where the cat genuinely ends with a verdict
+ * (single-paragraph or multi-paragraph with verdict in last slot) are preserved.
+ *
+ * Trade-off: structural exemptions (fenced code / blockquote / URL) at the end
+ * of the message strip the slot to the previous paragraph — see `finalRoutingSlot`
+ * for the strip discipline. A verdict ONLY inside trailing fenced code (e.g.
+ * pasted prior-cat output) is treated as quoted, not a new verdict — desired.
  */
 export function hasReviewVerdict(text: string): boolean {
   if (!text) return false;
-  return VERDICT_PATTERNS.some(({ pattern }) => pattern.test(text));
+  const slot = finalRoutingSlot(stripTrailingCatSignatures(text));
+  if (!slot) return false;
+  return VERDICT_PATTERNS.some(({ pattern }) => pattern.test(slot));
 }
 
 /**
- * Return the stable name of the first verdict keyword that matches, or `null` if none.
+ * Return the stable name of the first verdict keyword that matches the **final
+ * routing slot**, or `null` if none.
  *
  * Used as a telemetry attribute on the C2 verdict counters so an eval operator can
  * slice friction ratios by which keyword overloaded — e.g. distinguish a "p1p2"-driven
  * spike (review-discussion vocab) from a "放行"-driven one (real verdict-without-pass).
+ *
+ * 2026-06-16 fix (砚砚 eval:a2a verdict): scopes to the final routing slot for
+ * consistency with `shouldWarnVerdictWithoutPass` — if the warning doesn't fire,
+ * the trigger label should not surface either, and vice-versa.
+ *
  * Pattern iteration order is the order in VERDICT_PATTERNS; do not rely on a particular
  * "most specific match" — it returns the first hit.
  */
 export function detectMatchedVerdictKeyword(text: string): string | null {
   if (!text) return null;
+  const slot = finalRoutingSlot(stripTrailingCatSignatures(text));
+  if (!slot) return null;
   for (const { name, pattern } of VERDICT_PATTERNS) {
-    if (pattern.test(text)) return name;
+    if (pattern.test(slot)) return name;
   }
   return null;
 }
@@ -107,7 +139,7 @@ export interface VerdictWarningInput {
   readonly structuredTargetCats: readonly string[];
   /**
    * 2026-04-25 (砚砚 GPT-5.5 fix): true iff text has a line-start co-creator
-   * mention (`@co-creator` / `@铲屎官` / configured coCreator patterns). Caller computes
+   * mention (`@co-creator` / `@co-creator` / configured coCreator patterns). Caller computes
    * via `detectUserMention(text)`. parseA2AMentions only knows cat handles, so
    * without this flag a cat ending its summary report with `@co-creator` (legitimate
    * pass to co-creator) was being flagged as "verdict without pass".
@@ -123,7 +155,7 @@ export interface VerdictWarningInput {
  *   2. No line-start @cat mention (would otherwise route the ball via text)
  *   3. No hold_ball MCP call (would otherwise be an explicit intentional hold)
  *   4. No structured MCP routing (post_message.targetCats / multi_mention.targets)
- *   5. No line-start co-creator mention (`@co-creator` / `@铲屎官` — escalation to user)
+ *   5. No line-start co-creator mention (`@co-creator` / `@co-creator` — escalation to user)
  */
 export function shouldWarnVerdictWithoutPass(input: VerdictWarningInput): boolean {
   if (!hasReviewVerdict(input.text)) return false;

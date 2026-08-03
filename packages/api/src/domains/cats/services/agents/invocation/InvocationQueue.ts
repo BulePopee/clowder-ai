@@ -39,7 +39,7 @@ export interface QueueEntry {
   /** F175: queue-internal priority — urgent entries sort before normal in dequeue */
   priority: 'urgent' | 'normal';
   /** F175: origin category for visual grouping */
-  sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'continuation' | 'issue';
+  sourceCategory?: 'ci' | 'review' | 'conflict' | 'scheduled' | 'a2a' | 'continuation' | 'issue' | 'freshness';
   /** Queue-internal dedup key for agent control-flow work. */
   continuationKey?: string;
   /** F175: user drag-reorder position — explicit values override priority in dequeue */
@@ -49,6 +49,10 @@ export interface QueueEntry {
   callerTraceContext?: CallerTraceContext;
   /** Explicit A2A trigger message for stream reply threading. */
   a2aTriggerMessageId?: string;
+  /** F220 2a: ID of the primary queue entry that batched this sibling via collectUserBatch.
+   *  Set by markProcessingById when called from executeEntry's batch collection.
+   *  Used by zombie convergence to roll back batch siblings after the primary is removed. */
+  batchParentId?: string;
 }
 
 export interface EnqueueResult {
@@ -387,6 +391,13 @@ export class InvocationQueue {
       const entry = q.find((e) => e.id === entryId && e.status === 'processing');
       if (entry) {
         entry.status = 'queued';
+        // F220 2a (R16 P1): sever batch association on rollback. The batch is
+        // dissolved — the entry re-enters the queue as a standalone candidate.
+        // This prevents a stale executeEntry finalizer from removing or rolling
+        // back a sibling that was re-dispatched by tryDispatchNext after
+        // convergence: the finalizer checks batchParentId before operating, and
+        // a cleared batchParentId signals "no longer part of the old batch".
+        delete entry.batchParentId;
         return true;
       }
     }
@@ -750,13 +761,14 @@ export class InvocationQueue {
   }
 
   /** F122B: Mark a specific entry as processing by ID (cross-user). */
-  markProcessingById(threadId: string, entryId: string): boolean {
+  markProcessingById(threadId: string, entryId: string, batchParentId?: string): boolean {
     for (const q of this.queues.values()) {
       if (!this.queueMatchesThread(q, threadId)) continue;
       const entry = q.find((e) => e.id === entryId && e.status === 'queued');
       if (entry) {
         entry.status = 'processing';
         entry.processingStartedAt = Date.now();
+        if (batchParentId) entry.batchParentId = batchParentId;
         return true;
       }
     }
@@ -870,6 +882,49 @@ export class InvocationQueue {
       if (q.some((e) => e.status === 'queued' && e.source === 'user')) return true;
     }
     return false;
+  }
+
+  /**
+   * #815: Find queued A2A trigger entries whose target cats are all active.
+   * Scoped to a single userId — prompt context assembly is per-user, so
+   * consuming another user's A2A entry would silently lose their trigger.
+   * Returns candidates without removing them — caller performs async
+   * delivery-status filtering, then calls `consumeEntriesById` to remove.
+   */
+  findSubsumedA2ACandidates(threadId: string, userId: string, activeCatSet: Set<string>): QueueEntry[] {
+    const q = this.queues.get(this.scopeKey(threadId, userId));
+    if (!q) return [];
+    const candidates: QueueEntry[] = [];
+    for (const e of q) {
+      if (e.status !== 'queued') continue;
+      if (e.sourceCategory !== 'a2a') continue;
+      if (!e.targetCats.every((cat) => activeCatSet.has(cat))) continue;
+      candidates.push(e);
+    }
+    return candidates;
+  }
+
+  /**
+   * #815: Remove specific entries by ID. Returns removed entries.
+   * Used after async filtering of A2A candidates by delivery status.
+   */
+  consumeEntriesById(entryIds: Set<string>): QueueEntry[] {
+    const consumed: QueueEntry[] = [];
+    for (const q of this.queues.values()) {
+      for (let i = q.length - 1; i >= 0; i--) {
+        if (entryIds.has(q[i]!.id)) {
+          this.originalContents.delete(q[i]!.id);
+          consumed.push(q.splice(i, 1)[0]!);
+        }
+      }
+    }
+    if (consumed.length > 0) {
+      this.log.info(
+        { count: consumed.length, entryIds: consumed.map((e) => e.id) },
+        '#815: consumed A2A entries by ID',
+      );
+    }
+    return consumed;
   }
 
   // ── Internal helpers ──

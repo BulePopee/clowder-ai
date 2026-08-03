@@ -14,6 +14,7 @@
 import type { CatId } from '@cat-cafe/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { IBallCustodyIngest } from '../domains/ball-custody/BallCustodyIngest.js';
 import { getThreadLiveInvocations } from '../domains/cats/services/agents/invocation/getThreadLiveInvocations.js';
 import {
   type InvocationQueue,
@@ -59,6 +60,8 @@ export interface QueueRoutesOptions {
    *  for backward compat in tests. */
   invocationRecordStore?: IInvocationRecordStore;
   draftStore?: IDraftStore;
+  /** F233 PR3: ball-custody event sink for zombie reconciliation side effects. */
+  ballCustody?: IBallCustodyIngest;
   /** F194 AC-B7: when helper detects zombies, reconcileZombies clears their
    *  TaskProgress snapshot so the frontend doesn't show phantom progress. Optional —
    *  cleanup still marks records `failed` even without this. */
@@ -137,7 +140,10 @@ async function resolveActiveInvocations(
   draftStore: IDraftStore | undefined,
   log: { info: (obj: unknown, msg?: string) => void; warn: (obj: unknown, msg?: string) => void },
   taskProgressStore?: TaskProgressStore,
+  ballCustody?: IBallCustodyIngest,
   invocationRegistry?: QueueRoutesOptions['invocationRegistry'],
+  /** F220 Phase 2a (#972): queue convergence adapter for zombie cleanup. */
+  queueConvergence?: import('../domains/cats/services/agents/invocation/reconcileZombies.js').QueueConvergence,
 ): Promise<Array<{ catId: string; startedAt: number }>> {
   if (!recordStore || !draftStore) {
     return invocationTracker.getActiveSlots(threadId);
@@ -179,7 +185,10 @@ async function resolveActiveInvocations(
       void reconcileZombies(result.zombies, {
         invocationRecordStore: recordStore,
         taskProgressStore,
+        ballCustody,
         log,
+        // F220 Phase 2a (#972): converge queue state when zombies are cleaned up
+        queueConvergence,
       }).catch((err) => log.warn({ err, feature: 'F194' }, 'reconcileZombies failed'));
     }
     // 砚砚 R5 P2: filter null catId — frontend turns queue.activeInvocations[].catId into a
@@ -227,7 +236,11 @@ export const queueRoutes: FastifyPluginAsync<QueueRoutesOptions> = async (app, o
       opts.draftStore,
       request.log,
       opts.taskProgressStore,
+      opts.ballCustody,
       opts.invocationRegistry,
+      // F220 Phase 2a (#972): pass queue convergence so zombie cleanup converges queue state.
+      // Guard: legacy/test stubs may not have buildQueueConvergence (codex R5 P2).
+      queueProcessor.buildQueueConvergence?.(),
     );
     const enrichedQueue = await enrichQueueEntries(invocationQueue.list(threadId, guard.userId), messageStore);
     return {
@@ -278,14 +291,17 @@ export const queueRoutes: FastifyPluginAsync<QueueRoutesOptions> = async (app, o
       );
 
       // F117: Mark queued messages as canceled + emit message_deleted
+      // CAS gate: markCanceled returns null on no-op (already canceled / delivered / not found)
       if (messageStore) {
         for (const msgId of messageIds) {
-          await messageStore.markCanceled(msgId);
-          socketManager.emitToUser(guard.userId, 'message_deleted', {
-            messageId: msgId,
-            threadId,
-            deletedBy: guard.userId,
-          });
+          const canceled = await messageStore.markCanceled(msgId);
+          if (canceled) {
+            socketManager.emitToUser(guard.userId, 'message_deleted', {
+              messageId: msgId,
+              threadId,
+              deletedBy: guard.userId,
+            });
+          }
         }
       }
 
@@ -410,14 +426,17 @@ export const queueRoutes: FastifyPluginAsync<QueueRoutesOptions> = async (app, o
           // executeEntry self-aborts BEFORE its markDelivered block, so without this the original
           // user message stays permanently 'queued' (undelivered + excluded from context) even though
           // its queue entry is gone. Mark it canceled + emit message_deleted.
+          // CAS gate: markCanceled returns null on no-op (already canceled / delivered / not found)
           if (messageStore) {
             for (const msgId of tombstonedMsgIds) {
-              await messageStore.markCanceled(msgId);
-              socketManager.emitToUser(guard.userId, 'message_deleted', {
-                messageId: msgId,
-                threadId,
-                deletedBy: guard.userId,
-              });
+              const canceled = await messageStore.markCanceled(msgId);
+              if (canceled) {
+                socketManager.emitToUser(guard.userId, 'message_deleted', {
+                  messageId: msgId,
+                  threadId,
+                  deletedBy: guard.userId,
+                });
+              }
             }
           }
           invocationQueue.promote(threadId, guard.userId, entryId);
@@ -584,14 +603,17 @@ export const queueRoutes: FastifyPluginAsync<QueueRoutesOptions> = async (app, o
     await emitQueueUpdated(socketManager, guard.userId, threadId, [], messageStore, 'cleared');
 
     // F117: Mark all queued messages as canceled + emit message_deleted
+    // CAS gate: markCanceled returns null on no-op (already canceled / delivered / not found)
     if (messageStore) {
       for (const msgId of allMessageIds) {
-        await messageStore.markCanceled(msgId);
-        socketManager.emitToUser(guard.userId, 'message_deleted', {
-          messageId: msgId,
-          threadId,
-          deletedBy: guard.userId,
-        });
+        const canceled = await messageStore.markCanceled(msgId);
+        if (canceled) {
+          socketManager.emitToUser(guard.userId, 'message_deleted', {
+            messageId: msgId,
+            threadId,
+            deletedBy: guard.userId,
+          });
+        }
       }
     }
 

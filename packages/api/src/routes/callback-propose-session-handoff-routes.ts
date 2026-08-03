@@ -3,7 +3,7 @@
  *
  * POST /api/callbacks/propose-session-handoff
  *   Cat-auth. 猫在干净断点提议封印当前 active session。创建 SessionHandoffProposal
- *   (status=pending) + append 确认卡到 source thread。**不 seal**——铲屎官 gate（approve）
+ *   (status=pending) + append 确认卡到 source thread。**不 seal**——co-creator gate（approve）
  *   才进封印事务。A4 abuse guard（≤1 pending/active session + per-(cat,thread) cooldown）
  *   在 proposeSessionHandoff 纯函数里；本 route 是薄 wire（解析五件套 + 卡片 + broadcast）。
  *
@@ -198,6 +198,13 @@ async function persistAndBroadcastCard(
       timestamp: stored.timestamp,
       extra: stored.extra,
     },
+  });
+  // F246: emit user-scoped proposal_created so Approval Hub badge refreshes in real-time.
+  // F128 already emits this in callback-propose-thread-routes.ts:293; F225 was missing it.
+  socketManager.emitToUser(record.userId, 'proposal_created', {
+    proposalId: proposal.proposalId,
+    status: proposal.status,
+    sourceFeatureId: 'F225',
   });
   return { messageId: stored.id, warnings };
 }

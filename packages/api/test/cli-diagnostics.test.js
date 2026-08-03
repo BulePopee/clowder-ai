@@ -12,10 +12,12 @@ import { maybeCollectStreamError } from '../dist/utils/cli-spawn.js';
 
 const baseRef = { command: 'codex', exitCode: 1, signal: null, invocationId: 'inv-1' };
 
-test('AC-A5: unknown stderr → no safeExcerpt, publicSummary fallback', () => {
+test('AC-A5: unknown stderr → sanitized safeExcerpt (#857), publicSummary fallback', () => {
   const d = buildCliDiagnostics({ rawText: 'some weird thing happened', debugRef: baseRef });
   assert.strictEqual(d.reasonCode, undefined);
-  assert.strictEqual(d.safeExcerpt, undefined);
+  // #857: unknown raw text now surfaced as sanitized safeExcerpt (was: undefined per KD-1)
+  assert.ok(d.safeExcerpt, 'unknown raw text should produce safeExcerpt (#857)');
+  assert.strictEqual(d.excerptSource, 'unknown_raw');
   assert.match(d.publicSummary, /未识别/);
   assert.ok(d.publicHint.length > 0);
 });
@@ -57,7 +59,7 @@ test('AC-A6: panic stack — safeExcerpt strips frame lines if any', () => {
   assert.ok(!d.safeExcerpt.includes('.cargo/registry'), 'cargo path leaked');
 });
 
-test('AC-A6: panic without classifier match — publicSummary surfaces headline, no safeExcerpt', () => {
+test('AC-A6: panic without classifier match — publicSummary surfaces headline, sanitized safeExcerpt (#857)', () => {
   const rawText = [
     'thread "worker" panicked at src/bar.rs:99:1:',
     'completely unknown failure mode',
@@ -66,7 +68,9 @@ test('AC-A6: panic without classifier match — publicSummary surfaces headline,
   ].join('\n');
   const d = buildCliDiagnostics({ rawText, debugRef: baseRef });
   assert.strictEqual(d.reasonCode, undefined);
-  assert.strictEqual(d.safeExcerpt, undefined);
+  // #857: unknown raw text now surfaced as sanitized safeExcerpt
+  assert.ok(d.safeExcerpt, 'panic raw text should produce safeExcerpt (#857)');
+  assert.strictEqual(d.excerptSource, 'unknown_raw');
   assert.match(d.publicSummary, /panic/i);
   assert.match(d.publicSummary, /worker/);
 });
@@ -78,6 +82,33 @@ test('safeExcerpt is sanitized (token redacted)', () => {
   assert.ok(d.safeExcerpt);
   assert.ok(!d.safeExcerpt.includes('AbCdEfGh1234567890'), 'raw token leaked in safeExcerpt');
   assert.ok(d.safeExcerpt.includes('[TOKEN_REDACTED]'), `expected redaction marker: ${d.safeExcerpt}`);
+});
+
+test('safeExcerpt redacts OAuth URL fragments from classifiable stderr', () => {
+  const rawText = [
+    'Authentication required. Please visit the URL to log in:',
+    'https://accounts.google.com/o/oauth2/auth#state=very-secret-state&access_token=ya29.AGYAccessToken',
+  ].join('\n');
+  const d = buildCliDiagnostics({ rawText, debugRef: { ...baseRef, command: 'agy' } });
+  assert.strictEqual(d.reasonCode, 'auth_failed');
+  assert.ok(d.safeExcerpt, 'auth stderr should produce a safe excerpt');
+
+  const payload = JSON.stringify(d);
+  assert.match(payload, /FRAGMENT_REDACTED/);
+  assert.doesNotMatch(payload, /very-secret-state/);
+  assert.doesNotMatch(payload, /ya29\.AGYAccessToken/);
+});
+
+test('safeExcerptRawText limits public excerpt while rawText still classifies', () => {
+  const d = buildCliDiagnostics({
+    rawText: 'private stdout before classifier\n401 Unauthorized from stdout path',
+    safeExcerptRawText: 'stderr noise without a classifier match',
+    debugRef: baseRef,
+  });
+  assert.strictEqual(d.reasonCode, 'auth_failed');
+  assert.strictEqual(d.safeExcerpt, undefined);
+  assert.equal(d.excerptSource, undefined);
+  assert.doesNotMatch(JSON.stringify(d), /private stdout/);
 });
 
 test('OQ-3 accept: safeExcerpt ≤8 lines and ≤1500 chars', () => {
@@ -159,10 +190,11 @@ test('AC-A7: formatCliStderrForLog truncates to last 1000 chars after sanitize (
   assert.ok(out.includes('final error line'), 'tail content should be preserved');
 });
 
-test('all 9 reasonCodes produce non-empty publicSummary + publicHint', () => {
+test('all known reasonCodes produce non-empty publicSummary + publicHint', () => {
   const cases = [
     ['Invalid `signature` in `thinking` block: foo', 'invalid_thinking_signature'],
     ['no rollout found', 'missing_rollout'],
+    ['Error: Session not found', 'session_not_found'],
     ['model not found', 'model_not_found'],
     ['401 Unauthorized', 'auth_failed'],
     ['429 Too Many Requests', 'quota_exceeded'],
@@ -274,13 +306,13 @@ test('AC-D3: unknown reasonCode + structuredErrorText → "Claude Code 报告：
   assert.strictEqual(d.excerptSource, 'cc_structured', 'AC-D3 path tags excerptSource for frontend whitelist');
 });
 
-test('AC-D3: truly unknown (no structuredErrorText) → keeps KD-1 no-safeExcerpt + 未识别 + no excerptSource', () => {
+test('AC-D3: truly unknown (no structuredErrorText) → sanitized safeExcerpt (#857) + 未识别', () => {
   const d = buildCliDiagnostics({ rawText: 'random noise no cause', debugRef: baseRef });
   assert.strictEqual(d.reasonCode, undefined);
-  assert.strictEqual(d.safeExcerpt, undefined, 'KD-1: no safeExcerpt for truly unknown');
+  // #857: unknown raw text now surfaced as sanitized safeExcerpt (overrides KD-1 for non-empty rawText)
+  assert.ok(d.safeExcerpt, 'unknown raw text should produce safeExcerpt (#857)');
+  assert.strictEqual(d.excerptSource, 'unknown_raw');
   assert.ok(d.publicSummary.includes('未识别'), 'truly unknown keeps 未识别');
-  // Phase D P2 fix: no safeExcerpt → no excerptSource (frontend membership check will fail closed)
-  assert.strictEqual(d.excerptSource, undefined, 'truly unknown: no excerptSource (fail-closed)');
 });
 
 // F212 Phase E — server_overloaded provider-neutral invariant (cloud codex R2 P2 on adf26db37):
@@ -367,7 +399,7 @@ test('REASON_TEXT invariant: publicSummary + publicHint MUST be plain text (no m
 });
 
 // =============================================================================
-// F212 Phase F — Empty-stderr observability (砚砚 catch + CVO directive 2026-05-30)
+// F212 Phase F — Empty-stderr observability (砚砚 catch + operator directive 2026-05-30)
 // =============================================================================
 
 // AC-F1 + F6: buildCliExitDiagnostic builds structured payload with every required field

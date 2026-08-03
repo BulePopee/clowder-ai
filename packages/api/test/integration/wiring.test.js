@@ -300,7 +300,9 @@ describe('AgentRouter + Services wiring', () => {
 
   test('passes callbackEnv to Codex service', async () => {
     const claudeSpawn = createTrackingSpawnFn(() => claudeEvents('s-1', 'hi'));
-    const codexSpawn = createTrackingSpawnFn(() => codexEvents('t-1', 'hi'));
+    // F177-H: this wiring test only verifies callbackEnv. Give the real Codex service a legal
+    // routing exit so the server-side remedial guard does not intentionally invoke it twice.
+    const codexSpawn = createTrackingSpawnFn(() => codexEvents('t-1', 'hi\n@co-creator'));
     const geminiSpawn = createTrackingSpawnFn(() => geminiEvents('g-1', 'hi'));
 
     const router = new AgentRouter(
@@ -374,7 +376,9 @@ describe('AgentRouter + Services wiring', () => {
     assert.equal(commandName(call.cmd), 'agy');
     assert.ok(call.args.includes('--print'), 'default antigravity-cli route should use agy --print');
     assert.ok(call.args.includes('--add-dir'), 'default antigravity-cli route should bind the working directory');
-    assert.equal(call.args.includes('--model'), false, 'antigravity-cli must not pass unverified --model flag');
+    const modelIdx = call.args.indexOf('--model');
+    assert.ok(modelIdx >= 0, 'default antigravity-cli route should pass runtime-owned --model');
+    assert.equal(call.args[modelIdx + 1], 'Gemini 3.1 Pro (High)');
     assert.ok(
       msgs.some((m) => m.type === 'text' && m.content === 'CAT_CAFE_AGY_ROUTE_OK'),
       'route should surface plain-text AGY stdout',

@@ -70,6 +70,10 @@ export interface RouteStrategyDeps {
   worldContextProvider?: import('../../../../world/WorldContextProvider.js').WorldContextProvider;
   /** F093: World store for thread→world lookup (optional, fail-open) */
   worldStore?: import('../../../../world/interfaces.js').IWorldStore;
+  /** F233 Phase B (B2): Ball-custody ingest — fire-and-forget 旁路写球权事件（append + appended-guard apply）。optional, fail-open */
+  ballCustody?: import('../../../../ball-custody/BallCustodyIngest.js').IBallCustodyIngest;
+  /** F237 Phase 2 (AC-P2-8): Injection trace store for pipeline observability. optional, fail-open */
+  injectionTraceStore?: import('../../../../prompt-hooks/InjectionTraceStore.js').InjectionTraceStore;
 }
 
 /** Mutable context for tracking persistence failures across the generator boundary.
@@ -159,6 +163,34 @@ export interface RouteOptions {
    *  false = agent/connector-origin (A2A handoff, connector trigger) — suppress
    *  frustration detection to avoid surfacing system-internal errors as user-facing issues. */
   frustrationAutoIssueEligible?: boolean | undefined;
+  /** #949 P2: Whether the verdict-without-pass warning should fire at route end.
+   *  true/undefined = warn (default). false = suppress — ONLY for connector-sourced
+   *  flows (MR review, CI notification) where ball-pass is not expected.
+   *  Separate from frustrationAutoIssueEligible because A2A/multi-mention callbacks
+   *  suppress frustration issues but still need verdict-pass handoff guards. */
+  verdictPassWarningEnabled?: boolean | undefined;
+  /** F254 B3: Freshness re-invoke enqueue — called when doneMsg.metadata.freshnessReinvoke.shouldReinvoke
+   *  is true. Enqueues a new invocation for the same (cat, thread) to address unseen messages. */
+  freshnessReinvokeEnqueue?:
+    | ((entry: {
+        threadId: string;
+        userId: string;
+        content: string;
+        source: 'agent';
+        sourceCategory: 'freshness';
+        targetCats: string[];
+        callerCatId: string;
+        autoExecute: true;
+        priority: 'normal';
+        intent: 'execute';
+        /** Notice IDs that triggered this re-invoke (for event log correlation) */
+        freshnessContext: {
+          sourceNoticeIds: string[];
+          senders: string[];
+          reason: string;
+        };
+      }) => void)
+    | undefined;
 }
 
 export interface IncrementalContextResult {
@@ -655,6 +687,37 @@ export interface IncrementalContextOptions {
   threadTitle?: string;
 }
 
+async function resolveRecentFilesTouched(
+  deps: RouteStrategyDeps,
+  userId: string,
+  catId: CatId,
+  threadId: string,
+  options?: IncrementalContextOptions,
+): Promise<Array<{ path: string; ops: string[] }>> {
+  if (options?.recentFilesTouched) return options.recentFilesTouched;
+
+  const sessionChainStore = deps.invocationDeps.sessionChainStore;
+  const transcriptWriter = deps.invocationDeps.transcriptWriter;
+  if (!sessionChainStore || !transcriptWriter) return [];
+
+  try {
+    const activeSession = await Promise.resolve(sessionChainStore.getActive(catId, threadId));
+    if (activeSession?.userId === userId) {
+      return transcriptWriter.getFilesTouched(activeSession.id, { threadId, catId });
+    }
+
+    const threadSessions = await Promise.resolve(sessionChainStore.getChainByThread(threadId));
+    const callerSession = [...threadSessions]
+      .reverse()
+      .find((session) => session.status === 'active' && session.catId === catId && session.userId === userId);
+    if (!callerSession) return [];
+    return transcriptWriter.getFilesTouched(callerSession.id, { threadId, catId: callerSession.catId });
+  } catch {
+    return [];
+  }
+}
+
+/* @segment N2 — 对话历史增量 */
 export async function assembleIncrementalContext(
   deps: RouteStrategyDeps,
   userId: string,
@@ -717,8 +780,10 @@ export async function assembleIncrementalContext(
     }
   }
 
+  const recentFilesTouched = await resolveRecentFilesTouched(deps, userId, catId, threadId, options);
+
   const recentArtifacts = extractRecentArtifacts({
-    filesTouched: options?.recentFilesTouched ?? [],
+    filesTouched: recentFilesTouched,
     prTasks: allThreadTasks,
     catId,
   });

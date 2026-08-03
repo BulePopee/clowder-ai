@@ -21,6 +21,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { getDefaultCatId } from '../config/cat-config-loader.js';
 import { resolveFrontendBaseUrl } from '../config/frontend-origin.js';
+import type { IBallCustodyIngest } from '../domains/ball-custody/BallCustodyIngest.js';
 import {
   type CollaborationContinuityCapsuleV1,
   extractContinuityCapsuleFromAgentMessage,
@@ -33,8 +34,12 @@ import { getThreadLiveInvocations } from '../domains/cats/services/agents/invoca
 import type { InvocationQueue } from '../domains/cats/services/agents/invocation/InvocationQueue.js';
 import type { InvocationRegistry } from '../domains/cats/services/agents/invocation/InvocationRegistry.js';
 import type { InvocationTracker } from '../domains/cats/services/agents/invocation/InvocationTracker.js';
-import type { QueueProcessor } from '../domains/cats/services/agents/invocation/QueueProcessor.js';
+import type {
+  QueueProcessor,
+  SessionContinuationCoordinatorLike,
+} from '../domains/cats/services/agents/invocation/QueueProcessor.js';
 import { reconcileZombies } from '../domains/cats/services/agents/invocation/reconcileZombies.js';
+import type { ConsumedContinuationToken } from '../domains/cats/services/agents/invocation/SessionContinuationCoordinator.js';
 import type { TaskProgressStore } from '../domains/cats/services/agents/invocation/TaskProgressStore.js';
 import { stampVisibleTurn } from '../domains/cats/services/agents/invocation/visible-turn.js';
 import type { PersistenceContext } from '../domains/cats/services/agents/routing/route-helpers.js';
@@ -96,6 +101,7 @@ interface StreamingHookLike {
 import { normalizeErrorMessage } from '../utils/normalize-error.js';
 import { emitQueueUpdated, enrichQueueEntries } from '../utils/queue-enrichment.js';
 import { resolveUserId } from '../utils/request-identity.js';
+import { cancelWakeWhenRunner } from './callback-hold-ball-routes.js';
 import { buildGameSeats, parseGameCommand, sanitizeCatIds } from './game-command-interceptor.js';
 import type { HoldBallCancelDeps } from './hold-ball-cancel.js';
 import { cancelPendingHoldsForThread } from './hold-ball-cancel.js';
@@ -137,12 +143,16 @@ export interface MessagesRoutesOptions {
   invocationQueue?: InvocationQueue;
   /** F39: Queue processor for auto-dequeue on invocation complete */
   queueProcessor?: QueueProcessor;
+  /** F224: Shared continuation lifecycle coordinator for direct immediate invocations. */
+  sessionContinuationCoordinator?: SessionContinuationCoordinatorLike;
   /** Test/diagnostic override for releasing invocations that never produce a provider/session event. */
   invocationStartupWatchdogMs?: number;
   /** F101: Game store for /game command interception */
   gameStore?: IGameStore;
   /** F101: Injectable auto-player for lifecycle-safe teardown in tests/routes */
   autoPlayer?: Pick<GameDriver, 'startLoop' | 'stopLoop' | 'stopAllLoops'>;
+  /** F233 PR3: ball-custody event sink for zombie reconciliation side effects. */
+  ballCustody?: IBallCustodyIngest;
   /** F088 ISSUE-15: Outbound delivery hook for connector platforms (late-bound after gateway bootstrap) */
   outboundHook?: OutboundDeliveryHookLike;
   /** F088 ISSUE-15: Streaming hook for connector platforms (late-bound after gateway bootstrap) */
@@ -163,6 +173,31 @@ export interface MessagesRoutesOptions {
 }
 
 const log = createModuleLogger('routes/messages');
+
+async function shouldEnqueueDirectContinuation(
+  capsule: CollaborationContinuityCapsuleV1,
+  userId: string,
+  coordinator?: SessionContinuationCoordinatorLike,
+): Promise<boolean> {
+  if (!coordinator?.resolveSessionStrategy) return true;
+  try {
+    const strategy = await coordinator.resolveSessionStrategy(capsule.threadId, capsule.catId, userId);
+    if (strategy === 'reborn') {
+      log.info(
+        { threadId: capsule.threadId, catId: capsule.catId },
+        '[messages] F224: reborn session — skipping continuation enqueue',
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    log.warn(
+      { err, threadId: capsule.threadId, catId: capsule.catId },
+      '[messages] F224: resolveSessionStrategy failed for continuation enqueue, defaulting to enqueue',
+    );
+    return true;
+  }
+}
 
 /**
  * F192 Phase G AC-G12: detect magic words in user message content.
@@ -216,6 +251,8 @@ function formatRoutingWarnings(warnings: CatRoutingError[]): string {
         .map((a) => a.mention)
         .join('、');
       parts.push(`@${w.catId} 已停用，已跳过${alts ? `（可用替代：${alts}）` : ''}。`);
+    } else if (w.kind === 'target_not_in_thread') {
+      parts.push(`@${w.catId} 不在目标 thread (${w.threadId}) 的参与者列表中，请确认 threadId 是否正确。`);
     } else {
       parts.push(`${w.mention} 不存在，已跳过。`);
     }
@@ -228,6 +265,15 @@ function tryAutoCancelPendingHolds(threadId: string, deps: HoldBallCancelDeps | 
   try {
     const cancelled = cancelPendingHoldsForThread(threadId, deps);
     if (cancelled.length > 0) {
+      // P1-3 fix (cloud R2): also cancel running wakeWhen commands for each cancelled hold.
+      // Without this, the runner continues executing after the fallback task is removed,
+      // and posts a stale wake when it completes.
+      for (const task of cancelled) {
+        const catId = task.createdBy?.replace('hold-ball:', '') ?? '';
+        if (catId) {
+          cancelWakeWhenRunner(threadId, catId);
+        }
+      }
       log.info(
         { threadId, cancelledCount: cancelled.length, taskIds: cancelled.map((t) => t.id) },
         'F167 Phase J: auto-cancelled pending hold-ball tasks on user message',
@@ -1010,6 +1056,8 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
 
         // F148 fix: Hoisted so abort/catch branches can ack completed cats' cursors
         const cursorBoundaries = new Map<string, string>();
+        const continuationCapsules = new Map<string, CollaborationContinuityCapsuleV1>();
+        let consumedContinuation: ConsumedContinuationToken | undefined;
 
         // F194 Phase Z3 (AC-Z3): mark chain start for finally fallback. routeExecution may
         // hang / silently exit / swallow exceptions and never reach explicit terminal write
@@ -1077,7 +1125,6 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
           const collectedUsage = new Map<string, TokenUsage>();
           // F070: track governance block errorCode for recoverable failure marking
           let governanceErrorCode: string | undefined;
-          const continuationCapsules = new Map<string, CollaborationContinuityCapsuleV1>();
 
           // F088 ISSUE-15: Collect per-turn content for outbound delivery to connector platforms
           const outboundTurns: Array<{
@@ -1111,6 +1158,38 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
             return;
           }
 
+          // F224: direct immediate invocations must consume the same pending continuation
+          // as QueueProcessor. Only single-cat content is safe to rewrite with a cat-specific prompt.
+          if (opts.sessionContinuationCoordinator && targetCats.length === 1) {
+            const singleCatId = targetCats[0]!;
+            try {
+              const prepared = await opts.sessionContinuationCoordinator.prepareInvocationContext({
+                threadId: resolvedThreadId,
+                catId: singleCatId,
+                userId,
+                content,
+              });
+              content = prepared.content;
+              consumedContinuation = prepared.consumedContinuation;
+              if (prepared.sessionPolicy === 'reborn') {
+                log.info(
+                  { threadId: resolvedThreadId, catId: singleCatId },
+                  '[messages] F224: reborn session — coordinator skipped continuation consume',
+                );
+              } else if (prepared.consumedContinuation) {
+                log.info(
+                  { threadId: resolvedThreadId, catId: singleCatId },
+                  '[messages] F224: consumed pending continuation for direct invocation',
+                );
+              }
+            } catch (err) {
+              log.warn(
+                { err, threadId: resolvedThreadId, catId: singleCatId },
+                '[messages] F224: prepareInvocationContext failed, proceeding without continuation context',
+              );
+            }
+          }
+
           // F118 D2: Broadcast spawn_started immediately — fills the intent_mode blind spot.
           // intent_mode only fires after the first CLI NDJSON event (0–2 min delay).
           // spawn_started fires here, before routeExecution, so the UI can show
@@ -1141,6 +1220,14 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
                     queueHasQueuedMessages: (tid: string) =>
                       opts.invocationQueue?.hasQueuedNonAgentForThread(tid) ?? false,
                     deferA2AEnqueue: (e) => opts.invocationQueue?.enqueue(e as any),
+                    // F254 B3: freshness re-invoke enqueue for immediate (foreground) invocations.
+                    // Without this, freshnessReinvoke metadata from invoke-single-cat is silently
+                    // dropped in the immediate path — re-invoke only fires for queue-driven entries.
+                    // Matches QueueProcessor pattern: strip freshnessContext before enqueue.
+                    freshnessReinvokeEnqueue: (e: any) => {
+                      const { freshnessContext: _ctx, ...queueFields } = e;
+                      opts.invocationQueue?.enqueue(queueFields);
+                    },
                     hasQueuedOrActiveAgentForCat: (tid: string, catId: string) =>
                       opts.invocationQueue?.hasActiveOrQueuedAgentForCat(tid, catId) ?? false,
                   }
@@ -1369,16 +1456,26 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
             routeChainTracker.succeed(createResult.invocationId);
 
             for (const continuationCapsule of continuationCapsules.values()) {
-              void opts.queueProcessor
+              if (
+                !(await shouldEnqueueDirectContinuation(
+                  continuationCapsule,
+                  userId,
+                  opts.sessionContinuationCoordinator,
+                ))
+              ) {
+                continue;
+              }
+              await opts.queueProcessor
                 ?.enqueueContinuation({
                   threadId: resolvedThreadId,
                   userId,
                   catId: continuationCapsule.catId,
                   capsule: continuationCapsule,
                 })
-                .catch((err) =>
-                  log.warn({ err, threadId: resolvedThreadId }, 'enqueueContinuation failed (best-effort)'),
-                );
+                .catch((err) => {
+                  log.warn({ err, threadId: resolvedThreadId }, 'enqueueContinuation failed (best-effort)');
+                  return undefined;
+                });
             }
 
             // Push notification: cat(s) finished responding
@@ -1514,6 +1611,23 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
             }
           }
           routeChainTracker.release(createResult.invocationId);
+          if (opts.sessionContinuationCoordinator) {
+            try {
+              await opts.sessionContinuationCoordinator.commitInvocationOutcome({
+                finalStatus,
+                threadId: resolvedThreadId,
+                catId: primaryCat,
+                userId,
+                consumedContinuation,
+                producedCapsules: [...continuationCapsules.values()],
+              });
+            } catch (err) {
+              log.warn(
+                { err, threadId: resolvedThreadId, targetCats },
+                '[messages] F224: commitInvocationOutcome failed',
+              );
+            }
+          }
           // F39: Notify queue processor for auto-dequeue chain
           notifyQueueCompletion(finalStatus);
         }
@@ -1630,14 +1744,68 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
 
     // Always thread-scoped — default to 'default' thread for lobby
     const resolvedThreadId = threadId ?? 'default';
-    const messages =
-      beforeTs != null
-        ? await opts.messageStore.getByThreadBefore(resolvedThreadId, beforeTs, limit + 1, beforeId, userId)
-        : await opts.messageStore.getByThread(resolvedThreadId, limit + 1, userId);
 
-    // Fetch limit+1 to determine hasMore; drop oldest (first) probe item
-    const hasMore = messages.length > limit;
-    const page = hasMore ? messages.slice(1) : messages;
+    // Loop-scan: iteratively fetch batches from the store, filtering out
+    // internal system messages, until we have `limit + 1` visible items
+    // (the +1 probes hasMore) or the store is exhausted. This guarantees
+    // reachability regardless of how many consecutive internal messages
+    // cluster together — the old fixed-overscan approach would return
+    // {messages:[], hasMore:true} when internal clusters exceeded the cap.
+    //
+    // Termination guarantee: both in-memory and Redis store implementations
+    // use strict cursor advancement (exclusive `< cursor`), so each batch
+    // is strictly older than the previous. The store has finite data, so
+    // storeExhausted (rawBatch.length < BATCH_SIZE) is guaranteed to fire.
+    // The prevCursorId check is a defensive backstop against store bugs
+    // where the cursor fails to advance — it breaks the loop rather than
+    // spinning forever, and does NOT impose any functional scan limit.
+    const BATCH_SIZE = limit + 1 + 20; // generous first batch for common case
+    const needed = limit + 1;
+
+    type StoredMsg = Awaited<ReturnType<typeof opts.messageStore.getByThread>>[number];
+    const allVisible: StoredMsg[] = [];
+    let cursorTs = beforeTs;
+    let cursorId = beforeId;
+    let storeExhausted = false;
+
+    while (allVisible.length < needed && !storeExhausted) {
+      const rawBatch =
+        cursorTs != null
+          ? await opts.messageStore.getByThreadBefore(resolvedThreadId, cursorTs, BATCH_SIZE, cursorId, userId)
+          : await opts.messageStore.getByThread(resolvedThreadId, BATCH_SIZE, userId);
+
+      if (rawBatch.length < BATCH_SIZE) {
+        storeExhausted = true;
+      }
+
+      // Filter internal messages:
+      // - systemKind='context_briefing': F148 routing context for cats
+      //   (NOT F233 duty briefing, which also uses origin='briefing' but lacks this marker)
+      // - routing-guard-failure: internal route guard diagnostic
+      const batchVisible = rawBatch.filter(
+        (m) => m.extra?.systemKind !== 'context_briefing' && m.source?.connector !== 'routing-guard-failure',
+      );
+
+      // Prepend: each subsequent batch is chronologically older
+      allVisible.unshift(...batchVisible);
+
+      // Advance cursor to the oldest message in this batch for next iteration.
+      // Store returns oldest-first (after internal .reverse()), so [0] is oldest.
+      // Defensive: if cursor didn't advance, break to prevent infinite loop.
+      if (rawBatch.length > 0) {
+        const oldest = rawBatch[0]!;
+        const nextTs = oldest.deliveredAt ?? oldest.timestamp;
+        const nextId = oldest.id;
+        if (nextTs === cursorTs && nextId === cursorId) break; // cursor stuck — store bug
+        cursorTs = nextTs;
+        cursorId = nextId;
+      }
+    }
+
+    // hasMore: true if we collected more visible items than the page size,
+    // or if we haven't exhausted the store (more may exist deeper).
+    const hasMore = allVisible.length > limit || !storeExhausted;
+    const page = allVisible.length > limit ? allVisible.slice(allVisible.length - limit) : allVisible;
 
     // Map chat messages (union type allows summary items to be pushed later)
     type TimelineItem = {
@@ -1669,6 +1837,7 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
       ...(m.thinking ? { thinking: m.thinking } : {}),
       ...(m.extra?.rich ||
       m.extra?.crossPost ||
+      m.extra?.isExplicitPost ||
       m.extra?.stream ||
       m.extra?.targetCats ||
       m.extra?.scheduler ||
@@ -1678,6 +1847,7 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
             extra: {
               ...(m.extra.rich ? { rich: m.extra.rich } : {}),
               ...(m.extra.crossPost ? { crossPost: m.extra.crossPost } : {}),
+              ...(m.extra.isExplicitPost ? { isExplicitPost: true } : {}),
               ...(m.extra.stream ? { stream: m.extra.stream } : {}),
               ...(m.extra.targetCats ? { targetCats: m.extra.targetCats } : {}),
               ...(m.extra.scheduler ? { scheduler: m.extra.scheduler } : {}),
@@ -1698,6 +1868,7 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
               icon: m.source.icon,
               ...(m.source.url ? { url: m.source.url } : {}),
               ...(m.source.meta ? { meta: m.source.meta } : {}),
+              ...(m.source.sender ? { sender: m.source.sender } : {}),
             },
           }
         : {}),
@@ -1809,7 +1980,10 @@ export const messagesRoutes: FastifyPluginAsync<MessagesRoutesOptions> = async (
             void reconcileZombies(liveness.zombies, {
               invocationRecordStore: recordStore,
               taskProgressStore: opts.taskProgressStore,
+              ballCustody: opts.ballCustody,
               log: request.log,
+              // F220 Phase 2a (#972): converge queue state when zombies are cleaned up
+              queueConvergence: opts.queueProcessor?.buildQueueConvergence?.(),
             }).catch((err) => request.log.warn({ err, feature: 'F194' }, 'reconcileZombies failed'));
           }
           if (orphanDrafts.length > 0) {

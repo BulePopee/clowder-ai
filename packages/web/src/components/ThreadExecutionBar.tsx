@@ -84,7 +84,6 @@ export function ThreadExecutionBar({ threadId }: ThreadExecutionBarProps) {
     const s = catStatuses[catId];
     return s === 'suspected_stall' || s === 'alive_but_silent';
   });
-
   // F220 Phase 3: 确认后调 force-reset 端点（只清运行态，LL-048 不碰持久化）→ toast → 关弹窗。
   const handleForceReset = useCallback(async () => {
     if (!effectiveThreadId) return;
@@ -243,7 +242,7 @@ function CatStatusChip({
         type="button"
         onClick={() => onStop(catId)}
         className="ml-0.5 text-cafe-muted hover:text-conn-red-text transition-colors"
-        aria-label={`Stop ${catId}`}
+        aria-label={`Stop ${label}`}
       >
         <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
           <path

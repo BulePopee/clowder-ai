@@ -26,6 +26,16 @@ import { CliRawArchive } from '../../session/CliRawArchive.js';
 import type { AgentMessage, AgentServiceOptions, L0InjectableAgentService, MessageMetadata } from '../../types.js';
 import type { RawArchiveSink } from '../providers/codex-audit-hooks.js';
 import { sanitizeRawEvent } from '../providers/codex-audit-hooks.js';
+import {
+  cacheOpenCodeAutoApproveProbe,
+  getCliFlagName,
+  OPENCODE_AUTO_APPROVE_FLAG,
+  type OpenCodeAutoApproveProbeFn,
+  type OpenCodeAutoApproveProbeResult,
+  parseOpenCodeCliConfigArgs,
+  probeOpenCodeAutoApproveSupport,
+  userControlsOpenCodeAutoApprove,
+} from './opencode-auto-approval.js';
 import { transformOpenCodeEvent } from './opencode-event-transform.js';
 
 const log = createModuleLogger('opencode-agent');
@@ -44,11 +54,16 @@ interface OpenCodeAgentServiceOptions {
   rawArchive?: RawArchiveSink;
   /** F203 Phase I: test seam — replaces the real L0 compiler subprocess (like Claude/Codex services). */
   l0CompilerFn?: (options: { catId: string; outPath?: string }) => Promise<string>;
+  /** Test seam for the `opencode run --help` auto-approval capability probe. */
+  autoApproveProbeFn?: OpenCodeAutoApproveProbeFn;
 }
 
 const OPENCODE_API_KEY_ENV = 'OPENCODE_API_KEY';
 const ANTHROPIC_API_KEY_ENV = 'ANTHROPIC_API_KEY';
 const ANTHROPIC_BASE_URL_ENV = 'ANTHROPIC_BASE_URL';
+// Process-wide cache: --auto support is a property of the installed opencode binary.
+// Restart the API process after upgrading opencode so this capability is re-probed.
+let sharedOpenCodeAutoApproveProbe: Promise<OpenCodeAutoApproveProbeResult> | undefined;
 
 export interface OpenCodeEnvDebugSummary {
   mode: 'runtime-config' | 'subscription' | 'direct-env' | 'empty';
@@ -109,6 +124,8 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
   private readonly rawArchive: RawArchiveSink;
   /** F203 Phase I: injectable L0 compiler (test seam, like Claude/Codex services). */
   readonly l0CompilerFn: import('../../types.js').L0CompilerFn | undefined;
+  private readonly autoApproveProbeFn: OpenCodeAutoApproveProbeFn | undefined;
+  private autoApproveProbe: Promise<OpenCodeAutoApproveProbeResult> | undefined;
 
   constructor(options?: OpenCodeAgentServiceOptions) {
     this.catId = options?.catId ?? createCatId('opencode');
@@ -118,6 +135,7 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
     this.spawnFn = options?.spawnFn;
     this.rawArchive = options?.rawArchive ?? new CliRawArchive();
     this.l0CompilerFn = options?.l0CompilerFn;
+    this.autoApproveProbeFn = options?.autoApproveProbeFn;
   }
 
   /**
@@ -137,13 +155,16 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
   async *invoke(prompt: string, options?: AgentServiceOptions): AsyncIterable<AgentMessage> {
     // P1-2: runtime model override takes precedence over constructor model
     const effectiveModel = options?.callbackEnv?.CAT_CAFE_ANTHROPIC_MODEL_OVERRIDE ?? this.model;
-    const args = this.buildArgs(prompt, options?.sessionId, effectiveModel, options?.cliConfigArgs);
     const cwd = options?.workingDirectory;
     const childEnv = this.buildEnv(options?.callbackEnv);
     // F171: Account env vars applied LAST — user overrides provider-injected values
     if (options?.accountEnv) {
       for (const [k, v] of Object.entries(options.accountEnv)) childEnv[k] = v;
     }
+    // The Clowder AI MCP workspace is authoritative in OPENCODE_CONFIG
+    // mcp.cat-cafe.environment. Do not leak stale account-level workspace env into
+    // the parent OpenCode process and let it race the invocation-scoped config.
+    childEnv.ALLOWED_WORKSPACE_DIRS = null;
     const envSummary = summarizeOpenCodeEnvForDebug(childEnv);
     const metadata: MessageMetadata = { provider: 'opencode', model: effectiveModel };
     let sessionInitEmitted = false;
@@ -161,6 +182,20 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
         yield { type: 'done' as const, catId: this.catId, metadata, timestamp: Date.now() };
         return;
       }
+
+      const defaultAutoApproveFlag = await this.resolveDefaultAutoApproveFlag(
+        opencodeCommand,
+        cwd,
+        childEnv,
+        options?.cliConfigArgs,
+      );
+      const args = this.buildArgs(
+        prompt,
+        options?.sessionId,
+        effectiveModel,
+        options?.cliConfigArgs,
+        defaultAutoApproveFlag,
+      );
 
       log.debug(
         {
@@ -335,7 +370,14 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
             sessionInitEmitted = true;
             if (result.sessionId) metadata.sessionId = result.sessionId;
           }
-          yield { ...result, metadata: yieldMetadata };
+          // clowder#915 R1 P1 (砚砚): transformer may carry `metadata.usage`
+          // (from step_finish). The naive `metadata: yieldMetadata` below would
+          // strip it because spread can't see nested keys. Merge `usage` onto
+          // the service-level metadata (which has correct provider + model) so
+          // invoke-single-cat's F8 token block + F24 contextHealth path can fire.
+          const mergedMetadata: MessageMetadata =
+            result.metadata?.usage != null ? { ...yieldMetadata, usage: result.metadata.usage } : yieldMetadata;
+          yield { ...result, metadata: mergedMetadata };
         }
       }
 
@@ -388,7 +430,13 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
     }
   }
 
-  private buildArgs(prompt: string, sessionId?: string, model?: string, cliConfigArgs?: readonly string[]): string[] {
+  private buildArgs(
+    prompt: string,
+    sessionId?: string,
+    model?: string,
+    cliConfigArgs?: readonly string[],
+    defaultAutoApproveFlag?: string,
+  ): string[] {
     const args = ['run'];
 
     // Session resume
@@ -404,17 +452,23 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
 
     // JSON event stream output
     args.push('--format', 'json');
+    // Headless OpenCode has no human approval bridge. Use the best approval
+    // flag advertised by this installed CLI; older compatible builds may have
+    // no supported flag, in which case we preserve the pre-#1065 behavior.
+    if (defaultAutoApproveFlag) args.push(defaultAutoApproveFlag);
 
     // User-defined CLI args from the member editor (#567).
     // User args win when they overlap with system-injected flags.
-    const userParts: string[] = [];
-    for (const arg of cliConfigArgs ?? []) {
-      userParts.push(...arg.trim().split(/\s+/));
-    }
-    const userFlags = new Set(userParts.filter((p) => p.startsWith('-')));
+    const userParts = parseOpenCodeCliConfigArgs(cliConfigArgs);
+    const userFlags = new Set(userParts.map(getCliFlagName).filter((flag): flag is string => flag !== null));
+    const userControlsAutoApprove = userControlsOpenCodeAutoApprove(userFlags);
     const deduped: string[] = [];
     for (let i = 0; i < args.length; i++) {
-      if (args[i].startsWith('-') && userFlags.has(args[i])) {
+      const flagName = getCliFlagName(args[i]);
+      if (
+        flagName !== null &&
+        (userFlags.has(flagName) || (flagName === OPENCODE_AUTO_APPROVE_FLAG && userControlsAutoApprove))
+      ) {
         if (i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
         continue;
       }
@@ -423,6 +477,54 @@ export class OpenCodeAgentService implements L0InjectableAgentService {
     deduped.push(...userParts, prompt);
 
     return deduped;
+  }
+
+  private async resolveDefaultAutoApproveFlag(
+    command: string,
+    cwd?: string,
+    env?: Record<string, string | null>,
+    cliConfigArgs?: readonly string[],
+  ): Promise<string | undefined> {
+    const userParts = parseOpenCodeCliConfigArgs(cliConfigArgs);
+    const userFlags = new Set(userParts.map(getCliFlagName).filter((flag): flag is string => flag !== null));
+    if (userControlsOpenCodeAutoApprove(userFlags)) return undefined;
+
+    const result = await this.getAutoApproveProbe(command, cwd, env);
+    if (result.warning) {
+      log.warn(
+        { catId: this.catId, command, warning: result.warning },
+        'OpenCode auto-approval flag unavailable; continuing without default flag',
+      );
+    }
+    return result.approvalFlag;
+  }
+
+  private getAutoApproveProbe(
+    command: string,
+    cwd?: string,
+    env?: Record<string, string | null>,
+  ): Promise<OpenCodeAutoApproveProbeResult> {
+    if (this.autoApproveProbeFn) {
+      this.autoApproveProbe ??= cacheOpenCodeAutoApproveProbe(
+        this.autoApproveProbeFn({ command, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }),
+        (promise) => {
+          if (this.autoApproveProbe === promise) this.autoApproveProbe = undefined;
+        },
+      );
+      return this.autoApproveProbe;
+    }
+    // Unit tests inject spawnFn to own the primary CLI process lifecycle. Do not
+    // consume that mock for the preflight probe unless the test provides an
+    // explicit autoApproveProbeFn.
+    if (this.spawnFn) return Promise.resolve({ approvalFlag: OPENCODE_AUTO_APPROVE_FLAG });
+
+    sharedOpenCodeAutoApproveProbe ??= cacheOpenCodeAutoApproveProbe(
+      probeOpenCodeAutoApproveSupport(command, cwd, env),
+      (promise) => {
+        if (sharedOpenCodeAutoApproveProbe === promise) sharedOpenCodeAutoApproveProbe = undefined;
+      },
+    );
+    return sharedOpenCodeAutoApproveProbe;
   }
 
   private buildEnv(callbackEnv?: Record<string, string>): Record<string, string | null> {

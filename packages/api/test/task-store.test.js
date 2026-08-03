@@ -47,6 +47,19 @@ describe('TaskStore', () => {
       const task = store.create(makeInput({ ownerCatId: 'codex' }));
       assert.equal(task.ownerCatId, 'codex');
     });
+
+    it('preserves F233 probe + resolveMode metadata', () => {
+      const task = store.create(
+        makeInput({
+          resolveMode: 'completes',
+          probe: { kind: 'redis_exists', key: 'cat-cafe:probe:ready' },
+        }),
+      );
+
+      assert.equal(task.resolveMode, 'completes');
+      assert.deepEqual(task.probe, { kind: 'redis_exists', key: 'cat-cafe:probe:ready' });
+      assert.deepEqual(store.get(task.id).probe, task.probe);
+    });
   });
 
   describe('update', () => {
@@ -87,6 +100,21 @@ describe('TaskStore', () => {
       const updated = store.update(task.id, { status: 'doing' });
       assert.equal(updated.ownerCatId, 'opus');
       assert.equal(updated.title, '重构 AgentRouter');
+    });
+
+    it('updates F233 probe + resolveMode metadata', () => {
+      const task = store.create(makeInput());
+      const updated = store.update(task.id, {
+        resolveMode: 'bounces_back',
+        probe: { kind: 'http_get', url: 'http://127.0.0.1:3102/ready', expectStatus: 200 },
+      });
+
+      assert.equal(updated.resolveMode, 'bounces_back');
+      assert.deepEqual(updated.probe, {
+        kind: 'http_get',
+        url: 'http://127.0.0.1:3102/ready',
+        expectStatus: 200,
+      });
     });
   });
 
@@ -327,6 +355,88 @@ describe('TaskStore', () => {
       assert.equal(task.relatedFeatureId, undefined);
       assert.equal(task.detectedFeatureIds, undefined);
       assert.equal(task.dispatchGate, undefined);
+    });
+  });
+
+  describe('patchAutomationState: issue cursor anti-regression (Cloud R19 P2)', () => {
+    it('re-patching with stale cursor seeds does NOT lower existing issue lastCommentCursor or lastDeliveredCursor', () => {
+      // Simulate: task seeded with high cursors (normal operation, 100 comments processed)
+      const task = store.create(
+        makeInput({
+          kind: 'issue_tracking',
+          subjectKey: 'issue:owner/repo#10',
+          title: 'Track owner/repo#10',
+        }),
+      );
+      // First patch: set cursors to high values (as if 100 comments processed)
+      store.patchAutomationState(task.id, {
+        issue: { lastCommentCursor: 100, lastDeliveredCursor: 90 },
+      });
+
+      // Second patch: re-route with stale seed (lastCommentCursor=0, lastDeliveredCursor=0)
+      // This simulates duplicate case routing in dev/test with no-Redis fallback
+      store.patchAutomationState(task.id, {
+        issue: { lastCommentCursor: 0, lastDeliveredCursor: 0 },
+      });
+
+      const updated = store.get(task.id);
+      // Cursors must NOT be lowered — shallow spread `{ ...existing, ...patch }` would lower them to 0
+      assert.equal(
+        updated.automationState?.issue?.lastCommentCursor,
+        100,
+        'lastCommentCursor must not be lowered by stale re-patch',
+      );
+      assert.equal(
+        updated.automationState?.issue?.lastDeliveredCursor,
+        90,
+        'lastDeliveredCursor must not be lowered by stale re-patch',
+      );
+    });
+
+    it('explicit null clears a pending wake after durable admission', () => {
+      const task = store.create(
+        makeInput({ kind: 'issue_tracking', subjectKey: 'issue:owner/repo#11', title: 'Track issue #11' }),
+      );
+      store.patchAutomationState(task.id, {
+        issue: {
+          pendingWake: {
+            messageId: 'msg-1',
+            threadId: 'thread-1',
+            catId: 'opus',
+            content: 'wake',
+            deliveredCursor: 10,
+          },
+        },
+      });
+      store.patchAutomationState(task.id, { issue: { pendingWake: null } });
+      assert.equal(store.get(task.id).automationState.issue.pendingWake, null);
+    });
+  });
+
+  describe('patchAutomationState: review source cursor anti-regression', () => {
+    it('does not lower independent inline, conversation, or decision cursors', () => {
+      const task = store.create(
+        makeInput({ kind: 'pr_tracking', subjectKey: 'pr:owner/repo#12', title: 'Track PR #12' }),
+      );
+      store.patchAutomationState(task.id, {
+        review: {
+          lastInlineCommentCursor: 30,
+          lastConversationCommentCursor: 50,
+          lastDecisionCursor: 40,
+        },
+      });
+      store.patchAutomationState(task.id, {
+        review: {
+          lastInlineCommentCursor: 3,
+          lastConversationCommentCursor: 5,
+          lastDecisionCursor: 4,
+        },
+      });
+      assert.deepEqual(store.get(task.id).automationState.review, {
+        lastInlineCommentCursor: 30,
+        lastConversationCommentCursor: 50,
+        lastDecisionCursor: 40,
+      });
     });
   });
 });

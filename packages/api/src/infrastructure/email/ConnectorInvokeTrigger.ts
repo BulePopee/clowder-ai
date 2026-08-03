@@ -147,14 +147,44 @@ export class ConnectorInvokeTrigger {
       );
     }
 
-    // AC-2+3: dispatch with acquired controller (no separate start() call)
+    // Admission is not accepted until the idempotent InvocationRecord exists.
+    // Creating it inside the detached background promise used to let callers observe
+    // `dispatched` even when durable admission subsequently failed.
+    let invocationId: string;
+    try {
+      const createResult = await this.opts.invocationRecordStore.create({
+        threadId,
+        userId,
+        targetCats: [catId],
+        intent: 'execute',
+        idempotencyKey: `connector-${messageId}`,
+      });
+      if (createResult.outcome === 'duplicate') {
+        invocationTracker.complete(threadId, catId, controller);
+        this.opts.log.info(`[ConnectorInvokeTrigger] Duplicate invocation for message ${messageId}, skipping`);
+        return 'dispatched';
+      }
+      invocationId = createResult.invocationId;
+    } catch (err) {
+      invocationTracker.complete(threadId, catId, controller);
+      this.opts.queueProcessor?.onInvocationComplete(threadId, catId, 'failed').catch(() => {
+        /* best-effort: release any queued work after failed direct admission */
+      });
+      this.opts.log.error(
+        { err, threadId, catId, messageId },
+        '[ConnectorInvokeTrigger] Durable invocation admission failed',
+      );
+      throw err;
+    }
+
+    // AC-2+3: dispatch with acquired controller and already-durable invocation record.
     this.executeInBackground(
       threadId,
       catId,
       userId,
       message,
       messageId,
-      undefined,
+      invocationId,
       contentBlocks,
       policy?.suggestedSkill,
       sender,
@@ -266,7 +296,6 @@ export class ConnectorInvokeTrigger {
     const { router, socketManager, invocationRecordStore, invocationTracker, invocationQueue, log } = this.opts;
     const targetCats: CatId[] = [catId];
     let finalStatus: 'succeeded' | 'failed' | 'canceled' = 'failed';
-    let skipOnComplete = false;
 
     // R1-P1 fix: move controller before try so finally always releases it (even if create() throws)
     const controller = preAcquiredController ?? invocationTracker.start(threadId, catId, userId, targetCats);
@@ -274,24 +303,17 @@ export class ConnectorInvokeTrigger {
     const HEARTBEAT_INTERVAL_MS = 30_000;
     let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
     let invocationId: string | undefined;
+    // R4 fix: hoist above try so catch can await it for correct failure cleanup
+    // (onStreamEnd → cleanupPlaceholders, per messages.ts cleanupStreamingOnFailure).
+    let streamStartPromise: Promise<void> | undefined;
 
     try {
-      // ① Atomic create InvocationRecord (inside try so finally releases controller on throw)
-      const createResult = existingInvocationId
-        ? { outcome: 'created' as const, invocationId: existingInvocationId }
-        : await invocationRecordStore.create({
-            threadId,
-            userId,
-            targetCats,
-            intent: 'execute',
-            idempotencyKey: `connector-${messageId}`,
-          });
-
-      if (createResult.outcome === 'duplicate') {
-        log.info(`[ConnectorInvokeTrigger] Duplicate invocation for message ${messageId}, skipping`);
-        skipOnComplete = true;
-        return; // finally releases controller
+      // ① InvocationRecord was created synchronously by trigger() before it reported
+      // `dispatched`. QueueProcessor owns the separate queued-admission path.
+      if (!existingInvocationId) {
+        throw new Error('Connector invocation reached execution without a durable invocation record');
       }
+      const createResult = { outcome: 'created' as const, invocationId: existingInvocationId };
 
       invocationId = createResult.invocationId;
 
@@ -335,7 +357,6 @@ export class ConnectorInvokeTrigger {
       // Phase 4: Start streaming placeholder on external platforms
       // Fire-and-forget for the loop, but save the promise so onStreamEnd can await it
       // to prevent race (onStreamEnd before onStreamStart finishes registering sessions).
-      let streamStartPromise: Promise<void> | undefined;
       if (this.opts.streamingHook) {
         streamStartPromise = this.opts.streamingHook
           .onStreamStart(threadId, catId, createResult.invocationId, sender)
@@ -382,6 +403,8 @@ export class ConnectorInvokeTrigger {
         parentInvocationId: createResult.invocationId,
         // F222 P1: Connector-triggered execution is not user-origin — suppress frustration detection
         frustrationAutoIssueEligible: false,
+        // #949 P2: Connector-sourced flows have no ball-pass expectation — suppress verdict warning
+        verdictPassWarningEnabled: false,
       })) {
         // #768: Broadcast intent_mode on first CLI event — proves CLI is alive.
         if (!intentModeBroadcast) {
@@ -650,11 +673,56 @@ export class ConnectorInvokeTrigger {
               }
             });
           }
-        } else if (this.opts.streamingHook?.cleanupPlaceholders) {
-          // Cloud-P1-R3: silent invocation (no content) — still clean up placeholder
-          await this.opts.streamingHook.cleanupPlaceholders(threadId, createResult.invocationId).catch((err) => {
-            log.warn({ err, threadId }, '[ConnectorInvokeTrigger] StreamingHook.cleanupPlaceholders failed (silent)');
-          });
+        } else {
+          // R6+R7 fix: deliver fallback FIRST (with timeout), then cleanup placeholder
+          // only on success — preserves "thinking" card if delivery fails (Cloud P2).
+          // Timeout prevents adapter hang from blocking finally (Cloud P1).
+          // R7: late-success cleanup mirrors normal content-delivery pattern (lines 641-653).
+          let silentDeliveryOk = !this.opts.outboundHook; // no hook → proceed to cleanup
+          let silentDeliverPromise: Promise<void> | undefined;
+          if (this.opts.outboundHook) {
+            silentDeliverPromise = this.opts.outboundHook.deliver(
+              threadId,
+              '处理完成，但未产生回复内容。',
+              catId,
+              undefined,
+              undefined,
+              undefined,
+              messageId,
+            );
+            try {
+              await Promise.race([
+                silentDeliverPromise,
+                new Promise<void>((_, reject) =>
+                  setTimeout(() => reject(new Error('deliver timeout')), DELIVER_TIMEOUT_MS),
+                ),
+              ]);
+              silentDeliveryOk = true;
+            } catch (deliverErr) {
+              log.error({ err: deliverErr, threadId }, '[ConnectorInvokeTrigger] Silent-path outbound delivery failed');
+            }
+          }
+          if (silentDeliveryOk && this.opts.streamingHook?.cleanupPlaceholders) {
+            await this.opts.streamingHook.cleanupPlaceholders(threadId, createResult.invocationId).catch((err) => {
+              log.warn({ err, threadId }, '[ConnectorInvokeTrigger] StreamingHook.cleanupPlaceholders failed (silent)');
+            });
+          } else if (silentDeliverPromise && this.opts.streamingHook?.cleanupPlaceholders) {
+            // R7: timeout fired but delivery may still succeed — defer cleanup to late-success
+            const cleanupHook = this.opts.streamingHook;
+            const scopedInvocationId = createResult.invocationId;
+            silentDeliverPromise
+              .then(() => {
+                cleanupHook.cleanupPlaceholders(threadId, scopedInvocationId).catch((err) => {
+                  log.warn(
+                    { err, threadId },
+                    '[ConnectorInvokeTrigger] Silent late-success placeholder cleanup failed',
+                  );
+                });
+              })
+              .catch(() => {
+                /* delivery truly failed — thinking card stays as fallback UX */
+              });
+          }
         }
       }
 
@@ -672,8 +740,11 @@ export class ConnectorInvokeTrigger {
             status: 'failed',
             error: errorMsg,
           });
-        } catch {
-          /* best-effort */
+        } catch (statusErr) {
+          log.warn(
+            { err: statusErr, invocationId },
+            '[ConnectorInvokeTrigger] invocation status update failed (best-effort)',
+          );
         }
       }
 
@@ -687,16 +758,53 @@ export class ConnectorInvokeTrigger {
         },
         threadId,
       );
+
+      // R4 fix (#873): correct failure cleanup — onStreamEnd transitions sessions
+      // from active → pendingCleanup; cleanupPlaceholders alone is a no-op on active
+      // sessions. Matches messages.ts cleanupStreamingOnFailure() sequence.
+      if (this.opts.streamingHook) {
+        try {
+          const STREAM_START_TIMEOUT_MS = 5000;
+          if (streamStartPromise) {
+            await Promise.race([streamStartPromise, new Promise<void>((r) => setTimeout(r, STREAM_START_TIMEOUT_MS))]);
+          }
+          await this.opts.streamingHook.onStreamEnd(threadId, '', invocationId);
+          await this.opts.streamingHook.cleanupPlaceholders?.(threadId, invocationId);
+        } catch (cleanupErr) {
+          log.warn({ err: cleanupErr, threadId }, '[ConnectorInvokeTrigger] Error-path streaming cleanup failed');
+        }
+      }
+
+      // #873: Deliver error message to external IM platform so user sees a reply (not silence)
+      // R6 fix: timeout prevents adapter hang from blocking finally (Cloud P1).
+      if (this.opts.outboundHook) {
+        const ERROR_DELIVER_TIMEOUT_MS = this.opts.deliverTimeoutMs ?? 10_000;
+        try {
+          await Promise.race([
+            this.opts.outboundHook.deliver(
+              threadId,
+              '抱歉，处理消息时遇到问题，请稍后重试。',
+              catId,
+              undefined,
+              undefined,
+              undefined,
+              messageId,
+            ),
+            new Promise<void>((_, reject) =>
+              setTimeout(() => reject(new Error('deliver timeout')), ERROR_DELIVER_TIMEOUT_MS),
+            ),
+          ]);
+        } catch (deliverErr) {
+          log.error({ err: deliverErr, threadId }, '[ConnectorInvokeTrigger] Error-path outbound delivery failed');
+        }
+      }
     } finally {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       invocationTracker.complete(threadId, catId, controller);
       // F39 P1 fix: Notify queue processor for auto-dequeue chain
-      // R2-P1-B: skip for duplicates — no real invocation happened, notifying 'failed' would pause the slot
-      if (!skipOnComplete) {
-        this.opts.queueProcessor?.onInvocationComplete(threadId, catId, finalStatus).catch(() => {
-          /* best-effort, don't crash background task */
-        });
-      }
+      this.opts.queueProcessor?.onInvocationComplete(threadId, catId, finalStatus).catch(() => {
+        /* best-effort, don't crash background task */
+      });
       // F151: Signal adapters that this invocation's delivery batch is complete.
       // Fires on both success AND failure — failed invocations must close the task
       // immediately instead of waiting for TASK_TIMEOUT_MS (P2-1 review fix).

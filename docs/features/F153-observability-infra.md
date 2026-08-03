@@ -15,7 +15,7 @@ community_issue: "zts212653/clowder-ai#388"
 
 Cat Cafe 当前缺乏系统性运行时可观测能力：异常难定位、超时难检测、猫猫是否在工作没有可靠信号。F130 解决了日志落盘，但 metrics/tracing/health 这一层还是空白。社区贡献者提交了 clowder-ai#393 实现 Phase 1 基础设施。
 
-team experience（2026-04-09）："这是可观测性基础设施 PR，核心是在 packages/api 里接入 OTel SDK，补 telemetry redaction、metrics allowlist、Prometheus/OTLP、/ready 健康检查，以及 cli-spawn 参数脱敏。"
+operator experience（2026-04-09）："这是可观测性基础设施 PR，核心是在 packages/api 里接入 OTel SDK，补 telemetry redaction、metrics allowlist、Prometheus/OTLP、/ready 健康检查，以及 cli-spawn 参数脱敏。"
 
 ## What
 
@@ -250,7 +250,7 @@ W3C TraceContext 对齐的跨猫调用因果链：
 > **Spec PR**: clowder-labs/clowder-ai#2 (merged 2026-05-19)
 > **Implementation PR**: clowder-labs/clowder-ai#3 (merged 2026-05-19, commit `f4594cb9`)
 > **Governance split PR**: clowder-labs/clowder-ai#4 (dir-exceptions extension, merged 2026-05-19, commit `d3e60d01`)
-> **Discussion**: 2026-05-19，三方对齐（team lead + Maine Coon/Maine Coon + Ragdoll/Ragdoll）
+> **Discussion**: 2026-05-19，三方对齐（operator + Maine Coon/Maine Coon + Ragdoll/Ragdoll）
 >
 > **Provider coverage**: Claude CLI provider 已通过 `claude-ndjson-parser.ts` 在 `message_stop` 处 emit `cat_cafe.agent_loop` marker。其余 provider（Codex / Gemini / Kimi / Antigravity / OpenCode / DARE / A2A）尚未实现 marker emit，Step Summary 会显式显示 `agent_loop_count: —`（per AC-I2/I7 non-degradation rule）。后续 phase 补齐各 provider 的 stream parser hook。
 
@@ -405,6 +405,66 @@ UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"
 
 > **未来 PR 加新 provider**：必须先更新此矩阵 + provide AC-J2 wire；不允许"先 wire 后补 matrix"。
 
+### Phase K: Config Surface — 运维监控功能开关面板
+
+> **Status**: ✅ done | **Owner**: Ragdoll
+> **Trigger**: 社区用户打开运维监控面板全部显示 0，因为 telemetry env 配置未暴露——用户不知道要配什么。
+> **operator experience（2026-06-26）**："这个也是悄摸摸的 env 配置没放出来得env配置 和记忆那样 on/off放到面板"
+
+#### 问题
+
+F153 Phase E 做了 Hub 嵌入式可观测面板（`HubObservabilityTab`），但 telemetry 配置完全隐藏：
+
+- `TELEMETRY_HMAC_SALT` 未设置 → `validateSalt()` 失败 → OTel 静默禁用 → 全部显示 0
+- `.env.example` 只有 `# TELEMETRY_HMAC_SALT=`（注释掉的一行），其余 telemetry env 全无
+- 监控面板无"功能开关"区域，无"未启用"提示——用户看到全 0 不知道为什么
+
+**参考**：记忆系统已有成熟的功能开关面板（`IndexStatus.tsx` → `filterEvidenceVars()` → `category === 'evidence'` → `PATCH /api/config/env` 热更新），运维监控应复用同一机制。
+
+#### 方案
+
+复用记忆系统的"功能开关"机制，在 `HubObservabilityTab` OverviewPanel 中添加 telemetry 配置区域。
+
+#### 热更新分级
+
+| env 变量 | 读取时机 | 热更新 | 面板形态 |
+|---------|---------|--------|---------|
+| `PROMPT_CAPTURE` | 每次 invocation 动态读 `isPromptCaptureEnabled()` | ✅ | Toggle (off/on) |
+| `PROMPT_CAPTURE_CATS` | 同上 | ✅ | 可编辑文本 |
+| `TELEMETRY_ALERT_ERROR_RATE` | 每次 `/api/telemetry/health` 请求动态读 | ✅ | 可编辑数值 |
+| `TELEMETRY_ALERT_P95_LATENCY_S` | 同上 | ✅ | 可编辑数值 |
+| `TELEMETRY_ALERT_ACTIVE_INVOCATIONS` | 同上 | ✅ | 可编辑数值 |
+| `OTEL_SDK_DISABLED` | `initTelemetry()` 启动时读 | ❌ | 配置参考（标注"需重启"） |
+| `TELEMETRY_HMAC_SALT` | 启动时 `validateSalt()` | ❌ | 配置参考（sensitive，标注"需重启"） |
+| `PROMETHEUS_PORT` | 启动时 | ❌ | 配置参考（标注"需重启"） |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 启动时 | ❌ | 配置参考（标注"需重启"） |
+| `TELEMETRY_EXPORT_RAW_SYSTEM_IDS` | 启动时 | ❌ | 配置参考（标注"需重启"） |
+
+> `TELEMETRY_DEBUG` / `TELEMETRY_DEBUG_FORCE` 维持 `hubVisible: false`（Phase D AC-D3 决策，调试专用通道不在 Hub 暴露）。
+
+#### 实施步骤
+
+1. **env-registry.ts 更新**：
+   - `PROMPT_CAPTURE`：加 `allowedValues: ['off', 'on']`（启用 toggle 渲染）
+   - 确认其余 telemetry vars 的 `hubVisible` / `runtimeEditable` 与热更新分级一致
+
+2. **HubObservabilityTab.tsx 扩展**：
+   - OverviewPanel 顶部加 OTel 启用状态检测区域
+   - OTel 未启用时显示引导卡（"可观测性未启用 — 原因: HMAC salt 未配置 / 已被显式禁用 — 操作建议"），替代静默显示全 0
+   - 加"功能开关"区域（filter `category === 'telemetry'` + `defaultValue` 为 `off`/`on`），复用 `PATCH /api/config/env` 热更新
+   - 加"配置参考"区域（filter `category === 'telemetry'` + 非 toggle 类），展示启动时读取的 env vars + "需重启"标注
+
+3. **共享 toggle 组件抽取（可选优化）**：
+   - `IndexStatus.tsx` 的 toggle/config 渲染逻辑可抽为共享组件供复用
+   - 首版可直接在 `HubObservabilityTab` 内实现，确认 pattern 稳定后再抽取
+
+#### Out of scope
+
+- 不改 telemetry 底层逻辑（不做 OTel 热重启——启动时变量仍需重启生效）
+- 不改 `PATCH /api/config/env` API（已有，直接复用）
+- 不改 `TELEMETRY_DEBUG` / `TELEMETRY_DEBUG_FORCE` 的 `hubVisible: false` 策略（Phase D AC-D3 决策）
+- 不做通用"所有 category 的功能开关"框架（scope 限定在 telemetry category）
+
 ## Acceptance Criteria
 
 ### Phase B（OTel 全链路追踪）✅
@@ -500,6 +560,14 @@ UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"
 - [x] AC-J8: hydrate 从 `toolEvents[]` 恢复 `cat_cafe.tool_use ...` real-duration child span（不退化成 `invocation.restored`）。`synthesizeToolSpansFromEvents` 按 `toolUseId` 配对 tool_use/tool_result，用 startTimeMs/endTimeMs 算 duration，按 status 设 OTel span status code。缺字段的事件 honest 跳过（KD-41）。
 - [x] AC-J9: provider 支持矩阵附录 — F153 spec 已加表格列每个 provider 的 (start, end, id, status) 四件套支持情况（见 Phase J 章节 "Provider 支持矩阵" 子节）。**Codex / DARE / CatAgent** 四件套就位（AC-J2 wired in PR #774）；**Claude CLI / Gemini CLI / Antigravity / OpenCode** ⏳ deferred（parser 字段未 verify / wire — 见矩阵脚注）；**Kimi** 明确降级（无 `tool_result` 事件）；**A2A** n/a（非 LLM provider）。
 
+### Phase K（Config Surface — 运维监控功能开关面板）
+- [x] AC-K1: `HubObservabilityTab` OverviewPanel 顶部显示 OTel 启用状态（Enabled/Disabled + 原因：缺 HMAC salt / 被显式禁用 / 正常）
+- [x] AC-K2: OTel 未启用时显示配置引导卡（明确原因 + 操作建议），替代静默显示全 0
+- [x] AC-K3: "功能开关"区域显示可热更新的 telemetry env（`PROMPT_CAPTURE` 等），toggle 后 `PATCH /api/config/env` 即时生效
+- [x] AC-K4: "配置参考"区域显示启动时读取的 telemetry env（`OTEL_SDK_DISABLED`、`TELEMETRY_HMAC_SALT` 等），标注"需重启"
+- [x] AC-K5: `PROMPT_CAPTURE` 在 env-registry.ts 注册 `allowedValues: ['off', 'on']`，前端自动渲染为 toggle
+- [x] AC-K6: 前端 toggle 复用 `PATCH /api/config/env` 热更新 API，不引入新端点
+
 ## Dependencies
 
 - **Related**: F130（API 日志治理 — 同属可观测性，F130 管 logging，F153 管 metrics/tracing）
@@ -519,7 +587,7 @@ UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"
 | # | 决策 | 理由 | 日期 |
 |---|------|------|------|
 | KD-1 | 社区 PR 先不放行，P1 修完再 intake | Maine Coon review 发现 counter 泄漏 + 端口硬编码 | 2026-04-09 |
-| KD-2 | 分配 F153（cat-cafe F152 = Expedition Memory 已占） | team lead确认 | 2026-04-09 |
+| KD-2 | 分配 F153（cat-cafe F152 = Expedition Memory 已占） | operator确认 | 2026-04-09 |
 | KD-3 | AC-A5 改为 graceful degradation（缺 salt → 禁用 OTel，不崩溃）| 生产稳定性优先 | 2026-04-11 |
 | KD-4 | Pane registry abort 状态不一致接受为 known limitation，不阻塞 intake | pre-existing 行为，属 F089 terminal 域 | 2026-04-13 |
 | KD-5 | 4 轮 review 后放行 intake | 所有 P1 已修，核心 P2 已修，剩余 P2 non-blocking | 2026-04-13 |
@@ -535,9 +603,9 @@ UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"
 | KD-15 | 查询参数先 HMAC 再 match store | Maine Coon Design Gate：不为查询方便存 raw ID | 2026-04-21 |
 | KD-16 | F153 = descriptive observability，不做 normative eval | Phase E 只展示"发生了什么"，eval 信号留给未来 phase（eval 讨论 2026-04-19） | 2026-04-21 |
 | KD-17 | 补 5 个产品级 instrument（task/session 层），不急于吸收 ActivityEventBus | Phase A 的 5 个是基础设施级；L1-L3 gap 分析显示 task 完成/耗时/轮次信号缺失 | 2026-04-21 |
-| KD-18 | Phase F: 否决 SQLite 独立存储 | team lead认为单独一份可观测数据冗余 | 2026-04-22 |
+| KD-18 | Phase F: 否决 SQLite 独立存储 | operator认为单独一份可观测数据冗余 | 2026-04-22 |
 | KD-19 | Phase F: 否决完整 span JSON 写入 InvocationRecord | GPT-5.4 + Sonnet review: Redis 内存线性膨胀 + HGETALL 读放大 + TTL 生命周期错位 | 2026-04-22 |
-| KD-20 | Phase F: 选定指针关联方案 | team lead洞察：消息数据已含 timing/token/tool 信息，只需补 OTel ID 指针（~100 bytes） | 2026-04-22 |
+| KD-20 | Phase F: 选定指针关联方案 | operator洞察：消息数据已含 timing/token/tool 信息，只需补 OTel ID 指针（~100 bytes） | 2026-04-22 |
 | KD-21 | Phase F 前置：统一 `invocationId`（沿用现有键名，值改为 outer record ID）| GPT-5.4 发现不统一；Maine Coon review 修正：不引入新键名 `recordInvocationId`，否则破坏 redactor Class C + trace query | 2026-04-22 |
 | KD-22 | Phase F 纳入 `cat_cafe.route` 根 span | Phase E 实现引入 route 根 span，invocation 已变子 span；hydrate 必须覆盖 route 否则重启后层级断裂 | 2026-04-22 |
 | KD-23 | startTime 用 `timestamp - durationMs` 反推 | assistant message timestamp 是终态落盘时间 ≈ span end；Maine Coon review 发现直接当 startTime 会偏移 | 2026-04-22 |
@@ -561,4 +629,5 @@ UI 必须显示 `—` 而非 `0`，否则会让"重启前的数据"看起来像"
 | KD-41 | Phase J: provider 支持矩阵必须文档化，不允许"至少 X 其他 fallback"模糊口径 | gpt52 finding：模糊 AC 容易把 Phase J 做成局部真实；每个 provider 必须明确列 start/end/id/status 四件套支持，不支持的明确降级（不开 span 或标 fallback） | 2026-05-22 |
 | KD-42 | Prompt X-Ray 不能把 `params.systemPrompt` 等同于真实系统提示词 | F203 将 L0 identity 移到 native system channel；runtime 证明确实会 capture user/effective prompt，但 `System` tab 可为空，F153 Phase G 需要补 native channel coverage 或 UI 明示 partial | 2026-05-26 |
 | KD-43 | Phase J Slice J-B: `StoredToolEvent` 持久化 native `toolName` 数据字段，与 UI `label` 解耦；hydrate 优先用 `toolName`，label 解析仅为 legacy fallback | Maine Coon R5→R6 把"non-blocking P3 / track separately"升级为 P1：`label` 是 UI 显示文本（含 catId 前缀 + arrow + 可能本地化），把它当作 hydrate data contract 会让 label 格式或文案改动 silently degrade trace 到 `unknown` 或错的工具名。修在 J-B PR #825 内完成（3 个新 regression test 覆盖：toolName preferred / legacy label fallback / malformed last-resort） | 2026-06-02 |
+| KD-45 | Phase K 归入 F153（不开新 F 号）：复用记忆系统 `IndexStatus.tsx` 的功能开关面板机制（`filterEvidenceVars` → `PATCH /api/config/env`），在 `HubObservabilityTab` 中按 `category === 'telemetry'` 过滤渲染 toggle。启动时变量（`OTEL_SDK_DISABLED` / `TELEMETRY_HMAC_SALT`）标"需重启"放配置参考区，热更新变量（`PROMPT_CAPTURE`）做 toggle | operator确认（2026-06-26）：改的就是 F153 Phase E 产物，env 全在 telemetry 分类，scope 小不值得新 F 号 | 2026-06-26 |
 | KD-44 | Phase G AC-G10 (KD-42 closure): `PromptCapture` 持久化 `nativeSystemPrompt` data field 直接拿 `compileL0ViaSubprocess` 编译后 L0，Hub UI System tab 分区显示 Native L0 / message-system pack，token 估算分桶（msg / native L0 / total）。Capture 走 fire-and-forget async runner，L0 fetch 失败只写 `captureDiagnostics`，不阻塞 invocation hot path。`l0-compiler.ts` 加 in-flight Promise dedup + generation guard，capture + native injection 并发冷启动只发一次 subprocess，且 `clearL0Cache()` 后旧 in-flight compile 不得回写 stale L0 到 cache | Maine Coon Design Gate（2026-06-03）四立场全部 actionable：(1) 不要重复编译 → 加 in-flight dedup + capture 异步取 + fail-safe diagnostic；(2) 保留 `systemPrompt` 不 rename → 加 `nativeSystemPrompt` 双字段，避免 UI 误读 non-native provider 的 system；(3) 单 System tab 分区，Native L0 上方 + pack appendix 下方，修正 resume banner 误导（injected=false 只代表 message-system path 不影响 native L0）；(4) 保留 `tokenEstimate = effectivePrompt`，新增 `nativeSystemTokenEstimate` + `totalTokenEstimate` Hub 顶部显示 total / Meta 拆开；R1 P1 follow-up（2026-06-08）补 generation guard + clear-during-inflight regression | 2026-06-09 |

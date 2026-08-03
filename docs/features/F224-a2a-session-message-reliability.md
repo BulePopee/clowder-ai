@@ -5,11 +5,12 @@ topics: [a2a, session, continuation, message, bubble, dedup, reliability, queue,
 doc_kind: spec
 created: 2026-06-04
 community_issue: clowder-ai#834 (含 #813 #814 #815 #836)
+tips_exempt: status-only correction (spec to in-progress for lint dogfood); F224 implementation pending, no user-facing capability
 ---
 
 # F224: A2A 协作的会话/消息状态可靠性（会话延续协调器 + 消息去重 + 触发合并 + 重生会话）
 
-> **Status**: spec | **Owner**: Ragdoll (Opus-4.8) | **Priority**: P1 | **Source**: community [clowder-ai#834](https://github.com/zts212653/clowder-ai/pull/834)
+> **Status**: in-progress（coordinator skeleton + red tests 已 PR #2104 merged，Phase A wire 待续）| **Owner**: Ragdoll (Opus-4.8) | **Priority**: P1 | **Source**: community [clowder-ai#834](https://github.com/zts212653/clowder-ai/pull/834)
 >
 > **F220 姊妹 feat**：F220 管"看得见 + 卡死能自救 + invocation 卡死根因"；F224 管"会话/消息状态可靠（不丢/不重/不乱）"。两者同属"信得过的猫间协作"愿景，**分属不同架构轴**——F220 = invocation-hang / slot 轴，F224 = session-continuation / message 轴。两轴只共享 `QueueProcessor` 文件，**不共享根因**（之前一直被缠在一起，导致"又 intake 又改"的错觉）。
 >
@@ -17,7 +18,7 @@ community_issue: clowder-ai#834 (含 #813 #814 #815 #836)
 
 ## Why
 
-team lead要"**信得过的猫间协作**"。F220 解决了"看得见猫在跑 + 卡死能自救"，但猫@猫协作还有另一摊"信不过"——**会话状态和消息显示会出错**，让协作结果不可靠：
+operator要"**信得过的猫间协作**"。F220 解决了"看得见猫在跑 + 卡死能自救"，但猫@猫协作还有另一摊"信不过"——**会话状态和消息显示会出错**，让协作结果不可靠：
 
 1. **会话延续会丢**（clowder-ai#813）：A2A 传球触发下一棒猫时，上一轮的会话上下文没被正确封存/恢复，猫"断片"。
 2. **消息会重复显示**（clowder-ai#814）：猫主动 `post_message` 的气泡，被随后的 invocation stream 当成同一条匹配替换/重影，用户看到消息重复。
@@ -90,9 +91,9 @@ continuation lifecycle（seal / consume / reborn）从 `QueueProcessor.executeEn
 
 | # | 决策 | 理由 | 日期 |
 |---|------|------|------|
-| KD-1 | 从 F220 拆出独立 feat（不塞进 F220 Phase 2） | F220 Phase 2 = invocation-hang 深水区（#2053 unsound 边界）；本 feat = session/message 轴，吴浪 #834 没碰深水区。缠在一起才有"又 intake 又改"错觉；拆开后会话延续这摊干净的活可让吴浪按图改，不重复不分叉。team lead 2026-06-04 signoff 立项（判为 feat 非 issue：有内聚 Why + 架构终态 + +1215 行体量）。 | 2026-06-04 |
-| KD-2 | 不 intake #834 回 cat-cafe 再改 | team lead 2026-06-04："intake 回来再改怕一团糟 + 版本分叉"。正路：maintainer 出设计图 → contributor 按图改 → merge，或 cat-cafe 实现 + full-sync，**二选一避免双源分叉**。 | 2026-06-04 |
-| KD-3 | 协作方式 = **hybrid + 全量同步归一**（OQ-2 拍板） | CVO 2026-06-04 Design Gate 拍 A，5 步：①worktree 落 coordinator skeleton + red tests（钉四象限第一刀）②merge main ③**全量同步 cat-cafe→clowder-ai**（skeleton 进开源仓——team lead补的关键衔接，否则吴浪基于 #834 旧 base 改又分叉）④吴浪 rebase 到含 skeleton 的 main 接 Phase A 局部 + #814/#815 窄 PR ⑤归一。Maine Coon技术判断：跨 7 文件 + hard edge（failure restore / 多 capsule / sourceCategory 隔离）不宜纯外包，maintainer 钉核心坐标系。 | 2026-06-04 |
+| KD-1 | 从 F220 拆出独立 feat（不塞进 F220 Phase 2） | F220 Phase 2 = invocation-hang 深水区（#2053 unsound 边界）；本 feat = session/message 轴，吴浪 #834 没碰深水区。缠在一起才有"又 intake 又改"错觉；拆开后会话延续这摊干净的活可让吴浪按图改，不重复不分叉。operator 2026-06-04 signoff 立项（判为 feat 非 issue：有内聚 Why + 架构终态 + +1215 行体量）。 | 2026-06-04 |
+| KD-2 | 不 intake #834 回 cat-cafe 再改 | operator 2026-06-04："intake 回来再改怕一团糟 + 版本分叉"。正路：maintainer 出设计图 → contributor 按图改 → merge，或 cat-cafe 实现 + full-sync，**二选一避免双源分叉**。 | 2026-06-04 |
+| KD-3 | 协作方式 = **hybrid + 全量同步归一**（OQ-2 拍板） | operator 2026-06-04 Design Gate 拍 A，5 步：①worktree 落 coordinator skeleton + red tests（钉四象限第一刀）②merge main ③**全量同步 cat-cafe→clowder-ai**（skeleton 进开源仓——operator补的关键衔接，否则吴浪基于 #834 旧 base 改又分叉）④吴浪 rebase 到含 skeleton 的 main 接 Phase A 局部 + #814/#815 窄 PR ⑤归一。Maine Coon技术判断：跨 7 文件 + hard edge（failure restore / 多 capsule / sourceCategory 隔离）不宜纯外包，maintainer 钉核心坐标系。 | 2026-06-04 |
 | KD-4 | Coordinator skeleton 先落 main，wire 留 Phase A | PR #2104 落地 `SessionContinuationCoordinator` 三接口 contract + 20 个单测，钉死 continuation lifecycle owner 与 F220 slot/cancel 边界；不提前 wire，因为 passive seal 真实接入绕不开 threadStore Redis Lua / 原子 pending store，按 hybrid 分工留给吴浪 Phase A 或后续窄 PR。 | 2026-06-05 |
 
 ## Architecture cell

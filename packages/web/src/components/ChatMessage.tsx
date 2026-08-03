@@ -1,9 +1,11 @@
 'use client';
 
 import type { CSSProperties } from 'react';
+import { formatSessionSealRequested, formatVisibleSystemInfo } from '@/hooks/system-info-visible';
 import { type CatData, formatCatName } from '@/hooks/useCatData';
 import { useCoCreatorConfig } from '@/hooks/useCoCreatorConfig';
 import { useTts } from '@/hooks/useTts';
+import { resolveCatDisplayName } from '@/lib/cat-display-name';
 import { catColorVar, catSlug } from '@/lib/cat-slug';
 import { CO_CREATOR_COLOR } from '@/lib/color-defaults';
 import { hexToOklch } from '@/lib/color-utils';
@@ -38,7 +40,6 @@ const BREED_STYLES: Record<string, { radius: string; font?: string }> = {
   ragdoll: { radius: 'rounded-2xl rounded-bl-sm' },
   'maine-coon': { radius: 'rounded-2xl rounded-br-sm', font: 'font-mono' },
   siamese: { radius: 'rounded-2xl rounded-tr-sm' },
-  'dragon-li': { radius: 'rounded-lg rounded-tl-sm', font: 'font-mono' },
 };
 const DEFAULT_BREED_STYLE = { radius: 'rounded-2xl' };
 
@@ -52,7 +53,6 @@ function formatTime(ts: number): string {
 }
 
 const DELIVERED_AT_GAP_THRESHOLD = 5000;
-
 function formatDualTime(timestamp: number, deliveredAt?: number): string {
   if (!deliveredAt || deliveredAt - timestamp <= DELIVERED_AT_GAP_THRESHOLD) {
     return formatTime(timestamp);
@@ -107,6 +107,18 @@ export function ChatMessage({
   const isSystem = message.type === 'system';
   const isSummary = message.type === 'summary';
   const isConnector = message.type === 'connector';
+  const projectedSystemContent = message.extra?.systemInfo
+    ? ((
+        formatVisibleSystemInfo(
+          message.extra.systemInfo.payload,
+          (catId) => resolveCatDisplayName(catId, getCatById),
+          message.extra.systemInfo.fallbackCatId,
+        ) ??
+        formatSessionSealRequested(message.extra.systemInfo.payload, (catId) =>
+          resolveCatDisplayName(catId, getCatById),
+        )
+      )?.content ?? message.content)
+    : message.content;
 
   const catData = message.catId ? getCatById(message.catId) : undefined;
   const catStyle = catData
@@ -138,7 +150,7 @@ export function ChatMessage({
           label,
           radius: breed.radius,
           font: breed.font,
-          /* F056 (铲屎官 2026-05-28): post_message callback bubbles use the
+          /* F056 (co-creator 2026-05-28): post_message callback bubbles use the
            * SAME --color-{slug}-surface as normal bubbles. Previously isCallback
            * branched to tintedLight(hex, 0.08) — a hex-derived value that
            * bypassed the F056 token chain, so callback bubbles didn't follow
@@ -189,7 +201,19 @@ export function ChatMessage({
   // working log while the callback terminal text renders as the body.
   const mergedCliStdout = message.extra?.stream?.cliStdout;
   const mergedSpeechContent = message.extra?.stream?.speechContent;
-  const cliStdoutContent = mergedCliStdout ?? (isStreamOrigin ? message.content : undefined);
+  const cachedR21SpeechStdout =
+    isStreamOrigin &&
+    !message.isStreaming &&
+    mergedCliStdout === '' &&
+    message.content.trim().length === 0 &&
+    typeof mergedSpeechContent === 'string' &&
+    mergedSpeechContent.trim().length > 0
+      ? mergedSpeechContent
+      : undefined;
+  const projectedCliStdout =
+    isStreamOrigin && mergedCliStdout === '' && message.content.trim().length > 0 ? message.content : mergedCliStdout;
+  const cliStdoutContent =
+    cachedR21SpeechStdout ?? projectedCliStdout ?? (isStreamOrigin ? message.content : undefined);
   const cliEvents = toCliEvents(message.toolEvents, cliStdoutContent);
   const hasCliBlock = cliEvents.length > 0;
   const cliStatus = message.isStreaming
@@ -197,7 +221,6 @@ export function ChatMessage({
     : message.variant === 'error'
       ? ('failed' as const)
       : ('done' as const);
-
   if (isSummary && message.summary) {
     return (
       <div data-message-id={message.id}>
@@ -213,7 +236,15 @@ export function ChatMessage({
   }
 
   if (isSystem) {
-    // F148 Phase E + VG-2: Briefing card — collapsible with source label
+    // F148 context briefing is internal routing context for cats — suppress from user timeline.
+    // Defense-in-depth: stream/socket/API all filter these, but if one leaks through, hide here.
+    // Note: F233 duty briefing also uses origin='briefing' but lacks systemKind='context_briefing',
+    // so it renders normally via the BriefingCard path below.
+    if (message.extra?.systemKind === 'context_briefing') {
+      return null;
+    }
+
+    // F233 duty briefing + other user-visible briefing cards (origin='briefing' without systemKind marker)
     if (message.origin === 'briefing' && message.extra?.rich?.blocks?.length) {
       return (
         <div data-message-id={message.id} className="flex justify-center mb-3">
@@ -310,7 +341,7 @@ export function ChatMessage({
       <div data-message-id={message.id} className={`flex justify-center ${isTool ? 'mb-1' : 'mb-3'}`}>
         <div className={`text-sm px-4 py-2 rounded-lg whitespace-pre-wrap text-left max-w-[85%] ${toneClass}`}>
           {isFollowup && <span className="mr-1">🔗</span>}
-          {message.content}
+          {projectedSystemContent}
           {isFollowup && (
             <span className="block mt-1 text-xs text-[var(--color-cocreator-primary)]">
               输入 @猫名 跟进 来发起 follow-up
@@ -448,10 +479,14 @@ export function ChatMessage({
   const catHeader = catStyle ? (
     <div className="mb-1 flex flex-col gap-1 min-w-0">
       <div className="flex items-center gap-2 min-w-0">
-        <span className="text-xs font-semibold" style={{ color: catStyle.textColor, opacity: 0.8 }}>
+        <span
+          className="text-xs font-semibold truncate max-w-[140px] sm:max-w-[200px] md:max-w-[280px]"
+          style={{ color: catStyle.textColor, opacity: 0.8 }}
+          title={catStyle.label}
+        >
           {catStyle.label}
         </span>
-        <span className="text-xs text-cafe-muted">{formatTime(message.timestamp)}</span>
+        <span className="text-xs text-cafe-muted shrink-0">{formatTime(message.timestamp)}</span>
         <CopyIdButton messageId={message.id} />
         {isWhisper && (
           <span
@@ -463,7 +498,7 @@ export function ChatMessage({
                   message.whisperTo
                     ?.map((id) => {
                       const cat = getCatById(id);
-                      return cat ? cat.displayName : id;
+                      return cat ? formatCatName(cat) : id;
                     })
                     .join(', ') ?? ''
                 }`}

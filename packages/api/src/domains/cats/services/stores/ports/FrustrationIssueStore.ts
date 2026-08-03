@@ -35,11 +35,21 @@ export interface IFrustrationIssueStore {
   /** Set the card message ID (visibility marker). */
   setCardMessageId(issueId: string, cardMessageId: string): Promise<void>;
 
+  /** Link a community issue draft to this frustration issue (F235). */
+  setCommunityIssueDraftId(issueId: string, draftId: string): Promise<void>;
+
   /** List issues in a thread, sorted by createdAt desc. */
   listByThread(threadId: string): Promise<FrustrationIssue[]>;
 
   /** List confirmed issues for a user (for eval:task-outcome consumption). */
   listConfirmed(userId: string): Promise<FrustrationIssue[]>;
+
+  /**
+   * F245: list confirmed issues across all users whose confirmedAt falls in
+   * [sinceMs, untilMs) (half-open). Read-only global window scan for the friction
+   * rollup user-feedback channel (KD-4). Sorted by confirmedAt ascending.
+   */
+  listConfirmedInWindow(sinceMs: number, untilMs: number): Promise<FrustrationIssue[]>;
 
   /** List draft (pending) issues for a user. */
   listDraft(userId: string): Promise<FrustrationIssue[]>;

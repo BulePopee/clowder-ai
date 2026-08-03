@@ -10,7 +10,7 @@ import { ensureFakeCliOnPath } from './helpers/fake-cli-path.js';
 
 ensureFakeCliOnPath('opencode');
 
-// ── Mock helpers (same pattern as dare-agent-service.test.js) ──
+// ── Mock helpers ──
 
 function createMockProcess(exitCode = 0) {
   const stdout = new PassThrough();
@@ -413,7 +413,7 @@ describe('OpenCodeAgentService', () => {
     assert.strictEqual(opts.env.ANTHROPIC_BASE_URL, 'https://proxy.example/v1');
   });
 
-  test('cwd is workingDirectory (unlike DARE which uses darePath)', async () => {
+  test('cwd is workingDirectory', async () => {
     const proc = createMockProcess();
     const spawnFn = mock.fn(() => proc);
     const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-haiku-4-5' });
@@ -423,6 +423,43 @@ describe('OpenCodeAgentService', () => {
 
     const opts = spawnFn.mock.calls[0].arguments[2];
     assert.strictEqual(opts.cwd, '/tmp/project');
+  });
+
+  test('does not put invocation workspace into the parent OpenCode env', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-haiku-4-5' });
+    const promise = collect(service.invoke('Test', { workingDirectory: '/tmp/project' }));
+    emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+    await promise;
+
+    const opts = spawnFn.mock.calls[0].arguments[2];
+    assert.strictEqual(
+      opts.env.ALLOWED_WORKSPACE_DIRS,
+      undefined,
+      'mcp.cat-cafe.environment in OPENCODE_CONFIG is the workspace source of truth',
+    );
+  });
+
+  test('does not let stale account ALLOWED_WORKSPACE_DIRS override the invocation workspace', async () => {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-haiku-4-5' });
+    const promise = collect(
+      service.invoke('Test', {
+        workingDirectory: '/tmp/project',
+        accountEnv: { ALLOWED_WORKSPACE_DIRS: '/stale/account/workspace' },
+      }),
+    );
+    emitOpenCodeEvents(proc, [STEP_START, TEXT_RESPONSE, STEP_FINISH]);
+    await promise;
+
+    const opts = spawnFn.mock.calls[0].arguments[2];
+    assert.equal(
+      opts.env.ALLOWED_WORKSPACE_DIRS,
+      undefined,
+      'OpenCode parent env must not carry a stale workspace; mcp.cat-cafe.environment is the authoritative child env',
+    );
   });
 
   test('yields error + done on CLI exit failure', async () => {
@@ -451,6 +488,53 @@ describe('OpenCodeAgentService', () => {
     assert.ok(textMsg.metadata);
     assert.strictEqual(textMsg.metadata.provider, 'opencode');
     assert.strictEqual(textMsg.metadata.model, 'claude-sonnet-4-6');
+  });
+
+  test('step_finish yields agent_loop with usage AND service-level model (clowder#915 R1 P1)', async () => {
+    // 砚砚 R1 P1 (#2271): transformer carries metadata.usage but pre-fix the
+    // service layer's `metadata: yieldMetadata` clobbered the transformer's
+    // metadata via spread-with-override. Without this merge, usage never
+    // reached invoke-single-cat → F24 contextHealth never fired → handoff
+    // never triggered → opencode hung at context limit (the clowder#915 bug).
+    //
+    // This test asserts the END-TO-END contract: step_finish → service yield →
+    // a yielded message that carries BOTH (a) the usage payload from the
+    // transformer AND (b) the effective model from the service layer (not '').
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const service = new OpenCodeAgentService({ catId: 'opencode', spawnFn, model: 'claude-sonnet-4-6' });
+    const promise = collect(service.invoke('Test'));
+    emitOpenCodeEvents(proc, [
+      STEP_START,
+      TEXT_RESPONSE,
+      {
+        type: 'step_finish',
+        timestamp: 1773304958508,
+        sessionID: 'ses_test123',
+        part: {
+          type: 'step-finish',
+          reason: 'stop',
+          cost: 0.036973,
+          tokens: { total: 36937, input: 36928, output: 9 },
+        },
+      },
+    ]);
+    const messages = await promise;
+
+    const loopMsg = messages.find((m) => m.type === 'agent_loop');
+    assert.ok(loopMsg, 'service must emit agent_loop for step_finish events');
+    assert.ok(loopMsg.metadata, 'agent_loop must carry metadata');
+    // usage from transformer must survive the service layer's metadata override
+    assert.ok(loopMsg.metadata.usage, 'usage must reach invoke-single-cat for F8/F24 to fire');
+    assert.strictEqual(loopMsg.metadata.usage.inputTokens, 36928);
+    assert.strictEqual(loopMsg.metadata.usage.lastTurnInputTokens, 36928);
+    assert.strictEqual(loopMsg.metadata.usage.outputTokens, 9);
+    assert.strictEqual(loopMsg.metadata.usage.totalTokens, 36937);
+    assert.strictEqual(loopMsg.metadata.usage.costUsd, 0.036973);
+    // model comes from the service layer (effectiveModel), NOT transformer's ''
+    // (砚砚 R1 P2: empty model would break getContextWindowFallback in invoke-single-cat).
+    assert.strictEqual(loopMsg.metadata.model, 'claude-sonnet-4-6');
+    assert.strictEqual(loopMsg.metadata.provider, 'opencode');
   });
 
   test('metadata.sessionId set after session_init', async () => {
@@ -681,7 +765,7 @@ describe('OpenCodeAgentService', () => {
 
   // F212 Phase G (AC-G3, clowder-ai#875): silent-stdout case where OpenCode produces
   // only step_start events and no text. Reporter's direct OpenCode CLI checks proved
-  // this is upstream behavior (fresh CLI reproduces), so Cat Cafe responsibility is
+  // this is upstream behavior (fresh CLI reproduces), so Clowder AI responsibility is
   // surfacing the diagnostic instead of swallowing it into generic message.
   test('AC-G3: step_start-only NDJSON → yields system_info notice with silent_completion cliDiagnostics', async () => {
     const proc = createMockProcess();

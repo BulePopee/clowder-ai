@@ -5,6 +5,7 @@ import { getServiceConfig, setServiceConfig } from '../domains/services/service-
 import {
   appendServiceLog,
   findPidsByPort,
+  isPrimaryServiceProcess,
   isServiceProcessCommand,
   listProcesses,
   type ProcessSnapshot,
@@ -58,6 +59,11 @@ export interface ServiceLifecycleRouteOptions {
     service: ServiceManifest;
     operator: string;
     reason: 'already-running' | 'readiness';
+  }) => void | Promise<void>;
+  onServiceUnavailable?: (event: {
+    service: ServiceManifest;
+    operator: string;
+    reason: 'stop' | 'uninstall' | 'disabled';
   }) => void | Promise<void>;
   findPidsByPort?: (port: number) => Promise<number[]>;
   listProcesses?: () => Promise<ProcessSnapshot[]>;
@@ -233,6 +239,28 @@ export async function registerServiceLifecycleRoutes(
     log: app.log,
   });
 
+  /**
+   * Detect non-runtime environments where sidecar lifecycle should be blocked.
+   * Dev worktrees set WORKTREE_PORT_OFFSET; alpha worktrees set
+   * CAT_CAFE_SIDECAR_LIFECYCLE_DISABLED. Both share ~/.cat-cafe/services.json
+   * whose persistent config overrides env-level flags (EMBED_ENABLED=0 etc.),
+   * so we must guard at the API level.
+   */
+  function isNonRuntimeEnv(): boolean {
+    const offset = lifecycleEnv.WORKTREE_PORT_OFFSET;
+    if (offset && offset !== '0') return true;
+    return lifecycleEnv.CAT_CAFE_SIDECAR_LIFECYCLE_DISABLED === '1';
+  }
+
+  /** Reject sidecar lifecycle mutations from worktree environments. */
+  function rejectIfWorktree(reply: LifecycleReply): boolean {
+    if (isNonRuntimeEnv()) {
+      reply.status(409);
+      return true;
+    }
+    return false;
+  }
+
   async function findOwnedServiceProcessPids(service: ServiceManifest): Promise<number[]> {
     const processes = await lookupProcesses();
     return processes
@@ -263,19 +291,31 @@ export async function registerServiceLifecycleRoutes(
 
   await registerServiceLifecycleAuditRoutes(app, auditLog);
 
-  function notifyServiceReady(
+  async function notifyServiceReady(
     service: ServiceManifest,
     operator: string,
     reason: 'already-running' | 'readiness',
-  ): void {
+  ): Promise<void> {
     const hook = options.lifecycle?.onServiceReady;
     if (!hook) return;
     try {
-      void Promise.resolve(hook({ service, operator, reason })).catch((error) => {
-        app.log.warn({ err: error, serviceId: service.id, reason }, 'service ready hook failed');
-      });
+      await hook({ service, operator, reason });
     } catch (error) {
       app.log.warn({ err: error, serviceId: service.id, reason }, 'service ready hook failed');
+    }
+  }
+
+  async function notifyServiceUnavailable(
+    service: ServiceManifest,
+    operator: string,
+    reason: 'stop' | 'uninstall' | 'disabled',
+  ): Promise<void> {
+    const hook = options.lifecycle?.onServiceUnavailable;
+    if (!hook) return;
+    try {
+      await hook({ service, operator, reason });
+    } catch (error) {
+      app.log.warn({ err: error, serviceId: service.id, reason }, 'service unavailable hook failed');
     }
   }
 
@@ -404,6 +444,9 @@ export async function registerServiceLifecycleRoutes(
     async (request, reply) => {
       const operator = requireLifecycleOwner(request, reply);
       if (!operator) return lifecycleOwnerError(reply);
+      if (rejectIfWorktree(reply)) {
+        return { error: 'Service sidecar management is disabled in worktree environments' };
+      }
       const service = getServiceManifest(request.params.id);
       if (!service) {
         reply.status(404);
@@ -488,6 +531,9 @@ export async function registerServiceLifecycleRoutes(
     async (request, reply) => {
       const operator = requireLifecycleOwner(request, reply);
       if (!operator) return lifecycleOwnerError(reply);
+      if (rejectIfWorktree(reply)) {
+        return { error: 'Service sidecar management is disabled in worktree environments' };
+      }
       const service = getServiceManifest(request.params.id);
       if (!service) {
         reply.status(404);
@@ -617,6 +663,9 @@ export async function registerServiceLifecycleRoutes(
   app.post<{ Params: { id: string } }>('/api/services/:id/uninstall', async (request, reply) => {
     const operator = requireLifecycleOwner(request, reply);
     if (!operator) return lifecycleOwnerError(reply);
+    if (rejectIfWorktree(reply)) {
+      return { error: 'Service sidecar management is disabled in worktree environments' };
+    }
     const service = getServiceManifest(request.params.id);
     if (!service) {
       reply.status(404);
@@ -664,6 +713,7 @@ export async function registerServiceLifecycleRoutes(
           reply.status(lifecycleFailureStatus(result.error));
         } else {
           serviceConfigStore.set(service.id, { installed: false, enabled: false });
+          await notifyServiceUnavailable(service, operator, 'uninstall');
         }
         return result;
       },
@@ -672,6 +722,10 @@ export async function registerServiceLifecycleRoutes(
   });
 
   async function startService(service: ServiceManifest, operator: string, reply: LifecycleReply) {
+    if (rejectIfWorktree(reply)) {
+      return { error: 'Service sidecar management is disabled in worktree environments' };
+    }
+
     const startScript = service.scripts?.start;
     if (!startScript) {
       reply.status(400);
@@ -744,16 +798,39 @@ export async function registerServiceLifecycleRoutes(
             }
 
             if (deepHealthPassed) {
-              serviceConfigStore.set(service.id, { installed: true, enabled: true });
-              await audit({
-                serviceId: service.id,
-                action: 'start',
-                operator,
-                status: 'completed',
-                reason: 'already-running',
-              });
-              notifyServiceReady(service, operator, 'already-running');
-              return { ok: true, message: `${service.name} is already running`, pids: portProbe.owned };
+              // Verify at least one owned process is the current start
+              // script, not a legacy additionalRuntimeScript (#863).
+              // Legacy processes should be terminated and replaced.
+              let hasPrimaryProcess = false;
+              for (const pid of portProbe.owned) {
+                const cmd = await lookupProcessCommand(pid);
+                if (cmd && isPrimaryServiceProcess(cmd, service)) {
+                  hasPrimaryProcess = true;
+                  break;
+                }
+              }
+              if (hasPrimaryProcess) {
+                serviceConfigStore.set(service.id, { installed: true, enabled: true });
+                await audit({
+                  serviceId: service.id,
+                  action: 'start',
+                  operator,
+                  status: 'completed',
+                  reason: 'already-running',
+                });
+                const reconciliation = notifyServiceReady(service, operator, 'already-running');
+                return holdStartupGrace(
+                  { ok: true, message: `${service.name} is already running`, pids: portProbe.owned },
+                  startupReadinessTimeoutMs,
+                  reconciliation,
+                );
+              }
+              // Legacy-only listener: log and fall through to terminate
+              app.log.info(
+                { serviceId: service.id, pids: portProbe.owned },
+                'owned listener is legacy — terminating for current start script',
+              );
+              appendServiceLog(service.id, `[start] legacy process on port — replacing with current start script\n`);
             }
           }
 
@@ -947,8 +1024,8 @@ export async function registerServiceLifecycleRoutes(
           intervalMs: startupProbeIntervalMs,
           stopWhen: cleanExitBeforeReady ? undefined : settlement,
           stopIf: stopIfNoOwnedRuntimeProcess,
-        }).then((ready) => {
-          if (ready) notifyServiceReady(service, operator, 'readiness');
+        }).then(async (ready) => {
+          if (ready) await notifyServiceReady(service, operator, 'readiness');
           return ready;
         });
         const releaseWhen = settlement && !cleanExitBeforeReady ? Promise.race([settlement, readiness]) : readiness;
@@ -1051,6 +1128,23 @@ export async function registerServiceLifecycleRoutes(
   }
 
   async function reconcileServiceStartup(): Promise<void> {
+    // Worktrees share ~/.cat-cafe/services.json with the runtime, so a
+    // user-installed service (enabled: true) would auto-start in EVERY
+    // worktree API, all fighting for the same port (e.g. 131 embed-api.py
+    // zombies on 9880). Worktrees disable sidecars via EMBED_ENABLED=0 in
+    // start-dev.sh, but resolveEffectiveServiceConfig reads the persistent
+    // config first and never falls through to env-based derivation.
+    // Guard: skip auto-start entirely when running in a non-runtime env
+    // (dev worktrees via WORKTREE_PORT_OFFSET, alpha via SIDECAR_LIFECYCLE_DISABLED).
+    if (isNonRuntimeEnv()) {
+      app.log.info(
+        'service startup reconciler skipped (worktree offset=%s, sidecar-disabled=%s)',
+        lifecycleEnv.WORKTREE_PORT_OFFSET ?? '<unset>',
+        lifecycleEnv.CAT_CAFE_SIDECAR_LIFECYCLE_DISABLED ?? '<unset>',
+      );
+      return;
+    }
+
     const candidates = SERVICE_MANIFESTS.filter((service) => service.scripts?.start);
     if (candidates.length === 0) return;
 
@@ -1088,6 +1182,9 @@ export async function registerServiceLifecycleRoutes(
   app.post<{ Params: { id: string } }>('/api/services/:id/stop', async (request, reply) => {
     const operator = requireLifecycleOwner(request, reply);
     if (!operator) return lifecycleOwnerError(reply);
+    if (rejectIfWorktree(reply)) {
+      return { error: 'Service sidecar management is disabled in worktree environments' };
+    }
     const service = getServiceManifest(request.params.id);
     if (!service) {
       reply.status(404);
@@ -1155,6 +1252,7 @@ export async function registerServiceLifecycleRoutes(
         }
         serviceConfigStore.set(service.id, { enabled: false });
         await audit({ serviceId: service.id, action: 'stop', operator, status: 'completed' });
+        await notifyServiceUnavailable(service, operator, 'stop');
         return { ok: true, message: `${service.name} stopped (${stopped.length} process(es))`, stopped };
       },
       { action: 'stop' },
@@ -1166,6 +1264,7 @@ export async function registerServiceLifecycleRoutes(
     async (request, reply) => {
       const operator = requireLifecycleOwner(request, reply);
       if (!operator) return lifecycleOwnerError(reply);
+      if (rejectIfWorktree(reply)) return { error: 'Service sidecar management is disabled in worktree environments' };
       const service = getServiceManifest(request.params.id);
       if (!service) {
         reply.status(404);
@@ -1192,6 +1291,7 @@ export async function registerServiceLifecycleRoutes(
           }
           const config = serviceConfigStore.set(service.id, patch);
           await audit({ serviceId: service.id, action: 'toggle', operator, status: 'completed' });
+          if (!enabled) await notifyServiceUnavailable(service, operator, 'disabled');
           return { ok: true, config };
         },
         { action: 'toggle' },

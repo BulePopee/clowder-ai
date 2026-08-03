@@ -13,9 +13,17 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { type CatId, type ContextHealth, catRegistry, type MessageContent, type SessionRecord } from '@cat-cafe/shared';
+import {
+  type CatId,
+  type ContextHealth,
+  catRegistry,
+  type MessageContent,
+  type SealReason,
+  type SessionRecord,
+} from '@cat-cafe/shared';
 import { context, SpanStatusCode, trace } from '@opentelemetry/api';
 import {
+  providerRequiresThreadWorkspace,
   resolveBuiltinClientForProvider,
   resolveForClient,
   validateRuntimeProviderBinding,
@@ -24,7 +32,7 @@ import { resolveBoundAccountRefForCat } from '../../../../../config/cat-account-
 import { isSessionChainEnabled } from '../../../../../config/cat-config-loader.js';
 import { buildCatGitIdentityEnv } from '../../../../../config/cat-git-identity.js';
 import { getCatModel } from '../../../../../config/cat-models.js';
-import { getContextWindowFallback } from '../../../../../config/context-window-sizes.js';
+import { OPENCODE_DEFAULT_CONTEXT_WINDOW, resolveContextWindow } from '../../../../../config/context-window-sizes.js';
 import { getSessionStrategy, shouldTakeAction } from '../../../../../config/session-strategy.js';
 import { assertSafeTestConfigRoot } from '../../../../../config/test-config-write-guard.js';
 import { capturePromptIfEnabled } from '../../../../../infrastructure/debug/prompt-capture-bridge.js';
@@ -61,14 +69,22 @@ import { resolveActiveProjectRoot } from '../../../../../utils/active-project-ro
 import { resolveCliCommand } from '../../../../../utils/cli-resolve.js';
 import { DEFAULT_CLI_TIMEOUT_MS, resolveCliTimeoutMs } from '../../../../../utils/cli-timeout.js';
 import { findMonorepoRoot, isSameProject } from '../../../../../utils/monorepo-root.js';
-import { isUnderAllowedRoot } from '../../../../../utils/project-path.js';
+import {
+  redirectRuntimeProjectPath,
+  resolvePersistentProjectPathDetailed,
+} from '../../../../../utils/persistent-project-path.js';
+import { pathsEqual } from '../../../../../utils/project-path.js';
 import { tcpProbe } from '../../../../../utils/tcp-probe.js';
 import type { AgentPaneRegistry } from '../../../../terminal/agent-pane-registry.js';
 import type { TmuxGateway } from '../../../../terminal/tmux-gateway.js';
 import { resolveBootcampWorkspaceRoot } from '../../bootcamp/workspace-root.js';
 import { createPromptDigest } from '../../context/prompt-digest.js';
+// L0-budget-defense PR-B-impl (ADR-038): staging layer prepend, wired here
+// (next to F225 contextHintPrefix) so it lands every turn including resumes.
+import { buildStagingPrepend } from '../../context/StagingContent.js';
 import { AuditEventTypes, getEventAuditLog } from '../../orchestration/EventAuditLog.js';
 import { resolveDefaultClaudeMcpServerPath } from '../providers/ClaudeAgentService.js';
+import { extractUserEnvTemplates, hasSupportedEnvTemplate, resolveEnvMap } from '../providers/env-map.js';
 import { compileL0ViaSubprocess } from '../providers/l0-compiler.js';
 import { OC_INSTRUCTIONS_ONLY_ENV } from '../providers/OpenCodeAgentService.js';
 import {
@@ -78,9 +94,11 @@ import {
   parseOpenCodeModel,
   safeProviderName,
   summarizeOpenCodeRuntimeConfigForDebug,
+} from '../providers/opencode-config-template.js';
+import {
   writeOpenCodeInstructionsOnlyConfig,
   writeOpenCodeRuntimeConfig,
-} from '../providers/opencode-config-template.js';
+} from '../providers/opencode-config-writer.js';
 import { appendTranscriptPathHints } from '../providers/transcript-path-hints.js';
 import { buildContextManagementHint, queueContextHint, takeContextHintPrefix } from './context-management-hint.js';
 
@@ -88,7 +106,16 @@ const log = createModuleLogger('invoke');
 const tracer = trace.getTracer('cat-cafe-api', '0.1.0');
 const TRANSCRIPT_DIR =
   process.env.TRANSCRIPT_DIR ?? resolve(findMonorepoRoot(), 'scripts', 'meeting-copilot', 'transcripts');
-const CAT_INVOCATION_STALL_AUTO_KILL_MS = 7 * 60_000;
+// #1145: Stall auto-kill threshold is computed dynamically from the resolved
+// CLI_TIMEOUT_MS — see buildStallAutoKillConfig().  The probe cannot distinguish
+// "CLI waiting for LLM API response" from "CLI truly stuck", so the stall
+// threshold must equal the CLI timeout.  When CLI_TIMEOUT_MS=0 (disabled),
+// stallAutoKill is turned off entirely.
+export function buildStallAutoKillConfig(cliTimeoutMs: number): { stallAutoKill: boolean; stallWarningMs?: number } {
+  if (cliTimeoutMs === 0) return { stallAutoKill: false };
+  const effectiveMs = cliTimeoutMs > 0 ? cliTimeoutMs : DEFAULT_CLI_TIMEOUT_MS;
+  return { stallAutoKill: true, stallWarningMs: effectiveMs };
+}
 const ANTIGRAVITY_AUTOMATIC_RETRY_FRAGMENT_REASONS = new Set([
   'model_capacity',
   'empty_response',
@@ -152,6 +179,7 @@ import {
   isMalformedToolCallError,
   isMissingClaudeSessionError,
   isPromptTokenLimitExceededError,
+  isSessionNotFoundDiagnostic,
   isTransientAcpPromptFailure,
   isTransientCliExitCode1,
   preflightRace,
@@ -240,6 +268,23 @@ export function _resetStaticIdentityRegistryRevisionForTests(): void {
 
 function sessionIdentityKey(userId: string, catId: CatId, threadId: string): string {
   return `${userId}:${catId as string}:${threadId}`;
+}
+
+function normalizeSessionWorkspacePath(workingDirectory: string): string {
+  return resolve(workingDirectory);
+}
+
+function buildSessionWorkspaceFingerprint(workingDirectory: string): string {
+  const normalized = normalizeSessionWorkspacePath(workingDirectory);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function getStoredSessionWorkspaceFingerprint(session: SessionRecord | null | undefined): string | undefined {
+  if (!session) return undefined;
+  return (
+    session.workspaceFingerprint ??
+    (session.workingDirectory ? buildSessionWorkspaceFingerprint(session.workingDirectory) : undefined)
+  );
 }
 
 function isAntigravityRuntimeSessionInit(msg: AgentMessage): boolean {
@@ -529,6 +574,54 @@ export interface InvocationDeps {
       relatedDiscussions?: readonly { sessionId: string; snippet: string; score: number }[] | undefined;
     }[]
   >;
+  /** F229: Concierge config store for duty-cat岗位 prompt injection (optional, fail-open) */
+  readonly conciergeConfigStore?: import('../../../../concierge/ConciergeConfigStore.js').IConciergeConfigStore;
+  /** F229 KD-17: HandleMap store for concierge R1/R2 short-handle → anchor mapping (optional, fail-open) */
+  readonly conciergeHandleMapStore?: import('../../../../concierge/ConciergeHandleMapStore.js').IConciergeHandleMapStore;
+  /** F229 Phase B: TriagePlan store for triage-plan marker → confirm/cancel card actions (optional, fail-open) */
+  readonly conciergeTriagePlanStore?: import('../../../../concierge/ConciergeTriagePlanStore.js').IConciergeTriagePlanStore;
+  /**
+   * F247 AC-B1c-2: Cloud invoke bridge — fire-and-forget dispatch for cloud-only
+   * cats (Remote MCP, provider='openai-chatgpt-pro'). When the KD-17 guard
+   * fires we still need to notify the cloud cat that it was @ mentioned;
+   * the bridge handles that via PinchTab CDP in PR-C.
+   *
+   * Optional / fail-open: tests + early environments without PinchTab can
+   * pass `null`; the bridge then never gets invoked and the KD-17 guard
+   * silently skips dispatch (same as the original B1a behavior). When the
+   * bridge IS wired, dispatch is fire-and-forget — invokeSingleCat does
+   * NOT block on the cloud cat's response (it travels back through the
+   * cloud cat's own MCP read tool on the next invocation).
+   */
+  readonly cloudInvokeBridge?: import('../../cloud-bridge/types.js').ICloudInvokeBridge | null;
+  /**
+   * F254 Phase B3/B4: Optional freshness re-invoke callback.
+   * Called after invocation terminal event to decide if a re-invoke is needed
+   * for unacknowledged high-priority notices. The routing layer wires this
+   * with access to Redis + event log + InvocationRegistry.
+   *
+   * Returns reinvoke decision or null (fail-open). When shouldReinvoke=true,
+   * the returned prompt/senders are used for the re-invoke invocation.
+   */
+  /**
+   * F254 Phase C: Freshness invocation state store (optional).
+   * Used to persist the carrier tier at invocation start so callback routes
+   * can derive a RuntimeCapabilityDescriptor without AgentService access.
+   */
+  readonly freshnessStateStore?: import('../../freshness/FreshnessInvocationStateStore.js').FreshnessInvocationStateStore;
+  readonly freshnessReinvokeCheck?: (params: {
+    invocationId: string;
+    threadId: string;
+    catId: import('@cat-cafe/shared').CatId;
+    userId: string;
+  }) => Promise<{
+    shouldReinvoke: boolean;
+    reason: string;
+    skipReason?: string;
+    noticeIds: string[];
+    senders: string[];
+    reinvokePrompt?: string;
+  } | null>;
 }
 
 /**
@@ -541,6 +634,30 @@ export interface InvocationParams {
   readonly prompt: string;
   readonly userId: string;
   readonly threadId: string;
+  /**
+   * F247 AC-B1c-2/12: For cloud-cat dispatches via the bridge, the **raw**
+   * mention text (the user's / mentioning cat's words — NOT the fully
+   * orchestrated `prompt` which includes system context, dynamic injection,
+   * chain history etc). Used as the `intent` field in the runtime delta
+   * payload so the cloud cat sees what was actually asked.
+   *
+   * Optional and currently NOT plumbed by `route-serial` / `route-parallel`
+   * (PR-B is a library drop; PR-C will plumb this through both routes +
+   * wire `cloudInvokeBridge` into `AgentRouter.getStrategyDeps`). When
+   * absent, the bridge dispatch is suppressed (KD-17 guard falls back to
+   * B1a no-op behavior), which is safer than sending the wrong text to
+   * the cloud cat.
+   */
+  readonly mentionContent?: string;
+  /**
+   * F247 AC-B1c-2/12: For cloud-cat dispatches via the bridge, the catId of
+   * the local cat that @ mentioned the cloud cat. Used as `calledBy` in the
+   * delta payload so the cloud cat knows whose ack to address.
+   *
+   * Optional + currently not plumbed (see `mentionContent` note above).
+   * When absent, bridge dispatch is suppressed.
+   */
+  readonly mentioningCatId?: CatId;
   readonly contentBlocks?: readonly MessageContent[];
   readonly uploadDir?: string;
   readonly signal?: AbortSignal;
@@ -570,6 +687,85 @@ export interface InvocationParams {
 export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationParams): AsyncIterable<AgentMessage> {
   const { registry, sessionManager, threadStore, apiUrl } = deps;
   const { catId, service, prompt, userId, threadId, isLastCat, signal: callerSignal } = params;
+
+  // F247 KD-17: cloud-only cats (Remote MCP) skip local CLI dispatch.
+  // The mention is already persisted in the thread; the cloud cat reads it via
+  // its own MCP read tools on next invocation. Detect via explicit `provider`
+  // marker (matches POST handler symmetry); antigravity / ACP cats are NOT
+  // caught — they have their own dispatch path even without cli.command.
+  //
+  // F247 AC-B1c-2 (PR-B): instead of silently returning, fire the cloud-invoke
+  // bridge (if wired) so the cloud cat actually GETS the @ mention through
+  // its bound ChatGPT chat. Fire-and-forget — never block the invocation
+  // generator on bridge success. Errors are absorbed by the bridge itself
+  // (emits fallback `system_info` if PinchTab unavailable, AC-B1c-4).
+  const cloudOnlyConfig = catRegistry.tryGet(catId as string)?.config;
+  if (cloudOnlyConfig && cloudOnlyConfig.provider === 'openai-chatgpt-pro') {
+    log.info(
+      { catId, threadId, userId, provider: cloudOnlyConfig.provider, clientId: cloudOnlyConfig.clientId },
+      'F247 KD-17: cloud-only cat (Remote MCP) — skipping local dispatch; dispatching B1c bridge',
+    );
+    // Fire-and-forget bridge dispatch (AC-B1c-2). The bridge:
+    //  - Builds the 5-field thread runtime delta payload (AC-B1c-12).
+    //  - Calls PinchTab CDP adapter to inject + capture chat URL (PR-C).
+    //  - Writes binding back to thread metadata.
+    //  - Emits fallback notification on failure (AC-B1c-4).
+    //
+    // gpt52 R1 P1-2 contract: `mentionContent` is the RAW mention text (not
+    // the orchestrated `prompt`, which already includes system context /
+    // chain history). `mentioningCatId` is the local cat that @ mentioned
+    // (not the thread owner `userId`). Both are plumbed from `route-serial`
+    // / `route-parallel` in PR-C; until then they're absent → bridge
+    // dispatch is suppressed (silently falls back to B1a no-op). This is
+    // SAFER than sending the wrong text or "called by alice" to the cloud
+    // cat (cloud cat would see misleading context and write back to wrong
+    // attribution).
+    //
+    // gpt52 R1 P1-1 contract: `cloudInvokeBridge` is currently NOT supplied
+    // by `AgentRouter.getStrategyDeps` either — also a PR-C wiring step. So
+    // even with mentionContent / mentioningCatId plumbed, the `if` below
+    // short-circuits today. PR-B = library drop; PR-C = runtime wiring.
+    if (deps.cloudInvokeBridge && params.mentionContent && params.mentioningCatId) {
+      const threadMetadata = threadStore ? await threadStore.get(threadId) : null;
+      deps.cloudInvokeBridge
+        .dispatch({
+          catId,
+          threadId,
+          userId,
+          threadTitle: threadMetadata?.title ?? null,
+          // Participants list: pulled from thread.participants (includes the
+          // cloud cat itself + other recently-active cats). Handle resolution
+          // is best-effort — we use the catId as the handle if no separate
+          // handle registry is present. PR-C may enrich with a real handle map.
+          participants: (threadMetadata?.participants ?? []).map((pCatId) => ({
+            catId: pCatId,
+            handle: `@${pCatId}`,
+          })),
+          calledBy: params.mentioningCatId,
+          intent: params.mentionContent,
+        })
+        .catch((err: unknown) => {
+          log.warn(
+            { catId, threadId, err: err instanceof Error ? err.message : String(err) },
+            'F247 AC-B1c-2: bridge dispatch promise rejected (caught — should be impossible)',
+          );
+        });
+    } else if (deps.cloudInvokeBridge) {
+      // Telemetry: bridge IS wired but params lack the new fields. This is
+      // expected during PR-B/C-rollout window; flagging so we can spot the
+      // case in logs and confirm PR-C plumbed them in.
+      log.info(
+        { catId, threadId, hasMentionContent: !!params.mentionContent, hasMentioningCatId: !!params.mentioningCatId },
+        'F247 AC-B1c-2: bridge wired but mentionContent/mentioningCatId missing (PR-C will plumb)',
+      );
+    }
+    yield {
+      type: 'done' as const,
+      catId,
+      timestamp: Date.now(),
+    };
+    return;
+  }
 
   // F198 Bug #3: a bg carrier has no stable per-conversation sessionId — the
   // daemon forks a fresh UUID every `--bg --resume` round. Derive a stable
@@ -639,6 +835,14 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // "missing required parameter". Inject the live threadId so prompt template
     // can resolve to a concrete value.
     CAT_CAFE_THREAD_ID: threadId,
+    // F254 AC-C2: Runtime mode for freshness gate descriptor derivation.
+    // The MCP server reads this to construct RuntimeCapabilityDescriptor,
+    // which parameterizes held/notice behavior per carrier tier.
+    // carrierTier is extracted after this block and persisted to Redis
+    // via freshnessStateStore.setCarrierTier() (producer side of AC-C2).
+    ...((service as unknown as { _carrierTier?: string })._carrierTier
+      ? { CAT_CAFE_RUNTIME_MODE: (service as unknown as { _carrierTier: string })._carrierTier }
+      : {}),
     ...(process.env.CAT_CAFE_SIGNAL_USER ? { CAT_CAFE_SIGNAL_USER: process.env.CAT_CAFE_SIGNAL_USER } : {}),
     // Per-cat git author identity (W1: cats are Agents with identity).
     // GIT_AUTHOR_NAME/GIT_COMMITTER_NAME override the runtime git config's pinned
@@ -646,9 +850,9 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // to one. Model comes from getCatModel(catId) — the SAME source as the system-prompt
     // identity line (env CAT_{CATID}_MODEL > runtime catRegistry), so the author name
     // tracks the cat's real model (opus-45 → claude-opus-4-8), not the catId or a stale
-    // catalog copy. Email is intentionally NOT set — it inherits git config (the CVO's
+    // catalog copy. Email is intentionally NOT set — it inherits git config (the operator's
     // GitHub noreply account) so contribution-graph attribution stays on one account
-    // while the name distinguishes the cat. (CVO directive 2026-05-28)
+    // while the name distinguishes the cat. (operator directive 2026-05-28)
     ...buildCatGitIdentityEnv(
       catId as string,
       catRegistry.tryGet(catId as string)?.config?.breedId,
@@ -661,6 +865,23 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       })(),
     ),
   };
+
+  // #1092 / #1099 review P1: the MCP credential refresh file is written by the ACP
+  // layer (acp-credential-file.ts), scoped per ACP session — NOT here. A deterministic
+  // per-(thread,cat) path written at invoke time lets a superseded-but-alive process
+  // read the newest invocation's credentials and defeat registry.isLatest().
+  // Non-ACP providers spawn fresh MCP subprocesses per invocation, so their env
+  // credentials are never stale and no file is needed.
+
+  // F254 AC-C2: Persist carrier tier at invocation start (fire-and-forget, fail-open).
+  // Callback routes read this via FreshnessInvocationStateStore.get() to derive
+  // RuntimeCapabilityDescriptor — closing the producer/consumer chain.
+  const carrierTier = (service as unknown as { _carrierTier?: string })._carrierTier;
+  if (deps.freshnessStateStore && carrierTier) {
+    deps.freshnessStateStore.setCarrierTier(invocationId, carrierTier).catch(() => {
+      // Fail-open: Redis write failure must not block invocation.
+    });
+  }
 
   const auditLog = getEventAuditLog();
   const promptDigest = createPromptDigest(prompt);
@@ -840,6 +1061,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // The PATCH bind endpoint writes to sessionChainStore but not sessionManager,
     // so a freshly-bound session would be missed if we gate on sessionId being truthy.
     const sessionChainActive = isSessionChainEnabled(catId);
+    let activeSessionRecordForResume: SessionRecord | null = null;
     if (isBgCarrier && bgChainKey && deps.sessionChainStore && sessionChainActive) {
       // F198 Bug #3: bg resolves its resume target via the chainKey record's
       // latestResumeSessionId (the daemon's previous fork UUID). bg reuses one
@@ -879,6 +1101,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
             // Chain exists but no active session → previous was sealed; don't resume
             sessionId = undefined;
           } else if (activeRec.cliSessionId) {
+            activeSessionRecordForResume = activeRec;
             // F118 AC-C6: Overflow circuit breaker — too many consecutive restore failures (#86)
             // Note: time-based "stale" check removed — idle sessions are healthy,
             // only repeated restore failures indicate a toxic session.
@@ -950,19 +1173,106 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       }
     }
 
+    const catConfig = catRegistry.tryGet(catId as string)?.config;
+    const provider = catConfig?.clientId;
+    const requiresThreadWorkspace = providerRequiresThreadWorkspace(provider);
+
     // Resolve workingDirectory from thread's projectPath
     let workingDirectory: string | undefined;
+    let threadProjectPath: string | undefined;
     let bootcampWorkspaceError: Error | undefined;
+    let workspaceResolutionError: Error | undefined;
+    let workspaceResolutionFailureMessage: string | undefined;
     if (threadStore) {
+      let thread: Awaited<ReturnType<IThreadStore['get']>> | null | undefined;
       try {
-        const thread = await preflightRace(Promise.resolve(threadStore.get(threadId)), 'threadStore.get', signal);
-        if (thread?.createdAt) threadCreatedAt = thread.createdAt;
+        thread = await preflightRace(Promise.resolve(threadStore.get(threadId)), 'threadStore.get', signal);
+      } catch (err) {
+        workspaceResolutionFailureMessage = `Unable to resolve thread workspace for ${threadId}: ${err instanceof Error ? err.message : String(err)}`;
+        log.warn(
+          { catId, threadId, err },
+          'threadStore.get failed during workspace resolution — proceeding without workingDirectory',
+        );
+      }
+      if (thread) {
+        if (thread.createdAt) threadCreatedAt = thread.createdAt;
+        if (thread.projectPath) threadProjectPath = thread.projectPath;
+        // #836: Reborn session strategy — force new session every invocation.
+        // Uses store lookup (isRebornSession) instead of thread field because
+        // Redis stores strategy in separate hash fields not hydrated by get().
+        // Optional chaining: test mocks may omit isRebornSession (absent = false).
+        // Best-effort: a transient Redis failure must not skip workspace resolution
+        // below — wrap in its own try/catch, defaulting to non-reborn.
+        let isReborn = false;
+        try {
+          isReborn = threadStore.isRebornSession
+            ? await preflightRace(
+                Promise.resolve(threadStore.isRebornSession(threadId, catId as string)),
+                'isRebornSession',
+                signal,
+              )
+            : false;
+        } catch (rebornErr) {
+          log.warn(
+            { catId, threadId, err: rebornErr },
+            '#836: isRebornSession lookup failed pre-invoke, defaulting to non-reborn',
+          );
+        }
+        if (isReborn) {
+          sessionId = undefined;
+          log.info({ catId, threadId }, '#836: reborn session strategy — forcing new session');
+        }
         if (thread?.projectPath && thread.projectPath !== 'default') {
           // F101: Game threads use virtual projectPaths (e.g. 'games/werewolf') for
           // categorization only — they are not real filesystem directories. Skip them
           // to avoid triggering the F070 governance gate on a non-existent path.
-          if (!thread.projectPath.startsWith('games/') && isUnderAllowedRoot(thread.projectPath)) {
-            workingDirectory = thread.projectPath;
+          if (thread.projectPath.startsWith('games/')) {
+            workspaceResolutionFailureMessage = `OpenCode requires a filesystem thread projectPath for ${threadId}; virtual game projectPath ${thread.projectPath} cannot be used as a working directory.`;
+          } else {
+            const validatedProjectPath = await resolvePersistentProjectPathDetailed(thread.projectPath);
+            if (!validatedProjectPath.ok) {
+              const isTransient = ['io_error', 'runtime_root_invalid', 'runtime_workspace_missing'].includes(
+                validatedProjectPath.reason,
+              );
+              workspaceResolutionFailureMessage = isTransient
+                ? `Unable to validate thread projectPath for ${threadId}: ${thread.projectPath}. ${validatedProjectPath.message ?? 'Transient filesystem error.'} Retry; if it persists, re-bind the thread's project workspace.`
+                : `Invalid thread projectPath for ${threadId}: ${thread.projectPath}. Expected an existing directory under allowed roots.`;
+              log.warn(
+                {
+                  catId,
+                  threadId,
+                  projectPath: thread.projectPath,
+                  reason: validatedProjectPath.reason,
+                  message: validatedProjectPath.message,
+                },
+                'thread projectPath failed validation during workspace resolution',
+              );
+            } else {
+              workingDirectory = validatedProjectPath.path;
+              if (validatedProjectPath.remappedFrom && threadStore.updateProjectPath) {
+                try {
+                  await preflightRace(
+                    Promise.resolve(threadStore.updateProjectPath(threadId, validatedProjectPath.path)),
+                    'updateProjectPath',
+                    signal,
+                  );
+                  log.info(
+                    {
+                      catId,
+                      threadId,
+                      previousProjectPath: validatedProjectPath.remappedFrom,
+                      projectPath: validatedProjectPath.path,
+                    },
+                    'migrated thread projectPath out of the runtime worktree',
+                  );
+                } catch (migrationErr) {
+                  log.warn(
+                    { catId, threadId, err: migrationErr, projectPath: validatedProjectPath.path },
+                    'failed to persist runtime projectPath migration; continuing with persistent workspace',
+                  );
+                }
+              }
+            }
           }
         } else if (thread?.bootcampState) {
           const bootcampWorkspace = await resolveBootcampWorkspaceRoot();
@@ -971,15 +1281,74 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           } else {
             bootcampWorkspaceError = new Error(bootcampWorkspace.error);
           }
+        } else if (requiresThreadWorkspace) {
+          workspaceResolutionFailureMessage = `OpenCode requires a thread projectPath for ${threadId}. Bind the thread to a project workspace before spawning OpenCode.`;
         }
-      } catch {
-        // Thread store timeout or error — proceed without workingDirectory
       }
+    }
+    if (requiresThreadWorkspace && threadStore && !workingDirectory && !bootcampWorkspaceError) {
+      workspaceResolutionError = new Error(
+        workspaceResolutionFailureMessage ??
+          `OpenCode requires a thread projectPath for ${threadId}. Bind the thread to a project workspace before spawning OpenCode.`,
+      );
     }
     if (bootcampWorkspaceError) {
       throw bootcampWorkspaceError;
     }
+    if (workspaceResolutionError) {
+      throw workspaceResolutionError;
+    }
     const workingProjectRoot = workingDirectory ? findMonorepoRoot(workingDirectory) : undefined;
+    const sessionWorkspaceBinding =
+      provider === 'opencode' && workingDirectory
+        ? {
+            workingDirectory: normalizeSessionWorkspacePath(workingDirectory),
+            workspaceFingerprint: buildSessionWorkspaceFingerprint(workingDirectory),
+          }
+        : {};
+    const hasSessionWorkspaceBinding = 'workspaceFingerprint' in sessionWorkspaceBinding;
+    if (provider === 'opencode' && sessionId && workingDirectory) {
+      const requestedSessionId = sessionId;
+      const storedWorkspaceFingerprint = getStoredSessionWorkspaceFingerprint(activeSessionRecordForResume);
+      const currentWorkspaceFingerprint = buildSessionWorkspaceFingerprint(workingDirectory);
+      if (!storedWorkspaceFingerprint || !pathsEqual(storedWorkspaceFingerprint, currentWorkspaceFingerprint)) {
+        const reason = storedWorkspaceFingerprint ? 'workspace_mismatch' : 'workspace_unknown';
+        log.warn(
+          {
+            catId,
+            threadId,
+            invocationId,
+            reason,
+            threadProjectPath: threadProjectPath ?? null,
+            workingDirectory,
+            requestedSessionId,
+            storedWorkingDirectory: activeSessionRecordForResume?.workingDirectory ?? null,
+            storedWorkspaceFingerprint: activeSessionRecordForResume?.workspaceFingerprint ?? null,
+            currentWorkspaceFingerprint,
+          },
+          'OpenCode resume workspace guard dropped stale session',
+        );
+        sessionId = undefined;
+        sessionManager.delete(userId, catId, threadId).catch(() => {});
+        yield {
+          type: 'system_info' as const,
+          catId,
+          content: JSON.stringify({
+            type: 'opencode_resume_workspace_guard',
+            action: 'start_fresh',
+            reason,
+            threadId,
+            threadProjectPath: threadProjectPath ?? null,
+            workingDirectory,
+            requestedSessionId,
+            storedWorkingDirectory: activeSessionRecordForResume?.workingDirectory ?? null,
+            storedWorkspaceFingerprint: activeSessionRecordForResume?.workspaceFingerprint ?? null,
+            currentWorkspaceFingerprint,
+          }),
+          timestamp: Date.now(),
+        };
+      }
+    }
 
     // Shared-state preflight — covers ALL cats (Claude/Codex/Gemini), vendor-agnostic.
     // Three-layer defense model (shared-rules §14):
@@ -1037,10 +1406,13 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     }
 
     // F070: Governance gate for external project dispatch
+    // Bootstrap is handled by Console's explicit init button (projects-setup.ts).
+    // invokeCat only gates — checkGovernancePreflight is the real guard.
     if (workingDirectory && !isSameProject(workingDirectory, hostProjectRoot)) {
-      const catCafeRoot = hostProjectRoot;
-      const { tryGovernanceBootstrap } = await import('../../../../../config/capabilities/capability-orchestrator.js');
-      await tryGovernanceBootstrap(workingDirectory, catCafeRoot);
+      // Project setup writes the registry under the persistent workspace when
+      // the API runs from a disposable checkout. Read from that same root.
+      const catCafeRoot = await redirectRuntimeProjectPath(hostProjectRoot);
+      if (!catCafeRoot) throw new Error('Unable to resolve persistent Cat Cafe root for governance preflight');
       const { checkGovernancePreflight } = await import('../../../../../config/governance/governance-preflight.js');
       const catEntry = catRegistry.tryGet(catId as string);
       const preflight = await checkGovernancePreflight(workingDirectory, catCafeRoot, catEntry?.config.clientId);
@@ -1086,16 +1458,24 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           'threadStore.get:mission',
           signal,
         );
+        /* @segment M1 — Dispatch Mission Context */
         if (thread) {
           const { buildMissionPack, formatMissionPackPrompt } = await import(
             '../../../../../config/governance/mission-pack.js'
           );
-          capturedMissionPack = buildMissionPack({
+          // clowder-ai#1037: buildMissionPack returns null when the thread has
+          // no concrete mission anchor (title/phase/backlogItemId all empty).
+          // Skip M1 injection in that case so the model is not handed an empty
+          // dispatch marker on a chat-only thread.
+          const pack = buildMissionPack({
             title: thread.title ?? undefined,
             phase: thread.phase ?? undefined,
             backlogItemId: thread.backlogItemId ?? undefined,
           });
-          missionPrefix = formatMissionPackPrompt(capturedMissionPack);
+          if (pack) {
+            capturedMissionPack = pack;
+            missionPrefix = formatMissionPackPrompt(pack);
+          }
         }
       } catch {
         // Thread store timeout — proceed without mission context
@@ -1104,8 +1484,6 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
     // F127 account injection:
     // Members bind to a concrete accountRef (builtin oauth account or generic api_key account).
-    const catConfig = catRegistry.tryGet(catId as string)?.config;
-    const provider = catConfig?.clientId;
     const builtinClient = provider ? resolveBuiltinClientForProvider(provider) : null;
     const defaultModel = catConfig?.defaultModel?.trim() || undefined;
     // Account resolution, proxy registration, and runtime config always use the
@@ -1173,7 +1551,6 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       openai: 'openai',
       google: 'google',
       kimi: 'kimi',
-      dare: 'openai',
       opencode: 'anthropic',
       openrouter: 'openai',
     };
@@ -1193,9 +1570,38 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       }
     }
 
+    // F161: ACP is a transport, not a provider. Derive credential protocol from the
+    // bound account's client family so env injection branches (MOONSHOT_API_KEY,
+    // GEMINI_API_KEY, etc.) fire correctly for ACP subprocesses.
+    if (provider === 'acp' && !effectiveProtocol && resolvedAccount?.client) {
+      effectiveProtocol = protocolForProvider[resolvedAccount.client] ?? null;
+    }
+
     // effectiveProtocol is used below for env injection branching (anthropic/openai/google)
     // but is NOT passed to callbackEnv — it should not influence CLI routing decisions.
 
+    // ── F161: Data-driven env var injection via resolveEnvMap ──────────────
+    // Standard provider credential env vars (OPENAI_API_KEY, GEMINI_API_KEY, etc.)
+    // are resolved from BUILTIN_ENV_MAPS templates. Clowder AI internal routing vars
+    // (CAT_CAFE_*_PROFILE_MODE, CODEX_AUTH_MODE, proxy) remain explicit below.
+    const userEnvTemplates = resolvedAccount?.envVars ? extractUserEnvTemplates(resolvedAccount.envVars) : undefined;
+
+    // Inject standard provider env vars for api_key accounts
+    if (resolvedAccount?.authType === 'api_key') {
+      const credentialAccount = {
+        apiKey: resolvedAccount.apiKey,
+        baseUrl: resolvedAccount.baseUrl,
+        baseModel: defaultModel,
+      };
+      // Protocol-level mapping (anthropic → ANTHROPIC_API_KEY, openai → OPENAI_API_KEY, google → GEMINI_API_KEY, etc.)
+      if (effectiveProtocol) {
+        const protocolKey = effectiveProtocol === 'openai-responses' ? 'openai' : effectiveProtocol;
+        const envFromMap = resolveEnvMap(protocolKey, undefined, credentialAccount, userEnvTemplates);
+        Object.assign(callbackEnv, envFromMap);
+      }
+    }
+
+    // ── Clowder AI internal routing vars (not in BUILTIN_ENV_MAPS) ──────────
     if (effectiveProtocol === 'anthropic') {
       if (resolvedAccount?.authType === 'api_key') {
         callbackEnv.CAT_CAFE_ANTHROPIC_PROFILE_MODE = 'api_key';
@@ -1231,36 +1637,17 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         callbackEnv.CAT_CAFE_ANTHROPIC_PROFILE_MODE = 'subscription';
       }
     } else if (effectiveProtocol === 'openai' || effectiveProtocol === 'openai-responses') {
+      // Standard env vars (OPENAI_API_KEY, etc.) already set by resolveEnvMap above
       if (resolvedAccount?.authType === 'api_key') {
         callbackEnv.CODEX_AUTH_MODE = 'api_key';
-        if (resolvedAccount.apiKey) {
-          callbackEnv.OPENAI_API_KEY = resolvedAccount.apiKey;
-          // OpenCode selects provider by model prefix; `openrouter/...` models require this key name.
-          callbackEnv.OPENROUTER_API_KEY = resolvedAccount.apiKey;
-        }
-        if (resolvedAccount.baseUrl) {
-          callbackEnv.OPENAI_BASE_URL = resolvedAccount.baseUrl;
-          callbackEnv.OPENAI_API_BASE = resolvedAccount.baseUrl;
-        }
       } else if (effectiveAccountRef) {
         callbackEnv.CODEX_AUTH_MODE = 'oauth';
-      }
-    } else if (effectiveProtocol === 'google') {
-      if (resolvedAccount?.authType === 'api_key' && resolvedAccount.apiKey) {
-        // Gemini CLI: native Google SDK, uses GEMINI_API_KEY
-        callbackEnv.GEMINI_API_KEY = resolvedAccount.apiKey;
-        callbackEnv.GOOGLE_API_KEY = resolvedAccount.apiKey;
-        // opencode CLI: OpenRouter provider uses OPENROUTER_API_KEY
-        callbackEnv.OPENROUTER_API_KEY = resolvedAccount.apiKey;
-        if (resolvedAccount.baseUrl) {
-          callbackEnv.GEMINI_BASE_URL = resolvedAccount.baseUrl;
-        }
       }
     } else if (effectiveProtocol === 'kimi') {
       if (resolvedAccount?.authType === 'api_key' && resolvedAccount.apiKey) {
         callbackEnv.CAT_CAFE_KIMI_PROFILE_MODE = 'api_key';
         callbackEnv.CAT_CAFE_KIMI_API_KEY = resolvedAccount.apiKey;
-        callbackEnv.MOONSHOT_API_KEY = resolvedAccount.apiKey;
+        // MOONSHOT_API_KEY already set by resolveEnvMap above
         if (resolvedAccount.baseUrl) {
           callbackEnv.CAT_CAFE_KIMI_BASE_URL = resolvedAccount.baseUrl;
         }
@@ -1271,23 +1658,23 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       // Fallback for unresolved accounts on anthropic/opencode providers
       callbackEnv.CAT_CAFE_ANTHROPIC_PROFILE_MODE = 'subscription';
     }
-
-    // Dare has its own env vars regardless of protocol-based injection above
-    if (provider === 'dare' && resolvedAccount?.authType === 'api_key') {
-      if (resolvedAccount.apiKey) callbackEnv.DARE_API_KEY = resolvedAccount.apiKey;
-      if (resolvedAccount.baseUrl) callbackEnv.DARE_ENDPOINT = resolvedAccount.baseUrl;
-    }
+    // Note: google protocol branch no longer needs explicit credential injection
+    // — fully handled by resolveEnvMap above.
 
     // F171: User-defined env vars from account config.
     // Passed separately via accountEnv — NOT injected into callbackEnv.
     // callbackEnv is for MCP callback routing; accountEnv is applied LAST
     // in subprocess env so user vars override provider-injected values.
+    // F161: Template entries (${api_key} / ${base_url}) are already resolved by
+    // resolveEnvMap above — filter them out to prevent literal "${...}" leaking.
     let accountEnv: Record<string, string> | undefined;
     if (resolvedAccount?.envVars) {
       const validEnvKey = /^[A-Z_][A-Za-z0-9_]*$/;
       const filtered: Record<string, string> = {};
       for (const [k, v] of Object.entries(resolvedAccount.envVars)) {
         if (!validEnvKey.test(k) || k.startsWith('CAT_CAFE_')) continue;
+        // Skip template entries — already resolved by resolveEnvMap
+        if (hasSupportedEnvTemplate(v)) continue;
         filtered[k] = v;
       }
       if (Object.keys(filtered).length > 0) accountEnv = filtered;
@@ -1351,7 +1738,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     // config when the fully-qualified model is not already routable by `opencode models`.
     //
     // MCP injection: even known models need a runtime config to get deterministic
-    // Cat Cafe MCP server access (especially in game threads where project-level
+    // Clowder AI MCP server access (especially in game threads where project-level
     // opencode.json may not be discoverable).
     const hasExplicitOcProvider = Boolean(modelProviderName);
     const configuredMcpServerPath = process.env.CAT_CAFE_MCP_SERVER_PATH?.trim();
@@ -1406,6 +1793,19 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       }
     }
 
+    const openCodeExternalDirs: string[] = [];
+    const openCodeAllowedWorkspaceDirs = workingDirectory ? resolve(workingDirectory) : undefined;
+    if (provider === 'opencode') {
+      if (workingDirectory && !isSameProject(workingDirectory, hostProjectRoot)) {
+        // External project — grant access to Clowder AI host root (configs, MCP, etc.)
+        openCodeExternalDirs.push(hostProjectRoot);
+      }
+      if (workingProjectRoot && workingProjectRoot !== workingDirectory) {
+        // Working directory is a subdirectory of a monorepo — grant monorepo root.
+        openCodeExternalDirs.push(workingProjectRoot);
+      }
+    }
+
     // authType is either 'api_key' or 'oauth' — both need runtime config (MCP +
     // L0 + model routing). The only difference is credential injection below.
     const isApiKey = resolvedAccount?.authType === 'api_key';
@@ -1419,7 +1819,9 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       // Remap model prefix when provider name collides with OpenCode builtins
       // (e.g. 'openai/gpt-4o' → 'openai-compat/gpt-4o') so the CLI -m arg
       // matches the remapped provider key in opencode.json.
-      const safeProvider = safeProviderName(effectiveProviderName);
+      // Only remap for api_key — OAuth uses native providers, no custom entry
+      // in opencode.json, so remapping to 'openai-compat/...' would reference a nonexistent provider.
+      const safeProvider = isApiKey ? safeProviderName(effectiveProviderName) : effectiveProviderName;
       const safeModel =
         safeProvider !== effectiveProviderName && effectiveModel.startsWith(`${effectiveProviderName}/`)
           ? `${safeProvider}/${effectiveModel.slice(effectiveProviderName.length + 1)}`
@@ -1435,14 +1837,21 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         hasBaseUrl: Boolean(resolvedAccount.baseUrl),
         omitProviderAuth: !isApiKey,
         mcpServerPath,
+        ...(openCodeAllowedWorkspaceDirs ? { allowedWorkspaceDirs: openCodeAllowedWorkspaceDirs } : {}),
         // F203 Phase I: inject compiled L0 + OPENCODE.md into instructions.
         instructions: openCodeL0InstructionPaths,
+        // #935: External directory permissions for Windows/cross-project access.
+        ...(openCodeExternalDirs.length > 0 ? { externalDirectories: openCodeExternalDirs } : {}),
+        // OAuth: MCP-only config — no custom provider entry, so OpenCode uses its
+        // native auth handler instead of an empty apiKey placeholder.
+        mcpOnly: !isApiKey,
       } as const;
-      openCodeRuntimeConfigPath = writeOpenCodeRuntimeConfig(
+      openCodeRuntimeConfigPath = await writeOpenCodeRuntimeConfig(
         projectRoot,
         catId as string,
         invocationId,
         runtimeConfigOptions,
+        workingDirectory,
       );
       callbackEnv.OPENCODE_CONFIG = openCodeRuntimeConfigPath;
       // Credentials: only for api_key auth.
@@ -1461,6 +1870,8 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           invocationId,
           openCodeConfigPath: openCodeRuntimeConfigPath,
           apiType,
+          authType: resolvedAccount.authType,
+          mcpOnly: !isApiKey,
           callbackEnvSummary: {
             opencodeConfig: callbackEnv.OPENCODE_CONFIG,
             ocBaseUrl: callbackEnv[OC_BASE_URL_ENV] ?? null,
@@ -1484,6 +1895,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         catId as string,
         invocationId,
         openCodeL0InstructionPaths,
+        openCodeExternalDirs,
       );
       callbackEnv.OPENCODE_CONFIG = openCodeRuntimeConfigPath;
       callbackEnv[OC_INSTRUCTIONS_ONLY_ENV] = '1';
@@ -1542,6 +1954,20 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       effectivePrompt = `${contextHintPrefix}\n\n---\n\n${effectivePrompt}`;
     }
 
+    // L0-budget-defense PR-B-impl (ADR-038 件套 ④): staging layer prepend.
+    // Wired here (next to F225 contextHintPrefix) and NOT folded into
+    // staticIdentity — Cloud R2 P1 #2237 L1099: folding into staticIdentity
+    // would let resumed session-chain turns drop staging because the
+    // staticIdentity injection is skipped on canSkipOnResume + isResume
+    // turns. ADR-038 contract is "每轮注入生效" → must mirror F225 pattern
+    // (independent of injectSystemPrompt). Staging content goes to runtime
+    // prompt path, NOT compiled native L0 (砚砚 PR #2221 R1 P2 boundary).
+    const stagingPrepend = buildStagingPrepend(catId);
+    if (stagingPrepend) {
+      effectivePrompt = `${stagingPrepend}\n\n---\n\n${effectivePrompt}`;
+    }
+
+    /* @segment M2 — Transcript Path Hints */
     effectivePrompt = appendTranscriptPathHints(effectivePrompt, TRANSCRIPT_DIR, threadId);
 
     capturePromptIfEnabled({
@@ -1599,10 +2025,14 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       ...(spawnCliOverride ? { spawnCliOverride } : {}),
       invocationId,
       ...(sessionId ? { cliSessionId: sessionId } : {}),
+      ...(isResume && !injectSystemPrompt && params.systemPrompt
+        ? { resumeFallbackSystemPrompt: params.systemPrompt }
+        : {}),
       // F118 Phase B: Enable liveness probe for all CLI providers.
-      // #774: stallAutoKill clears truly stuck idle-silent CLIs before F216's 10m stale-processing guard.
+      // #1145: stallAutoKill threshold tracks resolved CLI_TIMEOUT_MS (default 30 min).
+      // When CLI_TIMEOUT_MS=0 (disabled), stallAutoKill is off entirely.
       // #854: Windows cannot sample CPU; suppress suspected_stall there so CLI_TIMEOUT_MS stays binding.
-      livenessProbe: { stallAutoKill: true, stallWarningMs: CAT_INVOCATION_STALL_AUTO_KILL_MS },
+      livenessProbe: buildStallAutoKillConfig(cliTimeoutMs),
       ...(catConfig?.cliConfigArgs?.length ? { cliConfigArgs: catConfig.cliConfigArgs } : {}),
       parentSpan: invocationSpan,
     };
@@ -1610,6 +2040,22 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
     let lastErrorMessage: string | undefined;
     const userVisibleOutputSessionIds = new Set<string>();
     const userVisibleOutputCountedSessionIds = new Set<string>();
+
+    // clowder#915 R4 cloud P1 #3 (defer seal): when a mid-stream agent_loop
+    // crosses the seal threshold (opencode step_finish ≥ 0.85 fillRatio),
+    // we capture the seal intent here instead of firing requestSeal inline.
+    // The actual sealer.requestSeal + sessionManager.delete + finalize is
+    // executed at the `done` event boundary, so post-seal text/tool events
+    // in the SAME opencode invocation (tool-loop tail) still find an active
+    // SessionRecord via getActive() and write to transcript normally.
+    // Cleared on done (after deferred execution) or any inline seal that
+    // already fired (the active record is gone so no second seal makes sense).
+    let pendingMidStreamSeal: {
+      sessionId: string;
+      reason: SealReason;
+      healthSnapshot: ContextHealth;
+      activeRecord: SessionRecord;
+    } | null = null;
 
     const recordActiveSessionUserVisibleOutput = async (): Promise<void> => {
       if (!deps.sessionChainStore || !sessionChainActive) return;
@@ -1636,6 +2082,348 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
 
     const processMessage = async (msg: AgentMessage): Promise<AgentMessage[]> => {
       const outputs: AgentMessage[] = [];
+
+      // clowder#915 (cloud P1): F8/F24 usage + context_health block extracted so
+      // it can run from BOTH the `done` branch (existing behavior) AND the
+      // `agent_loop` branch (NEW — opencode's step_finish event carries
+      // mid-stream token usage via agent_loop). Before this extraction, the
+      // agent_loop's early-return at L2322 silently dropped usage → no
+      // context_health → no seal → no handoff → opencode CLI hung at context
+      // limit. Closes over processMessage's lexical scope (catId, provider,
+      // sessionChainActive, deps, outputs, etc.). Parameter `msg` shadows the
+      // outer param so all the existing `msg.metadata.usage.*` refs resolve
+      // correctly to whatever message we're processing.
+      //
+      // clowder#915 R4 cloud P1 #3 (defer seal): callers from the agent_loop
+      // branch pass `deferSealForMidStream: true` so the seal case CAPTURES
+      // intent into `pendingMidStreamSeal` instead of firing `requestSeal`
+      // immediately. The actual seal is executed at the `done` boundary, so
+      // post-seal text/tool events from the same opencode tool loop still
+      // find an active session via getActive() and write to transcript.
+      const processUsageAndContextHealth = async (
+        msg: AgentMessage,
+        options: { deferSealForMidStream?: boolean } = {},
+      ): Promise<void> => {
+        if (!msg.metadata?.usage) return;
+        // F152: Record OTel token usage + LLM call duration
+        const modelBucket = normalizeModel(msg.metadata.model ?? '');
+        const providerSystem = provider ?? 'unknown';
+        const tokenAttrs = {
+          [AGENT_ID]: catId,
+          [GENAI_SYSTEM]: providerSystem,
+          [GENAI_MODEL]: modelBucket,
+          [OPERATION_NAME]: 'invoke',
+        };
+        if (msg.metadata.usage.inputTokens) {
+          tokenUsage.add(msg.metadata.usage.inputTokens, { ...tokenAttrs, [STATUS]: 'input' });
+        }
+        if (msg.metadata.usage.outputTokens) {
+          tokenUsage.add(msg.metadata.usage.outputTokens, { ...tokenAttrs, [STATUS]: 'output' });
+        }
+        if (msg.metadata.usage.durationApiMs) {
+          llmCallDuration.record(msg.metadata.usage.durationApiMs / 1000, tokenAttrs);
+        }
+
+        // F153 Phase B: Retrospective LLM call span (created after-the-fact from done event)
+        // Only create when durationApiMs is available — providers without timing data
+        // (Codex, Gemini, Kimi) would produce misleading 0-duration spans.
+        if (invocationSpan && msg.metadata.usage.durationApiMs) {
+          recordLlmCallSpan(
+            invocationSpan,
+            catId,
+            providerSystem,
+            modelBucket,
+            {
+              durationApiMs: msg.metadata.usage.durationApiMs,
+              inputTokens: msg.metadata.usage.inputTokens,
+              outputTokens: msg.metadata.usage.outputTokens,
+              cacheReadTokens: msg.metadata.usage.cacheReadTokens,
+            },
+            invocationId,
+          );
+        }
+
+        // F230: include model + provider so all carrier paths (PTY, bg, -p) can
+        // populate bubble footer metadata from invocation_usage.
+        // PTY carrier text events carry no metadata (transcriptEntriesToAgentMessages);
+        // this is their only metadata source. For -p/bg the frontend handler is
+        // first-write-wins → idempotent (text event writes metadata first, this is no-op).
+        outputs.push({
+          type: 'system_info' as const,
+          catId,
+          content: JSON.stringify({
+            type: 'invocation_usage',
+            catId,
+            usage: msg.metadata.usage,
+            model: msg.metadata.model,
+            provider: msg.metadata.provider,
+          }),
+          timestamp: Date.now(),
+        });
+
+        // F24: Compute and emit context health (only when session chain is enabled)
+        if (sessionChainActive) {
+          // #679: Gemini CLI token stats are cumulative across all turns — not usable
+          // for context fill. Skip entire context_health block (raw usage still in
+          // invocation_usage above). Guard auto-disables when lastTurnInputTokens exists.
+          const isCumulativeOnly =
+            msg.metadata.usage.isCumulativeUsage === true && msg.metadata.usage.lastTurnInputTokens == null;
+          // Use lastTurnInputTokens (per-API-call) for accurate context fill,
+          // then fallback to aggregated inputTokens, and finally totalTokens
+          // for providers (Gemini CLI) that only expose a total count.
+          // clowder#915 R5 cloud P2: 3-tier window resolution.
+          // 1) Explicit `usage.contextWindowSize` (CLI-reported — Claude's exact value)
+          // 2) Fallback table by bare model name (handles prefix-strip for
+          //    account-routing path's `provider/model` form per R2 P1 #2)
+          // 3) opencode-only last-resort default for unknown/custom-provider
+          //    models (GLM-5.1, openrouter customs — the breed clowder#915
+          //    actually targets). Crucially this is LAST so known opencode
+          //    models like the default claude-opus-4-6 get their precise 200k
+          //    from the table, NOT the 128k conservative default.
+          // F24 known-min floor: tiers 1-2 are additionally raised to
+          // max(value, known floor) inside resolveContextWindow — a stale
+          // CLI (≤2.1.177) reports 200K for claude-fable-5 (native 1M),
+          // and tier 1 outranking tier 2 meant the wrong value always won:
+          // sessions sealed budget_exhausted with 80% of the window unused.
+          const windowSize =
+            resolveContextWindow(msg.metadata.usage.contextWindowSize, msg.metadata.model ?? '') ??
+            (msg.metadata.provider === 'opencode' ? OPENCODE_DEFAULT_CONTEXT_WINDOW : undefined);
+          const usedFrom =
+            msg.metadata.usage.lastTurnInputTokens != null
+              ? 'last_turn'
+              : msg.metadata.usage.inputTokens != null
+                ? 'input'
+                : msg.metadata.usage.totalTokens != null
+                  ? 'total'
+                  : undefined;
+          const usedTokens =
+            usedFrom === 'last_turn'
+              ? msg.metadata.usage.lastTurnInputTokens!
+              : usedFrom === 'input'
+                ? msg.metadata.usage.inputTokens!
+                : usedFrom === 'total'
+                  ? msg.metadata.usage.totalTokens!
+                  : 0;
+          if (windowSize && usedTokens > 0 && isCumulativeOnly) {
+            log.warn(
+              {
+                catId,
+                threadId,
+                invocationId,
+                cumulativeUsedTokens: usedTokens,
+                windowSize,
+                usedFrom,
+              },
+              'Gemini cumulative-only usage observed; skipping context_health and auto-seal',
+            );
+            geminiContextFallback.add(1, { [AGENT_ID]: catId, [TRIGGER]: 'no_per_turn_signal' });
+          }
+          if (windowSize && usedTokens > 0 && !isCumulativeOnly) {
+            const source: ContextHealth['source'] =
+              msg.metadata.usage.contextWindowSize != null && usedFrom !== 'total' ? 'exact' : 'approx';
+            const health: ContextHealth = {
+              usedTokens,
+              windowTokens: windowSize,
+              fillRatio: Math.min(usedTokens / windowSize, 1.0),
+              source,
+              usedFrom,
+              measuredAt: Date.now(),
+            };
+            // Update SessionRecord (best-effort): persist health + usage snapshot
+            if (deps.sessionChainStore) {
+              try {
+                const activeRecord = await deps.sessionChainStore.getActive(catId, threadId);
+                if (activeRecord) {
+                  const u = msg.metadata?.usage!;
+                  await deps.sessionChainStore.update(activeRecord.id, {
+                    contextHealth: health,
+                    lastUsage: {
+                      ...(u.inputTokens != null ? { inputTokens: u.inputTokens } : {}),
+                      ...(u.outputTokens != null ? { outputTokens: u.outputTokens } : {}),
+                      ...(u.cacheReadTokens != null ? { cacheReadTokens: u.cacheReadTokens } : {}),
+                      ...(u.costUsd != null ? { costUsd: u.costUsd } : {}),
+                    },
+                    updatedAt: Date.now(),
+                  });
+                }
+              } catch {
+                /* best-effort */
+              }
+            }
+            // F-BLOAT: Detect context compression for re-injection on next turn.
+            // When usedTokens drops >60% from previous known value, the CLI
+            // auto-compacted its context. Flag for systemPrompt re-injection.
+            const cKey = `${userId}:${catId as string}:${threadId}`;
+            const prevFill = _prevContextFill.get(cKey);
+            _prevContextFill.set(cKey, usedTokens);
+            if (prevFill && usedTokens < prevFill * 0.4) {
+              _needsReinjection.add(cKey);
+            }
+            outputs.push({
+              type: 'system_info' as const,
+              catId,
+              content: JSON.stringify({ type: 'context_health', catId, health }),
+              timestamp: Date.now(),
+            });
+
+            // F33: Strategy-driven seal decision (replaces F24 Phase B shouldSeal)
+            if (deps.sessionSealer && deps.sessionChainStore) {
+              try {
+                // F062-fix:
+                // 1) api_key + approx health can be noisy on third-party gateways
+                // 2) api_key + compress strategy should not be force-sealed here
+                // Keep context_health observability in both cases.
+                const provider = catRegistry.tryGet(catId as string)?.config.clientId;
+                const profileMode = callbackEnv[ANTHROPIC_PROFILE_MODE_KEY];
+                const strategy = getSessionStrategy(catId as string);
+                const isAnthropicApiKey = provider === 'anthropic' && profileMode === ANTHROPIC_PROFILE_MODE_API_KEY;
+                const skipAutoSealForApproxApiKey = isAnthropicApiKey && health.source === 'approx';
+                const skipAutoSealForApiKeyCompress = isAnthropicApiKey && strategy.strategy === 'compress';
+                if (!skipAutoSealForApproxApiKey && !skipAutoSealForApiKeyCompress) {
+                  const activeRecord = await deps.sessionChainStore.getActive(catId, threadId);
+                  const action = shouldTakeAction(
+                    health.fillRatio,
+                    health.windowTokens,
+                    health.usedTokens,
+                    activeRecord?.compressionCount ?? 0,
+                    strategy,
+                  );
+
+                  switch (action.type) {
+                    case 'none':
+                      break;
+                    case 'warn': {
+                      // F225 软层: queue a cat-facing hint for the NEXT prompt. A
+                      // system_info output would never reach the cat (routing feeds only
+                      // `text` into previousResponses; ContextAssembler drops
+                      // userId='system') — so we ride the prompt-injection channel
+                      // (consumed at effectivePrompt assembly, ~line 1538). Nudges the cat
+                      // to run the context-self-management 3-axis self-check — NOT "handoff
+                      // now" (handoff-vs-compress is the cat's judgment). cKey matches the
+                      // compressionKey used there: `${userId}:${catId}:${threadId}`.
+                      queueContextHint(
+                        cKey,
+                        buildContextManagementHint({
+                          source: health.source,
+                          compressionCount: activeRecord?.compressionCount ?? 0,
+                        }),
+                      );
+                      break;
+                    }
+                    case 'seal':
+                    case 'seal_after_compress': {
+                      if (activeRecord) {
+                        // clowder#915 R4 cloud P1 #3: when called from agent_loop
+                        // (deferSealForMidStream=true), CAPTURE the seal intent
+                        // and let the `done` branch execute it. Firing inline
+                        // here would clear the active session pointer and break
+                        // transcript writes for the rest of the opencode
+                        // tool-loop's text/tool events.
+                        if (options.deferSealForMidStream) {
+                          pendingMidStreamSeal = {
+                            sessionId: activeRecord.id,
+                            reason: action.reason,
+                            healthSnapshot: health,
+                            activeRecord,
+                          };
+                          break;
+                        }
+                        const sealResult = await deps.sessionSealer.requestSeal({
+                          sessionId: activeRecord.id,
+                          reason: action.reason,
+                        });
+                        if (sealResult.accepted) {
+                          // If a done-path seal just fired inline, any pending
+                          // mid-stream intent is now obsolete (active record is
+                          // gone). Clear so the deferred-execution block below
+                          // does not double-seal.
+                          pendingMidStreamSeal = null;
+                          sessionManager.delete(userId, catId, threadId).catch(() => {});
+                          const sealTimestamp = Date.now();
+                          const continuityCapsule = params.continuityCapsule
+                            ? completeCapsuleForSeal(params.continuityCapsule, {
+                                invocationId,
+                                createdAt: sealTimestamp,
+                                seal: {
+                                  sessionId: activeRecord.id,
+                                  sessionSeq: activeRecord.seq + 1,
+                                  reason: action.reason,
+                                  healthSnapshot: health,
+                                },
+                              })
+                            : undefined;
+                          const sealInfoMessage = {
+                            type: 'system_info' as const,
+                            catId,
+                            content: JSON.stringify({
+                              type: 'session_seal_requested',
+                              catId,
+                              sessionId: activeRecord.id,
+                              sessionSeq: activeRecord.seq + 1,
+                              reason: action.reason,
+                              healthSnapshot: health,
+                              ...(continuityCapsule
+                                ? {
+                                    continuityCapsule,
+                                    continuityDiagnostics: {
+                                      source: 'route_state',
+                                      boundary: continuityCapsule.continuationReason,
+                                      generated: true,
+                                      persistedVia: 'session_seal_requested',
+                                      threadId,
+                                      catId,
+                                      invocationId,
+                                      sessionId: activeRecord.id,
+                                    },
+                                  }
+                                : {}),
+                            }),
+                            timestamp: sealTimestamp,
+                          };
+                          outputs.push(sealInfoMessage);
+                          if (deps.transcriptWriter) {
+                            const sessInfo: TranscriptSessionInfo = {
+                              sessionId: activeRecord.id,
+                              threadId,
+                              catId: activeRecord.catId,
+                              cliSessionId: activeRecord.cliSessionId,
+                              seq: activeRecord.seq,
+                            };
+                            deps.transcriptWriter.appendEvent(
+                              sessInfo,
+                              sealInfoMessage as unknown as Record<string, unknown>,
+                              invocationId,
+                            );
+                          }
+                          deps.sessionSealer.finalize({ sessionId: activeRecord.id }).catch(() => {});
+                        }
+                      }
+                      break;
+                    }
+                    case 'allow_compress':
+                      // Don't seal — let CLI compress. Log for observability.
+                      outputs.push({
+                        type: 'system_info' as const,
+                        catId,
+                        content: JSON.stringify({
+                          type: 'strategy_allow_compress',
+                          catId,
+                          strategy: strategy.strategy,
+                          compressionCount: activeRecord?.compressionCount ?? 0,
+                          healthSnapshot: health,
+                        }),
+                        timestamp: Date.now(),
+                      });
+                      break;
+                  }
+                }
+              } catch {
+                /* best-effort: strategy failure doesn't break invocation */
+              }
+            }
+          }
+        }
+      };
 
       if (msg.type === 'error') {
         hadStreamError = true;
@@ -1714,6 +2502,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                   // This is normal — NOT a "session replaced" event. Just update the tracked ID.
                   await deps.sessionChainStore.update(existing.id, {
                     cliSessionId: msg.sessionId,
+                    ...sessionWorkspaceBinding,
                     ...(params.continuityCapsule ? { continuityCapsule: params.continuityCapsule } : {}),
                     updatedAt: Date.now(),
                   });
@@ -1788,6 +2577,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                     const inheritedFailures = existing.consecutiveRestoreFailures ?? 0;
                     const newRec = await deps.sessionChainStore.create({
                       cliSessionId: msg.sessionId,
+                      ...sessionWorkspaceBinding,
                       threadId,
                       catId,
                       userId,
@@ -1795,17 +2585,20 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
                     if (inheritedFailures > 0) {
                       await deps.sessionChainStore.update(newRec.id, {
                         consecutiveRestoreFailures: inheritedFailures,
+                        ...sessionWorkspaceBinding,
                         ...(params.continuityCapsule ? { continuityCapsule: params.continuityCapsule } : {}),
                       });
                     } else if (params.continuityCapsule) {
                       await deps.sessionChainStore.update(newRec.id, {
+                        ...sessionWorkspaceBinding,
                         continuityCapsule: params.continuityCapsule,
                       });
                     }
                   }
                 }
-              } else if (params.continuityCapsule) {
+              } else if (params.continuityCapsule || hasSessionWorkspaceBinding) {
                 await deps.sessionChainStore.update(existing.id, {
+                  ...sessionWorkspaceBinding,
                   continuityCapsule: params.continuityCapsule,
                 });
               }
@@ -1813,6 +2606,7 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
               // No active session (first invocation or previous was sealed)
               const newRec = await deps.sessionChainStore.create({
                 cliSessionId: msg.sessionId,
+                ...sessionWorkspaceBinding,
                 threadId,
                 catId,
                 userId,
@@ -1979,283 +2773,91 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
           }
         }
 
-        // F8: Push token usage for frontend cost/token display
-        if (msg.metadata?.usage) {
-          // F152: Record OTel token usage + LLM call duration
-          const modelBucket = normalizeModel(msg.metadata.model ?? '');
-          const providerSystem = provider ?? 'unknown';
-          const tokenAttrs = {
-            [AGENT_ID]: catId,
-            [GENAI_SYSTEM]: providerSystem,
-            [GENAI_MODEL]: modelBucket,
-            [OPERATION_NAME]: 'invoke',
-          };
-          if (msg.metadata.usage.inputTokens) {
-            tokenUsage.add(msg.metadata.usage.inputTokens, { ...tokenAttrs, [STATUS]: 'input' });
-          }
-          if (msg.metadata.usage.outputTokens) {
-            tokenUsage.add(msg.metadata.usage.outputTokens, { ...tokenAttrs, [STATUS]: 'output' });
-          }
-          if (msg.metadata.usage.durationApiMs) {
-            llmCallDuration.record(msg.metadata.usage.durationApiMs / 1000, tokenAttrs);
-          }
+        // F8/F24 usage + context_health (extracted to helper for clowder#915
+        // — see processUsageAndContextHealth declaration at top of processMessage).
+        await processUsageAndContextHealth(msg);
 
-          // F153 Phase B: Retrospective LLM call span (created after-the-fact from done event)
-          // Only create when durationApiMs is available — providers without timing data
-          // (Codex, Gemini, Kimi) would produce misleading 0-duration spans.
-          if (invocationSpan && msg.metadata.usage.durationApiMs) {
-            recordLlmCallSpan(
-              invocationSpan,
-              catId,
-              providerSystem,
-              modelBucket,
-              {
-                durationApiMs: msg.metadata.usage.durationApiMs,
-                inputTokens: msg.metadata.usage.inputTokens,
-                outputTokens: msg.metadata.usage.outputTokens,
-                cacheReadTokens: msg.metadata.usage.cacheReadTokens,
-              },
-              invocationId,
-            );
-          }
-
-          outputs.push({
-            type: 'system_info' as const,
-            catId,
-            content: JSON.stringify({
-              type: 'invocation_usage',
-              catId,
-              usage: msg.metadata.usage,
-            }),
-            timestamp: Date.now(),
-          });
-
-          // F24: Compute and emit context health (only when session chain is enabled)
-          if (sessionChainActive) {
-            // #679: Gemini CLI token stats are cumulative across all turns — not usable
-            // for context fill. Skip entire context_health block (raw usage still in
-            // invocation_usage above). Guard auto-disables when lastTurnInputTokens exists.
-            const isCumulativeOnly =
-              msg.metadata.usage.isCumulativeUsage === true && msg.metadata.usage.lastTurnInputTokens == null;
-            // Use lastTurnInputTokens (per-API-call) for accurate context fill,
-            // then fallback to aggregated inputTokens, and finally totalTokens
-            // for providers (Gemini CLI) that only expose a total count.
-            const windowSize =
-              msg.metadata.usage.contextWindowSize ?? getContextWindowFallback(msg.metadata.model ?? '');
-            const usedFrom =
-              msg.metadata.usage.lastTurnInputTokens != null
-                ? 'last_turn'
-                : msg.metadata.usage.inputTokens != null
-                  ? 'input'
-                  : msg.metadata.usage.totalTokens != null
-                    ? 'total'
-                    : undefined;
-            const usedTokens =
-              usedFrom === 'last_turn'
-                ? msg.metadata.usage.lastTurnInputTokens!
-                : usedFrom === 'input'
-                  ? msg.metadata.usage.inputTokens!
-                  : usedFrom === 'total'
-                    ? msg.metadata.usage.totalTokens!
-                    : 0;
-            if (windowSize && usedTokens > 0 && isCumulativeOnly) {
-              log.warn(
-                {
-                  catId,
-                  threadId,
-                  invocationId,
-                  cumulativeUsedTokens: usedTokens,
-                  windowSize,
-                  usedFrom,
-                },
-                'Gemini cumulative-only usage observed; skipping context_health and auto-seal',
-              );
-              geminiContextFallback.add(1, { [AGENT_ID]: catId, [TRIGGER]: 'no_per_turn_signal' });
-            }
-            if (windowSize && usedTokens > 0 && !isCumulativeOnly) {
-              const source: ContextHealth['source'] =
-                msg.metadata.usage.contextWindowSize != null && usedFrom !== 'total' ? 'exact' : 'approx';
-              const health: ContextHealth = {
-                usedTokens,
-                windowTokens: windowSize,
-                fillRatio: Math.min(usedTokens / windowSize, 1.0),
-                source,
-                usedFrom,
-                measuredAt: Date.now(),
-              };
-              // Update SessionRecord (best-effort): persist health + usage snapshot
-              if (deps.sessionChainStore) {
-                try {
-                  const activeRecord = await deps.sessionChainStore.getActive(catId, threadId);
-                  if (activeRecord) {
-                    const u = msg.metadata?.usage!;
-                    await deps.sessionChainStore.update(activeRecord.id, {
-                      contextHealth: health,
-                      lastUsage: {
-                        ...(u.inputTokens != null ? { inputTokens: u.inputTokens } : {}),
-                        ...(u.outputTokens != null ? { outputTokens: u.outputTokens } : {}),
-                        ...(u.cacheReadTokens != null ? { cacheReadTokens: u.cacheReadTokens } : {}),
-                        ...(u.costUsd != null ? { costUsd: u.costUsd } : {}),
-                      },
-                      updatedAt: Date.now(),
-                    });
-                  }
-                } catch {
-                  /* best-effort */
-                }
-              }
-              // F-BLOAT: Detect context compression for re-injection on next turn.
-              // When usedTokens drops >60% from previous known value, the CLI
-              // auto-compacted its context. Flag for systemPrompt re-injection.
-              const cKey = `${userId}:${catId as string}:${threadId}`;
-              const prevFill = _prevContextFill.get(cKey);
-              _prevContextFill.set(cKey, usedTokens);
-              if (prevFill && usedTokens < prevFill * 0.4) {
-                _needsReinjection.add(cKey);
-              }
-              outputs.push({
+        // clowder#915 R4 cloud P1 #3 (defer seal execution): if an earlier
+        // agent_loop captured a pending seal intent and the done-branch
+        // helper above didn't already fire its own seal (which would have
+        // cleared pendingMidStreamSeal), execute the deferred seal NOW at
+        // this clean boundary. Built from the snapshot captured at agent_loop
+        // time, so health/reason/continuity reflect the moment the threshold
+        // was actually crossed (not whatever done's metadata.usage happens
+        // to carry, which is often empty for opencode).
+        if (pendingMidStreamSeal && deps.sessionSealer && deps.sessionChainStore) {
+          const pending = pendingMidStreamSeal;
+          pendingMidStreamSeal = null;
+          try {
+            const sealResult = await deps.sessionSealer.requestSeal({
+              sessionId: pending.sessionId,
+              reason: pending.reason,
+            });
+            if (sealResult.accepted) {
+              sessionManager.delete(userId, catId, threadId).catch(() => {});
+              const sealTimestamp = Date.now();
+              const continuityCapsule = params.continuityCapsule
+                ? completeCapsuleForSeal(params.continuityCapsule, {
+                    invocationId,
+                    createdAt: sealTimestamp,
+                    seal: {
+                      sessionId: pending.sessionId,
+                      sessionSeq: pending.activeRecord.seq + 1,
+                      reason: pending.reason,
+                      healthSnapshot: pending.healthSnapshot,
+                    },
+                  })
+                : undefined;
+              const sealInfoMessage = {
                 type: 'system_info' as const,
                 catId,
-                content: JSON.stringify({ type: 'context_health', catId, health }),
-                timestamp: Date.now(),
-              });
-
-              // F33: Strategy-driven seal decision (replaces F24 Phase B shouldSeal)
-              if (deps.sessionSealer && deps.sessionChainStore) {
-                try {
-                  // F062-fix:
-                  // 1) api_key + approx health can be noisy on third-party gateways
-                  // 2) api_key + compress strategy should not be force-sealed here
-                  // Keep context_health observability in both cases.
-                  const provider = catRegistry.tryGet(catId as string)?.config.clientId;
-                  const profileMode = callbackEnv[ANTHROPIC_PROFILE_MODE_KEY];
-                  const strategy = getSessionStrategy(catId as string);
-                  const isAnthropicApiKey = provider === 'anthropic' && profileMode === ANTHROPIC_PROFILE_MODE_API_KEY;
-                  const skipAutoSealForApproxApiKey = isAnthropicApiKey && health.source === 'approx';
-                  const skipAutoSealForApiKeyCompress = isAnthropicApiKey && strategy.strategy === 'compress';
-                  if (!skipAutoSealForApproxApiKey && !skipAutoSealForApiKeyCompress) {
-                    const activeRecord = await deps.sessionChainStore.getActive(catId, threadId);
-                    const action = shouldTakeAction(
-                      health.fillRatio,
-                      health.windowTokens,
-                      health.usedTokens,
-                      activeRecord?.compressionCount ?? 0,
-                      strategy,
-                    );
-
-                    switch (action.type) {
-                      case 'none':
-                        break;
-                      case 'warn': {
-                        // F225 软层: queue a cat-facing hint for the NEXT prompt. A
-                        // system_info output would never reach the cat (routing feeds only
-                        // `text` into previousResponses; ContextAssembler drops
-                        // userId='system') — so we ride the prompt-injection channel
-                        // (consumed at effectivePrompt assembly, ~line 1538). Nudges the cat
-                        // to run the context-self-management 3-axis self-check — NOT "handoff
-                        // now" (handoff-vs-compress is the cat's judgment). cKey matches the
-                        // compressionKey used there: `${userId}:${catId}:${threadId}`.
-                        queueContextHint(
-                          cKey,
-                          buildContextManagementHint({
-                            source: health.source,
-                            compressionCount: activeRecord?.compressionCount ?? 0,
-                          }),
-                        );
-                        break;
-                      }
-                      case 'seal':
-                      case 'seal_after_compress': {
-                        if (activeRecord) {
-                          const sealResult = await deps.sessionSealer.requestSeal({
-                            sessionId: activeRecord.id,
-                            reason: action.reason,
-                          });
-                          if (sealResult.accepted) {
-                            sessionManager.delete(userId, catId, threadId).catch(() => {});
-                            const sealTimestamp = Date.now();
-                            const continuityCapsule = params.continuityCapsule
-                              ? completeCapsuleForSeal(params.continuityCapsule, {
-                                  invocationId,
-                                  createdAt: sealTimestamp,
-                                  seal: {
-                                    sessionId: activeRecord.id,
-                                    sessionSeq: activeRecord.seq + 1,
-                                    reason: action.reason,
-                                    healthSnapshot: health,
-                                  },
-                                })
-                              : undefined;
-                            const sealInfoMessage = {
-                              type: 'system_info' as const,
-                              catId,
-                              content: JSON.stringify({
-                                type: 'session_seal_requested',
-                                catId,
-                                sessionId: activeRecord.id,
-                                sessionSeq: activeRecord.seq + 1,
-                                reason: action.reason,
-                                healthSnapshot: health,
-                                ...(continuityCapsule
-                                  ? {
-                                      continuityCapsule,
-                                      continuityDiagnostics: {
-                                        source: 'route_state',
-                                        boundary: continuityCapsule.continuationReason,
-                                        generated: true,
-                                        persistedVia: 'session_seal_requested',
-                                        threadId,
-                                        catId,
-                                        invocationId,
-                                        sessionId: activeRecord.id,
-                                      },
-                                    }
-                                  : {}),
-                              }),
-                              timestamp: sealTimestamp,
-                            };
-                            outputs.push(sealInfoMessage);
-                            if (deps.transcriptWriter) {
-                              const sessInfo: TranscriptSessionInfo = {
-                                sessionId: activeRecord.id,
-                                threadId,
-                                catId: activeRecord.catId,
-                                cliSessionId: activeRecord.cliSessionId,
-                                seq: activeRecord.seq,
-                              };
-                              deps.transcriptWriter.appendEvent(
-                                sessInfo,
-                                sealInfoMessage as unknown as Record<string, unknown>,
-                                invocationId,
-                              );
-                            }
-                            deps.sessionSealer.finalize({ sessionId: activeRecord.id }).catch(() => {});
-                          }
-                        }
-                        break;
-                      }
-                      case 'allow_compress':
-                        // Don't seal — let CLI compress. Log for observability.
-                        outputs.push({
-                          type: 'system_info' as const,
+                content: JSON.stringify({
+                  type: 'session_seal_requested',
+                  catId,
+                  sessionId: pending.sessionId,
+                  sessionSeq: pending.activeRecord.seq + 1,
+                  reason: pending.reason,
+                  healthSnapshot: pending.healthSnapshot,
+                  // Mark as deferred so downstream observers can distinguish
+                  // mid-stream-captured seals from synchronous done-time seals.
+                  deferredFrom: 'mid_stream_agent_loop',
+                  ...(continuityCapsule
+                    ? {
+                        continuityCapsule,
+                        continuityDiagnostics: {
+                          source: 'route_state',
+                          boundary: continuityCapsule.continuationReason,
+                          generated: true,
+                          persistedVia: 'session_seal_requested',
+                          threadId,
                           catId,
-                          content: JSON.stringify({
-                            type: 'strategy_allow_compress',
-                            catId,
-                            strategy: strategy.strategy,
-                            compressionCount: activeRecord?.compressionCount ?? 0,
-                            healthSnapshot: health,
-                          }),
-                          timestamp: Date.now(),
-                        });
-                        break;
-                    }
-                  }
-                } catch {
-                  /* best-effort: strategy failure doesn't break invocation */
-                }
+                          invocationId,
+                          sessionId: pending.sessionId,
+                        },
+                      }
+                    : {}),
+                }),
+                timestamp: sealTimestamp,
+              };
+              outputs.push(sealInfoMessage);
+              if (deps.transcriptWriter) {
+                const sessInfo: TranscriptSessionInfo = {
+                  sessionId: pending.activeRecord.id,
+                  threadId,
+                  catId: pending.activeRecord.catId,
+                  cliSessionId: pending.activeRecord.cliSessionId,
+                  seq: pending.activeRecord.seq,
+                };
+                deps.transcriptWriter.appendEvent(
+                  sessInfo,
+                  sealInfoMessage as unknown as Record<string, unknown>,
+                  invocationId,
+                );
               }
+              deps.sessionSealer.finalize({ sessionId: pending.sessionId }).catch(() => {});
             }
+          } catch {
+            /* best-effort: deferred seal failure doesn't break invocation */
           }
         }
 
@@ -2267,6 +2869,18 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
         // is the correct way to skip the remaining branches and transcript writer below.
         if (msg.type === 'agent_loop') {
           if (invocationSpan) recordAgentLoop(invocationSpan);
+          // clowder#915: opencode emits step_finish (mid-stream LLM-call boundary)
+          // as agent_loop carrying token usage. Route through F8/F24 so
+          // context_health computes + seal can fire BEFORE the CLI hits its context
+          // window. For agent_loop messages without usage (other producers under
+          // F153 Phase I semantics), the helper returns early — no behavior change.
+          //
+          // clowder#915 R4 cloud P1 #3: deferSealForMidStream=true so the helper
+          // CAPTURES seal intent into pendingMidStreamSeal instead of firing
+          // requestSeal inline. The actual seal executes at the `done` boundary
+          // below — preserving transcript writes for the rest of the opencode
+          // tool-loop's text/tool events.
+          await processUsageAndContextHealth(msg, { deferSealForMidStream: true });
           return outputs;
         }
         // Main-merge: record user-visible session output (independent of toolTracing — uses raw msg).
@@ -2388,6 +3002,32 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
               ...(parentSid ? { parentSpanId: parentSid } : {}),
             };
           }
+          // F254 B3/B4: Check for freshness re-invoke after terminal event.
+          // Fail-open: errors here never block the done signal.
+          if (deps.freshnessReinvokeCheck && !hadError && !signal?.aborted) {
+            try {
+              const decision = await deps.freshnessReinvokeCheck({
+                invocationId,
+                threadId,
+                catId,
+                userId: params.userId,
+              });
+              if (decision) {
+                // Attach decision to done metadata for routing layer.
+                // Initialize metadata if missing (some provider paths emit done without it).
+                if (!out.metadata) {
+                  (out as unknown as Record<string, unknown>).metadata = {};
+                }
+                (out.metadata as unknown as Record<string, unknown>).freshnessReinvoke = decision;
+                log.info(
+                  { catId, threadId, invocationId, shouldReinvoke: decision.shouldReinvoke, reason: decision.reason },
+                  '[F254-B3] freshness re-invoke decision',
+                );
+              }
+            } catch (err) {
+              log.warn({ catId, threadId, invocationId, err }, '[F254-B3] freshness re-invoke check failed, fail-open');
+            }
+          }
         }
         yield out;
       }
@@ -2464,238 +3104,271 @@ export async function* invokeSingleCat(deps: InvocationDeps, params: InvocationP
       // F089: Use abortableNext instead of `for await` so the invocation timeout
       // can break out even when the service generator is stuck on an unresolvable await.
       const serviceIter = service.invoke(effectivePrompt, options)[Symbol.asyncIterator]();
-      for (;;) {
-        const iterResult = await abortableNext(serviceIter, signal);
-        if (iterResult.done) break;
-        const msg = iterResult.value;
-        // F149: provider_signal / liveness_signal must NOT reset timeout — prevents "续命"
-        // F198 Phase C P2-1: status (daemon detail progress) also must NOT reset timeout —
-        // a daemon sending frequent status updates must not evade the 30-min kill deadline.
-        if (msg.type !== 'provider_signal' && msg.type !== 'liveness_signal' && msg.type !== 'status')
-          resetInvocationTimeout();
-        if (shouldTrackGeminiResumeFailures && options.sessionId && msg.type === 'error') {
-          const failureKind = classifyResumeFailure(msg.error);
-          if (failureKind) {
-            resumeFailureCounts[failureKind] = (resumeFailureCounts[failureKind] ?? 0) + 1;
-          }
-        }
-
-        if (allowSessionRetry && msg.type === 'error' && isMissingClaudeSessionError(msg.error)) {
-          suppressedMissingSessionError = msg;
-          continue;
-        }
-        if (
-          allowSessionRetry &&
-          !attemptHasContentOutput &&
-          msg.type === 'error' &&
-          isPromptTokenLimitExceededError(msg.error)
-        ) {
-          suppressedPromptLimitError = msg;
-          continue;
-        }
-        if (
-          allowSessionRetry &&
-          !attemptHasContentOutput &&
-          msg.type === 'error' &&
-          isContextWindowOverflowError(msg.error)
-        ) {
-          suppressedContextOverflowError = msg;
-          continue;
-        }
-        if (
-          allowTransientRetry &&
-          !attemptHasContentOutput &&
-          msg.type === 'error' &&
-          (isTransientCliExitCode1(msg.error) || isTransientAcpPromptFailure(msg.error))
-        ) {
-          suppressedTransientCliError = msg;
-          continue;
-        }
-        // #774 self-heal: CLI timeout during session resume with no substantive output
-        // → likely stale/unreachable session. Suppress and retry without session.
-        // Uses attemptHasSubstantiveOutput (not attemptHasContentOutput) because
-        // timeout_diagnostics (system_info) must NOT block the retry path.
-        if (
-          allowSessionRetry &&
-          options.sessionId &&
-          !attemptHasSubstantiveOutput &&
-          msg.type === 'error' &&
-          isCliTimeoutError(msg.error)
-        ) {
-          suppressedTimeoutError = msg;
-          continue;
-        }
-        // F215 AC-C1/C2: Suppress malformed tool-call error + preceding system_info signal
-        // → seal session + fresh-context retry (sessionId=undefined).
-        // Applies on all attempts (even without session) so a retried invocation that still
-        // produces malformed output also enters the fallback chain.
-        //
-        // BLOCKING 2 fix: malformed_toolcall_detected is emitted BEFORE the error, so we
-        // must suppress it unconditionally (not gated on suppressedMalformedError being set).
-        if (
-          msg.type === 'system_info' &&
-          (() => {
-            try {
-              return JSON.parse(msg.content ?? '{}').type === 'malformed_toolcall_detected';
-            } catch {
-              return false;
+      // #1186: Ensure service generator's finally block runs (lease.release()) on ALL exit paths.
+      // Manual .next() iteration does NOT auto-close the generator on break/throw — unlike
+      // `for await...of` which calls .return() on early exit. Without this try/finally,
+      // breaking from the loop (retry path, abort, error) leaves the generator suspended
+      // at its last yield, so AcpAgentService.invoke()'s finally { lease.release() } never
+      // executes → leaked lease → "Pool at capacity" after maxLiveProcesses invocations.
+      let iterExitedNormally = false;
+      try {
+        for (;;) {
+          const iterResult = await abortableNext(serviceIter, signal);
+          if (iterResult.done) break;
+          const msg = iterResult.value;
+          // F149: provider_signal / liveness_signal must NOT reset timeout — prevents "续命"
+          // F198 Phase C P2-1: status (daemon detail progress) also must NOT reset timeout —
+          // a daemon sending frequent status updates must not evade the 30-min kill deadline.
+          if (msg.type !== 'provider_signal' && msg.type !== 'liveness_signal' && msg.type !== 'status')
+            resetInvocationTimeout();
+          if (shouldTrackGeminiResumeFailures && options.sessionId && msg.type === 'error') {
+            const failureKind = classifyResumeFailure(msg.error);
+            if (failureKind) {
+              resumeFailureCounts[failureKind] = (resumeFailureCounts[failureKind] ?? 0) + 1;
             }
-          })()
-        ) {
-          // Internal detection signal — always suppress; never reaches user.
-          continue;
-        }
-        // P1 7th fix: only suppress malformed error (and retry) when NO content was emitted yet.
-        // Other self-heal paths (prompt limit, context overflow) all guard on !attemptHasContentOutput.
-        // Without this guard, a multi-step run that used a tool then ended with a malformed turn
-        // would re-run the original prompt from scratch — duplicating tool actions.
-        if (msg.type === 'error' && isMalformedToolCallError(msg.error) && !attemptHasContentOutput) {
-          suppressedMalformedError = msg;
-          continue;
-        }
-        // F215 AC-B6 UX fix: when content was already emitted, the malformed error must NOT reach
-        // the user with "系统已触发恢复流程" (a lie — no retry fires when attemptHasContentOutput=true).
-        // Replace the raw error with an honest partial-output text notice.
-        if (msg.type === 'error' && isMalformedToolCallError(msg.error) && attemptHasContentOutput) {
-          log.warn(
-            { catId, error: msg.error },
-            '[F215] Malformed after content output — replacing misleading error with partial-output notice',
-          );
-          const notice: AgentMessage = {
-            type: 'text',
-            catId: catId as CatId,
-            content: `\n\n🐾 手抖了——最后一步没完成。上面的内容已经送到了，可以追问或让其他猫猫接着做。`,
-            timestamp: Date.now(),
-          };
-          for await (const out of streamProcessedOutputs(notice)) {
+          }
+
+          if (
+            allowSessionRetry &&
+            msg.type === 'error' &&
+            (isMissingClaudeSessionError(msg.error) || isSessionNotFoundDiagnostic(msg.metadata))
+          ) {
+            suppressedMissingSessionError = msg;
+            continue;
+          }
+          if (
+            allowSessionRetry &&
+            !attemptHasContentOutput &&
+            msg.type === 'error' &&
+            isPromptTokenLimitExceededError(msg.error)
+          ) {
+            suppressedPromptLimitError = msg;
+            continue;
+          }
+          if (
+            allowSessionRetry &&
+            !attemptHasContentOutput &&
+            msg.type === 'error' &&
+            isContextWindowOverflowError(msg.error)
+          ) {
+            suppressedContextOverflowError = msg;
+            continue;
+          }
+          if (
+            allowTransientRetry &&
+            !attemptHasContentOutput &&
+            msg.type === 'error' &&
+            (isTransientCliExitCode1(msg.error) || isTransientAcpPromptFailure(msg.error))
+          ) {
+            suppressedTransientCliError = msg;
+            continue;
+          }
+          // #774 self-heal: CLI timeout during session resume with no substantive output
+          // → likely stale/unreachable session. Suppress and retry without session.
+          // Uses attemptHasSubstantiveOutput (not attemptHasContentOutput) because
+          // timeout_diagnostics (system_info) must NOT block the retry path.
+          if (
+            allowSessionRetry &&
+            options.sessionId &&
+            !attemptHasSubstantiveOutput &&
+            msg.type === 'error' &&
+            isCliTimeoutError(msg.error)
+          ) {
+            suppressedTimeoutError = msg;
+            continue;
+          }
+          // F215 AC-C1/C2: Suppress malformed tool-call error + preceding system_info signal
+          // → seal session + fresh-context retry (sessionId=undefined).
+          // Applies on all attempts (even without session) so a retried invocation that still
+          // produces malformed output also enters the fallback chain.
+          //
+          // BLOCKING 2 fix: malformed_toolcall_detected is emitted BEFORE the error, so we
+          // must suppress it unconditionally (not gated on suppressedMalformedError being set).
+          if (
+            msg.type === 'system_info' &&
+            (() => {
+              try {
+                return JSON.parse(msg.content ?? '{}').type === 'malformed_toolcall_detected';
+              } catch {
+                return false;
+              }
+            })()
+          ) {
+            // Internal detection signal — always suppress; never reaches user.
+            continue;
+          }
+          // P1 7th fix: only suppress malformed error (and retry) when NO content was emitted yet.
+          // Other self-heal paths (prompt limit, context overflow) all guard on !attemptHasContentOutput.
+          // Without this guard, a multi-step run that used a tool then ended with a malformed turn
+          // would re-run the original prompt from scratch — duplicating tool actions.
+          if (msg.type === 'error' && isMalformedToolCallError(msg.error) && !attemptHasContentOutput) {
+            suppressedMalformedError = msg;
+            continue;
+          }
+          // F215 AC-B6 UX fix: when content was already emitted, the malformed error must NOT reach
+          // the user with "系统已触发恢复流程" (a lie — no retry fires when attemptHasContentOutput=true).
+          // Replace the raw error with an honest partial-output text notice.
+          if (msg.type === 'error' && isMalformedToolCallError(msg.error) && attemptHasContentOutput) {
+            log.warn(
+              { catId, error: msg.error },
+              '[F215] Malformed after content output — replacing misleading error with partial-output notice',
+            );
+            const notice: AgentMessage = {
+              type: 'text',
+              catId: catId as CatId,
+              content: `\n\n🐾 手抖了——最后一步没完成。上面的内容已经送到了，可以追问或让其他猫猫接着做。`,
+              timestamp: Date.now(),
+            };
+            for await (const out of streamProcessedOutputs(notice)) {
+              yield out;
+            }
+            continue;
+          }
+
+          if (
+            suppressedMissingSessionError ||
+            suppressedPromptLimitError ||
+            suppressedContextOverflowError ||
+            suppressedTransientCliError ||
+            suppressedTimeoutError ||
+            suppressedMalformedError
+          ) {
+            if (msg.type === 'done') {
+              // F215 AC-C1: Seal malformed session before fresh retry.
+              if (suppressedMalformedError && deps.sessionSealer && deps.sessionChainStore) {
+                try {
+                  const activeRec = await deps.sessionChainStore.getActive(catId as CatId, threadId);
+                  if (activeRec) {
+                    const sealResult = await deps.sessionSealer.requestSeal({
+                      sessionId: activeRec.id,
+                      reason: 'malformed_toolcall',
+                    });
+                    if (sealResult.accepted) {
+                      sessionManager.delete(userId, catId, threadId).catch(() => {});
+                      deps.sessionSealer.finalize({ sessionId: activeRec.id }).catch(() => {});
+                      log.info(
+                        { catId, threadId, invocationId, sessionId: activeRec.id },
+                        '[F215] Sealed malformed session for fresh-context retry',
+                      );
+                    }
+                  }
+                } catch {
+                  /* best-effort seal */
+                }
+              }
+              shouldRetryWithoutSession = Boolean(
+                suppressedMissingSessionError ||
+                  suppressedPromptLimitError ||
+                  suppressedContextOverflowError ||
+                  suppressedTimeoutError ||
+                  suppressedMalformedError,
+              );
+              shouldRetryOnTransientCliExit = Boolean(suppressedTransientCliError);
+              break;
+            }
+
+            if (suppressedMissingSessionError) {
+              for await (const out of streamProcessedOutputs(suppressedMissingSessionError)) {
+                yield out;
+              }
+              suppressedMissingSessionError = undefined;
+            }
+            if (suppressedPromptLimitError) {
+              for await (const out of streamProcessedOutputs(suppressedPromptLimitError)) {
+                yield out;
+              }
+              suppressedPromptLimitError = undefined;
+            }
+            if (suppressedContextOverflowError) {
+              for await (const out of streamProcessedOutputs(suppressedContextOverflowError)) {
+                yield out;
+              }
+              suppressedContextOverflowError = undefined;
+            }
+            if (suppressedTransientCliError) {
+              for await (const out of streamProcessedOutputs(suppressedTransientCliError)) {
+                yield out;
+              }
+              suppressedTransientCliError = undefined;
+            }
+            if (suppressedTimeoutError) {
+              for await (const out of streamProcessedOutputs(suppressedTimeoutError)) {
+                yield out;
+              }
+              suppressedTimeoutError = undefined;
+            }
+            // F215: Clear malformed error — will be re-evaluated on retry.
+            if (suppressedMalformedError) {
+              suppressedMalformedError = undefined;
+            }
+          }
+
+          // F149: Map provider_signal / liveness_signal → system_info for frontend delivery
+          const deliveryMsg =
+            msg.type === 'provider_signal' || msg.type === 'liveness_signal'
+              ? { ...msg, type: 'system_info' as const }
+              : msg;
+          for await (const out of streamProcessedOutputs(deliveryMsg)) {
             yield out;
           }
-          continue;
-        }
-
-        if (
-          suppressedMissingSessionError ||
-          suppressedPromptLimitError ||
-          suppressedContextOverflowError ||
-          suppressedTransientCliError ||
-          suppressedTimeoutError ||
-          suppressedMalformedError
-        ) {
-          if (msg.type === 'done') {
-            // F215 AC-C1: Seal malformed session before fresh retry.
-            if (suppressedMalformedError && deps.sessionSealer && deps.sessionChainStore) {
+          if (
+            msg.type !== 'error' &&
+            msg.type !== 'done' &&
+            msg.type !== 'session_init' &&
+            msg.type !== 'provider_signal' &&
+            msg.type !== 'liveness_signal' &&
+            msg.type !== 'status'
+          ) {
+            // F215 hotfix: attemptHasContentOutput must only be set by replay-sensitive types
+            // (text / tool_use / tool_result). system_info (rate_limit_event / agent_loop /
+            // timeout_diagnostics) and other metadata MUST NOT prevent malformed recovery —
+            // they carry no model output that would be duplicated on retry.
+            // Bug: system_info from rate_limit_event precedes malformed turn → sets
+            // attemptHasContentOutput=true → malformed suppress guard !attemptHasContentOutput
+            // fails → seal/fresh-retry/46接力 all skipped → bare malformed error leaks to user.
+            if (isUserVisibleSessionOutput(msg)) {
+              attemptHasContentOutput = true;
+            }
+            // Substantive = real model output, excludes system_info (e.g. timeout_diagnostics).
+            if (msg.type !== 'system_info') {
+              attemptHasSubstantiveOutput = true;
+            }
+            // F118 AC-C6: Reset consecutive restore failure counter on successful content
+            if (deps.sessionChainStore && !didResetRestoreFailures) {
+              didResetRestoreFailures = true; // only reset once per invocation
               try {
                 const activeRec = await deps.sessionChainStore.getActive(catId as CatId, threadId);
-                if (activeRec) {
-                  const sealResult = await deps.sessionSealer.requestSeal({
-                    sessionId: activeRec.id,
-                    reason: 'malformed_toolcall',
+                if (activeRec && (activeRec.consecutiveRestoreFailures ?? 0) > 0) {
+                  await deps.sessionChainStore.update(activeRec.id, {
+                    consecutiveRestoreFailures: 0,
+                    updatedAt: Date.now(),
                   });
-                  if (sealResult.accepted) {
-                    sessionManager.delete(userId, catId, threadId).catch(() => {});
-                    deps.sessionSealer.finalize({ sessionId: activeRec.id }).catch(() => {});
-                    log.info(
-                      { catId, threadId, invocationId, sessionId: activeRec.id },
-                      '[F215] Sealed malformed session for fresh-context retry',
-                    );
-                  }
                 }
               } catch {
-                /* best-effort seal */
+                /* best-effort reset */
               }
             }
-            shouldRetryWithoutSession = Boolean(
-              suppressedMissingSessionError ||
-                suppressedPromptLimitError ||
-                suppressedContextOverflowError ||
-                suppressedTimeoutError ||
-                suppressedMalformedError,
-            );
-            shouldRetryOnTransientCliExit = Boolean(suppressedTransientCliError);
-            break;
-          }
-
-          if (suppressedMissingSessionError) {
-            for await (const out of streamProcessedOutputs(suppressedMissingSessionError)) {
-              yield out;
-            }
-            suppressedMissingSessionError = undefined;
-          }
-          if (suppressedPromptLimitError) {
-            for await (const out of streamProcessedOutputs(suppressedPromptLimitError)) {
-              yield out;
-            }
-            suppressedPromptLimitError = undefined;
-          }
-          if (suppressedContextOverflowError) {
-            for await (const out of streamProcessedOutputs(suppressedContextOverflowError)) {
-              yield out;
-            }
-            suppressedContextOverflowError = undefined;
-          }
-          if (suppressedTransientCliError) {
-            for await (const out of streamProcessedOutputs(suppressedTransientCliError)) {
-              yield out;
-            }
-            suppressedTransientCliError = undefined;
-          }
-          if (suppressedTimeoutError) {
-            for await (const out of streamProcessedOutputs(suppressedTimeoutError)) {
-              yield out;
-            }
-            suppressedTimeoutError = undefined;
-          }
-          // F215: Clear malformed error — will be re-evaluated on retry.
-          if (suppressedMalformedError) {
-            suppressedMalformedError = undefined;
           }
         }
-
-        // F149: Map provider_signal / liveness_signal → system_info for frontend delivery
-        const deliveryMsg =
-          msg.type === 'provider_signal' || msg.type === 'liveness_signal'
-            ? { ...msg, type: 'system_info' as const }
-            : msg;
-        for await (const out of streamProcessedOutputs(deliveryMsg)) {
-          yield out;
-        }
-        if (
-          msg.type !== 'error' &&
-          msg.type !== 'done' &&
-          msg.type !== 'session_init' &&
-          msg.type !== 'provider_signal' &&
-          msg.type !== 'liveness_signal' &&
-          msg.type !== 'status'
-        ) {
-          // F215 hotfix: attemptHasContentOutput must only be set by replay-sensitive types
-          // (text / tool_use / tool_result). system_info (rate_limit_event / agent_loop /
-          // timeout_diagnostics) and other metadata MUST NOT prevent malformed recovery —
-          // they carry no model output that would be duplicated on retry.
-          // Bug: system_info from rate_limit_event precedes malformed turn → sets
-          // attemptHasContentOutput=true → malformed suppress guard !attemptHasContentOutput
-          // fails → seal/fresh-retry/46接力 all skipped → bare malformed error leaks to user.
-          if (isUserVisibleSessionOutput(msg)) {
-            attemptHasContentOutput = true;
-          }
-          // Substantive = real model output, excludes system_info (e.g. timeout_diagnostics).
-          if (msg.type !== 'system_info') {
-            attemptHasSubstantiveOutput = true;
-          }
-          // F118 AC-C6: Reset consecutive restore failure counter on successful content
-          if (deps.sessionChainStore && !didResetRestoreFailures) {
-            didResetRestoreFailures = true; // only reset once per invocation
-            try {
-              const activeRec = await deps.sessionChainStore.getActive(catId as CatId, threadId);
-              if (activeRec && (activeRec.consecutiveRestoreFailures ?? 0) > 0) {
-                await deps.sessionChainStore.update(activeRec.id, {
-                  consecutiveRestoreFailures: 0,
-                  updatedAt: Date.now(),
-                });
-              }
-            } catch {
-              /* best-effort reset */
-            }
-          }
+        iterExitedNormally = true;
+      } finally {
+        // #1186: Close the service generator so its finally block executes (lease.release()).
+        // This is the critical fix — without it, every manual-iteration break leaks a lease.
+        //
+        // Two paths:
+        // 1. Normal/retry break: generator is suspended at a yield — .return() resolves
+        //    immediately (sync finally in AcpAgentService runs lease.release() inline).
+        //    MUST await so lease is released before any retry attempt acquires a new one.
+        // 2. Abort/error: abortableNext() rejected while .next() is still pending.
+        //    Async generator operations are serialized — .return() queues behind the
+        //    pending .next() and may block until cancelSession resolves the underlying
+        //    stream. Awaiting would reintroduce the stuck behavior abortableNext was
+        //    designed to prevent. Fire-and-forget; the lease releases asynchronously
+        //    when the cancel propagates.
+        if (iterExitedNormally) {
+          await serviceIter.return?.();
+        } else {
+          serviceIter.return?.()?.catch(() => {});
         }
       }
 

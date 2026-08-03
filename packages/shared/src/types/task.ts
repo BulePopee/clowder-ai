@@ -7,6 +7,7 @@
  * kind=pr_tracking: automated PR monitoring tasks (merged from PrTrackingStore)
  */
 
+import type { BallResolveMode } from './ball-custody.js';
 import type { DispatchGateState } from './cross-thread-affordance.js';
 import type { CatId } from './ids.js';
 
@@ -54,16 +55,21 @@ export interface ConflictAutomationState {
 
 /** Review feedback automation state for pr_tracking tasks */
 export interface ReviewAutomationState {
+  /** @deprecated Combined cursor from schema v1. Inline and conversation IDs are incomparable. */
   readonly lastCommentCursor?: number;
+  readonly lastInlineCommentCursor?: number;
+  readonly lastConversationCommentCursor?: number;
   readonly lastDecisionCursor?: number;
   readonly lastNotifiedAt?: number;
+  /** Terminal PR state observed by ReviewFeedbackTaskSpec before CI lifecycle delivery. */
+  readonly prState?: 'merged' | 'closed';
 }
 
 /**
  * F140: what the cat is currently waiting on for this tracked PR — the wake intent, NOT the repo
  * type (a private PR can be 'merge'; an open-source PR can be 'review'). Decides whether a CI-pass
  * is noise (review-wait) or an action signal (merge-wait). Cats re-register to flip it.
- *   - review (default): waiting on review feedback → CI-pass stays silent (thread message only).
+ *   - review (default): waiting on review feedback → CI-pass is recorded state-only, with no connector message.
  *   - merge: waiting on CI-green to merge (own approved PR / outbound PR / owner-merge of another's
  *     PR) → CI-pass wakes (→ merge-gate).
  * CI fail / review feedback / conflict always wake under both intents.
@@ -75,6 +81,25 @@ export interface IssueAutomationState {
   readonly lastCommentCursor?: number;
   readonly lastNotifiedAt?: number;
   readonly issueState?: 'open' | 'closed';
+  /**
+   * F168 Phase B: dual-cursor delivery tracking.
+   * Tracks the max comment id routed to the thread or intentionally suppressed as an echo.
+   * Separate from lastCommentCursor (collection) so delivery retries don't re-append events.
+   * lastNotifiedAt is updated separately only after the owner wake is accepted.
+   * Undefined means "not yet managed by dual-cursor; default to lastCommentCursor".
+   */
+  readonly lastDeliveredCursor?: number;
+  /** Routed connector message whose owner wake has not yet reached durable admission. */
+  readonly pendingWake?: IssuePendingWake | null;
+}
+
+export interface IssuePendingWake {
+  readonly messageId: string;
+  readonly threadId: string;
+  readonly catId: string;
+  readonly content: string;
+  readonly deliveredCursor: number;
+  readonly closeTaskAfterWake?: boolean;
 }
 
 /** Composite automation state embedded in pr_tracking/issue_tracking tasks (#320 KD-14, F202-2D) */
@@ -89,6 +114,18 @@ export interface AutomationState {
   /** F202 Phase 2C: user-provided instructions appended to trigger messages. Task preference, not system override. */
   readonly trackingInstructions?: string;
 }
+
+export type TaskProbeSpec =
+  | {
+      readonly kind: 'http_get';
+      readonly url: string;
+      readonly expectStatus?: number;
+      readonly timeoutMs?: number;
+    }
+  | {
+      readonly kind: 'redis_exists';
+      readonly key: string;
+    };
 
 export interface TaskItem {
   readonly id: string;
@@ -116,6 +153,10 @@ export interface TaskItem {
   readonly sourceMessageId?: string;
   /** Source summary ID for traceability (4-A feature) */
   readonly sourceSummaryId?: string;
+  /** F233 PR4: machine-checkable condition for blocked-task auto-resolution. */
+  readonly probe?: TaskProbeSpec | null;
+  /** F233 PR4: what to do once the probe is satisfied. */
+  readonly resolveMode?: BallResolveMode | null;
 
   // --- F193 Phase E (dispatch gate) ---
 
@@ -135,6 +176,8 @@ export type CreateTaskInput = Pick<TaskItem, 'threadId' | 'title' | 'why' | 'cre
   userId?: string;
   sourceMessageId?: string;
   sourceSummaryId?: string;
+  probe?: TaskProbeSpec | null;
+  resolveMode?: BallResolveMode | null;
   // F193 Phase E (dispatch gate)
   relatedFeatureId?: string;
   /** Cat's current feature context — used to determine if detected F-IDs are "external" */
@@ -151,6 +194,10 @@ export type UpdateTaskInput = {
   status?: TaskStatus;
   why?: string;
   automationState?: AutomationState;
+  probe?: TaskProbeSpec | null;
+  resolveMode?: BallResolveMode | null;
+  /** Generic task move support. Callers that change threadId own the UX contract. */
+  threadId?: string;
   /** F193-E1 P1-4: allow patching dispatchGate on existing tasks */
   dispatchGate?: DispatchGateState;
 };

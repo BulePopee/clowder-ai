@@ -83,7 +83,8 @@ function emitGeminiEvents(proc, events) {
   proc.stdout.end();
 }
 
-function emitPlainText(proc, text, code = 0) {
+function emitPlainText(proc, text, code = 0, stderr = '') {
+  if (stderr) proc.stderr.write(stderr);
   proc.stdout.write(text);
   proc.stdout.once('finish', () => {
     emitProcessExit(proc, code, null);
@@ -461,7 +462,14 @@ describe('GeminiAgentService (gemini-cli adapter)', () => {
 // ===== antigravity-cli adapter tests =====
 
 describe('GeminiAgentService (antigravity-cli adapter)', () => {
-  test('spawns agy print mode with repo access and maps plain stdout to text', async () => {
+  test('spawns agy print mode with repo access and maps plain stdout to text', async (t) => {
+    const savedTimeout = process.env.CLI_TIMEOUT_MS;
+    process.env.CLI_TIMEOUT_MS = '0';
+    t.after(() => {
+      if (savedTimeout === undefined) delete process.env.CLI_TIMEOUT_MS;
+      else process.env.CLI_TIMEOUT_MS = savedTimeout;
+    });
+
     const proc = createMockProcess();
     const spawnFn = createMockSpawnFn(proc);
     const service = new GeminiAgentService({
@@ -490,7 +498,7 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     assert.ok(call.arguments[0] === 'agy' || call.arguments[0].endsWith('/agy'));
     const args = call.arguments[1];
     assert.ok(args.includes('--print'));
-    assert.ok(args.includes('--print-timeout'));
+    assert.equal(args.includes('--print-timeout'), false, 'manual-cancel-only default must not arm AGY print timeout');
     assert.equal(
       args.includes('--dangerously-skip-permissions'),
       false,
@@ -499,7 +507,402 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     assert.ok(args.includes('--add-dir'));
     assert.equal(args[args.indexOf('--add-dir') + 1], workDir);
     assert.equal(args[args.indexOf('--print') + 1], 'System identity\n\nSay hi');
-    assert.equal(args.includes('--model'), false, 'agy 1.0.1 has no verified --model flag');
+    const modelIdx = args.indexOf('--model');
+    assert.ok(modelIdx >= 0, 'agy now supports per-session --model and runtime should pass the cat model');
+    assert.equal(args[modelIdx + 1], 'Gemini 3.5 Flash (High)');
+  });
+
+  test('passes an explicitly configured positive CLI timeout to agy print mode', async (t) => {
+    const savedTimeout = process.env.CLI_TIMEOUT_MS;
+    process.env.CLI_TIMEOUT_MS = '1500';
+    t.after(() => {
+      if (savedTimeout === undefined) delete process.env.CLI_TIMEOUT_MS;
+      else process.env.CLI_TIMEOUT_MS = savedTimeout;
+    });
+
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-timeout-workdir-'));
+
+    const promise = collect(service.invoke('Say hi', { workingDirectory: workDir }));
+    emitPlainText(proc, 'AGY_OK\n');
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const timeoutIdx = args.indexOf('--print-timeout');
+    assert.ok(timeoutIdx >= 0, 'positive CLI_TIMEOUT_MS must preserve the opt-in AGY timeout');
+    assert.equal(args[timeoutIdx + 1], '2s');
+  });
+
+  test('normalizes legacy Gemini model ids before agy --model spawn', async () => {
+    for (const [legacyModelId, agySelector] of [
+      ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro (High)'],
+      ['gemini-2.5-pro', 'Gemini 3.1 Pro (High)'],
+      ['gemini-2.5-flash', 'Gemini 3.5 Flash (High)'],
+    ]) {
+      const proc = createMockProcess();
+      const spawnFn = createMockSpawnFn(proc);
+      const service = new GeminiAgentService({
+        spawnFn,
+        adapter: 'antigravity-cli',
+        model: legacyModelId,
+      });
+
+      const promise = collect(service.invoke('legacy model id should normalize before agy spawn'));
+      emitPlainText(proc, 'AGY_MODEL_NORMALIZED_OK\n');
+      const msgs = await promise;
+
+      const args = spawnFn.mock.calls[0].arguments[1];
+      const modelIdx = args.indexOf('--model');
+      assert.ok(modelIdx >= 0);
+      assert.equal(args[modelIdx + 1], agySelector);
+      const done = msgs.find((m) => m.type === 'done');
+      assert.equal(done?.metadata?.model, `${agySelector} (antigravity-cli --model)`);
+    }
+  });
+
+  test('F212: AGY empty plain-text completion yields user-visible silent_completion diagnostics', async () => {
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-empty-diagnostics-'));
+
+    try {
+      const promise = collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-empty' },
+        }),
+      );
+      emitPlainText(proc, '', 0);
+
+      const msgs = await promise;
+      assert.equal(
+        msgs.some((m) => m.type === 'text'),
+        false,
+        'empty AGY output must not create text',
+      );
+      assert.equal(
+        msgs.some((m) => m.type === 'error'),
+        false,
+        'empty AGY output is diagnostic, not provider error',
+      );
+      const diagnostic = msgs.find(
+        (m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+      );
+      assert.ok(diagnostic, 'empty AGY output must surface a user-visible cliDiagnostics panel');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-empty');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.homeMode, 'process_home');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.spawnCwdMode, 'cat_cafe_agy_cwd');
+      assert.match(String(diagnostic.metadata?.cliDiagnostics?.debugRef.spawnCwdKey), /^[a-f0-9]{16}$/);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F212: AGY empty stdout classifies actionable stderr before silent_completion', async () => {
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-empty-stderr-diagnostics-'));
+    const childHomePath = '/srv/agy/home';
+
+    try {
+      const promise = collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-empty-stderr' },
+          accountEnv: { HOME: childHomePath },
+        }),
+      );
+      emitPlainText(
+        proc,
+        '',
+        0,
+        [
+          `401 Unauthorized while reading ${childHomePath}: permission denied`,
+          'Open https://accounts.google.com/o/oauth2/auth#state=very-secret-state&access_token=ya29.AGYAccessToken',
+        ].join('\n'),
+      );
+
+      const msgs = await promise;
+      const err = msgs.find((m) => m.type === 'error');
+      assert.ok(err, 'empty stdout with actionable AGY stderr must surface as an error');
+      assert.equal(err.metadata?.cliDiagnostics?.reasonCode, 'auth_failed');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-empty-stderr');
+      assert.equal(
+        msgs.some((m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion'),
+        false,
+        'classified stderr must not be downgraded to silent_completion',
+      );
+      assert.ok(!JSON.stringify(err.metadata?.cliDiagnostics).includes(childHomePath), 'child HOME path must not leak');
+      assert.match(
+        JSON.stringify(err.metadata?.cliDiagnostics),
+        /FRAGMENT_REDACTED/,
+        'OAuth fragment must be explicitly redacted in the public diagnostics payload',
+      );
+      assert.ok(
+        !JSON.stringify(err.metadata?.cliDiagnostics).includes('very-secret-state'),
+        'OAuth fragment state must not leak',
+      );
+      assert.ok(
+        !JSON.stringify(err.metadata?.cliDiagnostics).includes('ya29.AGYAccessToken'),
+        'OAuth fragment access token must not leak',
+      );
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F212: AGY empty stdout with unclassified stderr stays silent_completion', async () => {
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-empty-unclassified-stderr-'));
+    const childHomePath = '/srv/agy/silent-home';
+
+    try {
+      const promise = collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-empty-unclassified-stderr' },
+          accountEnv: { HOME: childHomePath },
+        }),
+      );
+      emitPlainText(proc, '', 0, `debug: AGY completed without a text segment for ${childHomePath}\n`);
+
+      const msgs = await promise;
+      assert.equal(
+        msgs.some((m) => m.type === 'error'),
+        false,
+        'unclassified stderr should not be promoted to an AGY error',
+      );
+      const diagnostic = msgs.find(
+        (m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion',
+      );
+      assert.ok(diagnostic, 'unclassified empty AGY output must keep silent_completion diagnostics');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-empty-unclassified-stderr');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.homeMode, 'child_env_home');
+      assert.equal(diagnostic.metadata?.cliDiagnostics?.debugRef.spawnCwdMode, 'cat_cafe_agy_cwd');
+      assert.match(String(diagnostic.metadata?.cliDiagnostics?.debugRef.spawnCwdKey), /^[a-f0-9]{16}$/);
+      assert.ok(
+        !JSON.stringify(diagnostic.metadata?.cliDiagnostics).includes(childHomePath),
+        'child HOME path must not leak',
+      );
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F212: AGY auth-required output carries auth_failed cliDiagnostics without leaking OAuth URL', async () => {
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-auth-diagnostics-'));
+
+    try {
+      const promise = collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-auth' },
+        }),
+      );
+      emitPlainText(
+        proc,
+        [
+          'Authentication required. Please visit the URL to log in:',
+          'https://accounts.google.com/o/oauth2/auth?client_id=abc&state=very-secret-state',
+          'Waiting for authentication (timeout 600s)...',
+          'Error: authentication interrupted.',
+        ].join('\n'),
+        0,
+      );
+
+      const msgs = await promise;
+      const err = msgs.find((m) => m.type === 'error');
+      assert.ok(err, 'auth-required AGY output must surface as an error');
+      assert.equal(err.metadata?.cliDiagnostics?.reasonCode, 'auth_failed');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-auth');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.homeMode, 'process_home');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.spawnCwdMode, 'cat_cafe_agy_cwd');
+      assert.match(String(err.metadata?.cliDiagnostics?.debugRef.spawnCwdKey), /^[a-f0-9]{16}$/);
+      assert.ok(
+        !JSON.stringify(err.metadata?.cliDiagnostics).includes('accounts.google.com'),
+        'OAuth URL must not leak into cliDiagnostics payload',
+      );
+      assert.ok(!JSON.stringify(err.metadata?.cliDiagnostics).includes(workDir), 'worktree path must not leak');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F212: AGY nonzero cliError path rebuilds diagnostics from sanitized stderr', async () => {
+    const service = new GeminiAgentService({
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-exit-diagnostics-'));
+    const serverHomePath = process.env.HOME ?? '/tmp/cat-cafe-test-home';
+    const childHomePath = '/srv/agy/home';
+    const stderrText = [
+      `401 Unauthorized while reading ${childHomePath}/.config/agy/auth.json`,
+      'Open https://accounts.google.com/o/oauth2/auth#access_token=ya29.AGYAccessToken&state=very-secret-state',
+      'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
+    ].join('\n');
+    const stdoutText = 'stdout token=stdout-secret-should-redact\n';
+    const spawnCliOverride = async function* () {
+      yield {
+        __cliPlainText: true,
+        stdout: stdoutText,
+        stderr: stderrText,
+        exitCode: 1,
+        signal: null,
+        command: 'agy',
+      };
+      yield {
+        __cliError: true,
+        exitCode: 1,
+        signal: null,
+        message: 'CLI 异常退出 (code: 1, signal: none)',
+        command: '/usr/local/bin/agy',
+        cliDiagnostics: {
+          publicSummary: 'spawnCli generic diagnostics',
+          publicHint: 'spawnCli generic diagnostics',
+          reasonCode: 'auth_failed',
+          safeExcerpt: `${childHomePath}/.config/agy/auth.json stdout-secret-should-redact`,
+          excerptSource: 'classifier',
+          debugRef: {
+            command: '/usr/local/bin/agy',
+            exitCode: 1,
+            signal: null,
+          },
+        },
+      };
+    };
+
+    try {
+      const msgs = await collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-exit' },
+          accountEnv: { HOME: childHomePath },
+          spawnCliOverride,
+        }),
+      );
+      const err = msgs.find((m) => m.type === 'error');
+      assert.ok(err, 'nonzero AGY exit must surface as an error');
+      assert.equal(err.metadata?.cliDiagnostics?.reasonCode, 'auth_failed');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-exit');
+      assert.ok(err.metadata?.cliDiagnostics?.safeExcerpt, 'known fallback diagnostics must include safeExcerpt');
+
+      const diagnosticsPayload = JSON.stringify(err.metadata?.cliDiagnostics);
+      assert.doesNotMatch(diagnosticsPayload, /ya29\.AGYAccessToken/);
+      assert.doesNotMatch(diagnosticsPayload, /very-secret-state/);
+      assert.doesNotMatch(diagnosticsPayload, /eyJhbGciOiJIUzI1NiJ9/);
+      assert.ok(!diagnosticsPayload.includes(serverHomePath), 'server HOME path must not leak');
+      assert.ok(!diagnosticsPayload.includes(childHomePath), 'AGY child HOME path must not leak');
+      assert.doesNotMatch(diagnosticsPayload, /stdout token/, 'private stdout content must not be exposed');
+      assert.doesNotMatch(diagnosticsPayload, /stdout-secret-should-redact/);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('F212: AGY exit fallback does not classify from private stdout', async () => {
+    const service = new GeminiAgentService({
+      adapter: 'antigravity-cli',
+      model: 'gemini-3.5-flash',
+    });
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-exit-stdout-private-'));
+    const stdoutText = '401 Unauthorized while streaming private model output stdout-secret-should-not-classify\n';
+    const stderrText = 'debug: agy process exited after writing stdout';
+    const spawnCliOverride = async function* () {
+      yield {
+        __cliPlainText: true,
+        stdout: stdoutText,
+        stderr: stderrText,
+        exitCode: 1,
+        signal: null,
+        command: 'agy',
+      };
+      yield {
+        __cliError: true,
+        exitCode: 1,
+        signal: null,
+        message: 'CLI 异常退出 (code: 1, signal: none)',
+        command: '/usr/local/bin/agy',
+        cliDiagnostics: {
+          publicSummary: 'spawnCli generic diagnostics',
+          publicHint: 'spawnCli generic diagnostics',
+          reasonCode: 'auth_failed',
+          safeExcerpt: stdoutText,
+          excerptSource: 'classifier',
+          debugRef: {
+            command: '/usr/local/bin/agy',
+            exitCode: 1,
+            signal: null,
+          },
+        },
+      };
+    };
+
+    try {
+      const msgs = await collect(
+        service.invoke('Say hi', {
+          workingDirectory: workDir,
+          agyLogPathOverride: join(workDir, 'missing-agy.log'),
+          auditContext: { invocationId: 'inv-agy-private-stdout' },
+          spawnCliOverride,
+        }),
+      );
+      const err = msgs.find((m) => m.type === 'error');
+      assert.ok(err, 'nonzero AGY exit must surface as an error');
+      assert.notEqual(
+        err.metadata?.cliDiagnostics?.reasonCode,
+        'auth_failed',
+        'private stdout must not drive public exit diagnostics classification',
+      );
+      assert.equal(err.metadata?.cliDiagnostics?.safeExcerpt, undefined);
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-private-stdout');
+
+      const diagnosticsPayload = JSON.stringify(err.metadata?.cliDiagnostics);
+      assert.doesNotMatch(diagnosticsPayload, /stdout-secret-should-not-classify/);
+      assert.doesNotMatch(diagnosticsPayload, /private model output/);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   test('F210-H1b: yields trajectory progress side-channel while preserving final stdout text', async () => {
@@ -1235,6 +1638,69 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     }
   });
 
+  test('F212: AGY profiled empty stdout prioritizes classified stderr before missing-model fallback', async () => {
+    const proc = createMockProcess();
+    const profileRoot = mkdtempSync(join(tmpdir(), 'agy-service-profile-root-'));
+    const workDir = mkdtempSync(join(tmpdir(), 'agy-service-workdir-'));
+    const profileHomePath = join(profileRoot, 'gemini');
+    const spawnFn = mock.fn((_command, args) => {
+      const logPath = args[args.indexOf('--log-file') + 1];
+      writeFileSync(logPath, 'I0531 01:14:59.518377 server.go:755] Created conversation auth-before-model\n');
+      return proc;
+    });
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'Gemini 3.5 Flash (High)',
+      agyProfile: { enabled: true, homeRoot: profileRoot, model: 'Gemini 3.5 Flash (High)' },
+    });
+
+    try {
+      const promise = collect(
+        service.invoke('profile prompt', {
+          workingDirectory: workDir,
+          auditContext: { invocationId: 'inv-agy-profile-auth-stderr' },
+        }),
+      );
+      emitPlainText(
+        proc,
+        '',
+        0,
+        [
+          `401 Unauthorized while reading ${profileHomePath}/.config/agy/auth.json`,
+          'https://accounts.google.com/o/oauth2/auth#state=very-secret-state&access_token=ya29.AGYAccessToken',
+        ].join('\n'),
+      );
+
+      const msgs = await promise;
+      const err = msgs.find((m) => m.type === 'error');
+      assert.ok(err, 'profiled empty stdout with actionable AGY stderr must surface as an error');
+      assert.doesNotMatch(err.error, /selected model.*not verified/i);
+      assert.equal(err.metadata?.cliDiagnostics?.reasonCode, 'auth_failed');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.command, 'agy');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.invocationId, 'inv-agy-profile-auth-stderr');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.homeMode, 'agy_profile_home');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.spawnCwdMode, 'agy_profile_cwd');
+      assert.equal(err.metadata?.cliDiagnostics?.debugRef.profileId, 'gemini');
+      assert.match(String(err.metadata?.cliDiagnostics?.debugRef.spawnCwdKey), /^[a-f0-9]{16}$/);
+      assert.equal(
+        msgs.some((m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion'),
+        false,
+        'classified stderr must not be downgraded to silent_completion',
+      );
+
+      const diagnosticsPayload = JSON.stringify(err.metadata?.cliDiagnostics);
+      assert.match(diagnosticsPayload, /FRAGMENT_REDACTED/);
+      assert.doesNotMatch(diagnosticsPayload, new RegExp(profileHomePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.doesNotMatch(diagnosticsPayload, new RegExp(workDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.doesNotMatch(diagnosticsPayload, /very-secret-state/);
+      assert.doesNotMatch(diagnosticsPayload, /ya29\.AGYAccessToken/);
+    } finally {
+      rmSync(profileRoot, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   test('records the AGY-created conversation id on first turn', async () => {
     const proc = createMockProcess();
     const actualConversationId = 'e40c0f44-8e00-4b21-8ea4-7b17f182a134';
@@ -1344,7 +1810,7 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     assertFileRemoved(capturedLogPath, 'runtime-owned AGY log file must be removed after stale resume handling');
   });
 
-  test('reports per-call model override as unsupported without passing --model to agy', async () => {
+  test('passes per-call model override through agy --model', async () => {
     const proc = createMockProcess();
     const spawnFn = createMockSpawnFn(proc);
     const service = new GeminiAgentService({ spawnFn, adapter: 'antigravity-cli' });
@@ -1357,20 +1823,57 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     emitPlainText(proc, 'AGY_MODEL_BOUNDARY_OK\n');
 
     const msgs = await promise;
-    const info = msgs.find((m) => {
+    const unsupportedInfo = msgs.find((m) => {
       if (m.type !== 'system_info' || typeof m.content !== 'string') return false;
       return JSON.parse(m.content).type === 'antigravity_cli_model_override_unsupported';
     });
-    assert.ok(info, 'unsupported model override should be explicit system_info');
-    const payload = JSON.parse(info.content);
-    assert.equal(payload.requestedModel, 'gemini-override-should-not-be-used');
-    assert.match(payload.reason, /account-side selected model/);
+    assert.equal(unsupportedInfo, undefined, 'model override is now represented by runtime-owned --model');
 
     const done = msgs.find((m) => m.type === 'done');
+    assert.equal(done?.metadata?.model, 'gemini-override-should-not-be-used (antigravity-cli --model)');
     assert.equal(done?.metadata?.modelVerified, false);
+    assert.equal(done?.metadata?.diagnostics?.antigravityCli?.modelSelection, 'cli --model flag');
+    assert.equal(
+      done?.metadata?.diagnostics?.antigravityCli?.requestedModelOverride,
+      'gemini-override-should-not-be-used',
+    );
 
     const args = spawnFn.mock.calls[0].arguments[1];
-    assert.equal(args.includes('--model'), false);
+    const modelIdx = args.indexOf('--model');
+    assert.ok(modelIdx >= 0);
+    assert.equal(args[modelIdx + 1], 'gemini-override-should-not-be-used');
+  });
+
+  test('filters user AGY --model overrides so runtime-owned model wins', async () => {
+    const proc = createMockProcess();
+    const spawnFn = createMockSpawnFn(proc);
+    const service = new GeminiAgentService({
+      spawnFn,
+      adapter: 'antigravity-cli',
+      model: 'Gemini 3.5 Flash (High)',
+    });
+
+    const promise = collect(
+      service.invoke('user model override attempt', {
+        cliConfigArgs: ['--model Gemini 3.5 Flash (Low) --model=Gemini 3.1 Pro (Low) --add-dir /tmp/extra-agy-dir'],
+      }),
+    );
+    emitPlainText(proc, 'AGY_MODEL_FILTER_OK\n');
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const modelIndexes = args.flatMap((arg, index) => (arg === '--model' ? [index] : []));
+    assert.deepEqual(modelIndexes, [args.indexOf('--model')], 'only the runtime-owned --model flag should remain');
+    assert.equal(args[modelIndexes[0] + 1], 'Gemini 3.5 Flash (High)');
+    assert.equal(
+      args.some((arg) => arg.startsWith('--model=')),
+      false,
+      'equals-form user --model must be removed',
+    );
+    for (const strayModelToken of ['3.5', '3.1', 'Flash', 'Pro', '(Low)']) {
+      assert.equal(args.includes(strayModelToken), false, `user --model token ${strayModelToken} must be removed`);
+    }
+    assert.ok(args.includes('/tmp/extra-agy-dir'), 'unrelated user --add-dir should remain');
   });
 
   test('passes image inputs as local path hints and add-dir access, not native image flags', async () => {
@@ -1692,6 +2195,9 @@ describe('GeminiAgentService (antigravity-cli adapter)', () => {
     assert.equal(errorMsg.metadata.cliDiagnostics.reasonCode, 'network_error');
     assert.equal(errorMsg.metadata.cliDiagnostics.safeExcerpt, 'ETIMEDOUT after 30s');
     assert.match(errorMsg.metadata.cliDiagnostics.publicSummary, /网络/);
+    assert.equal(errorMsg.metadata.cliDiagnostics.debugRef.homeMode, 'process_home');
+    assert.equal(errorMsg.metadata.cliDiagnostics.debugRef.spawnCwdMode, 'cat_cafe_agy_cwd');
+    assert.match(String(errorMsg.metadata.cliDiagnostics.debugRef.spawnCwdKey), /^[a-f0-9]{16}$/);
   });
 });
 
@@ -1936,7 +2442,8 @@ describe('GeminiAgentService (adapter selection)', () => {
         `Expected agy command, got: ${spawnedCommand}`,
       );
       assert.ok(call.arguments[1].includes('--print'));
-      assert.equal(call.arguments[1].includes('--model'), false, 'default antigravity-cli must not pass --model');
+      const modelIdx = call.arguments[1].indexOf('--model');
+      assert.ok(modelIdx >= 0, 'default antigravity-cli should pass --model');
     } finally {
       if (previousAdapter === undefined) delete process.env.GEMINI_ADAPTER;
       else process.env.GEMINI_ADAPTER = previousAdapter;
@@ -2199,7 +2706,7 @@ test('emits wrapped thinking from local Gemini session snapshots when available'
   process.env.HOME = fakeHome;
 
   try {
-    const promise = collect(service.invoke('test thinking', { workingDirectory: '/home/user/clowder-ai' }));
+    const promise = collect(service.invoke('test thinking', { workingDirectory: '/home/user/Projects/clowder-ai' }));
 
     emitGeminiEvents(proc, [
       { type: 'init', session_id: 'gem-s1', model: 'gemini-3.1-pro-preview' },
@@ -2253,7 +2760,7 @@ test('skips Gemini local thinking hydration when the latest session content does
   process.env.HOME = fakeHome;
 
   try {
-    const promise = collect(service.invoke('test mismatch', { workingDirectory: '/home/user/clowder-ai' }));
+    const promise = collect(service.invoke('test mismatch', { workingDirectory: '/home/user/Projects/clowder-ai' }));
 
     emitGeminiEvents(proc, [
       { type: 'init', session_id: 'gem-s2', model: 'gemini-3.1-pro-preview' },

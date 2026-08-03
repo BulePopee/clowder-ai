@@ -1,4 +1,5 @@
 import { SYNC_ICON } from '@/components/community-panel-icons';
+import { useCatNameResolver } from '@/hooks/useCatNameResolver';
 
 const ISSUE_SECTION_OPTIONS = [
   { key: 'unreplied', label: '未回复' },
@@ -53,25 +54,30 @@ export function CommunityPanelFilters({
   loading,
   onSync,
 }: CommunityPanelFiltersProps) {
+  const resolveCatName = useCatNameResolver();
   return (
     <>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-cafe-subtle/40">
-        <select
+        <input
           data-testid="repo-filter"
           value={repo}
           onChange={(e) => onRepoChange(e.target.value)}
+          list="community-repo-suggestions"
+          placeholder="owner/repo"
           className="flex-1 text-xs bg-cafe-surface rounded px-2 py-1 border border-cafe-subtle/30 text-cafe-secondary"
-        >
+        />
+        <datalist id="community-repo-suggestions" data-testid="repo-suggestions">
           {repos.map((r) => (
             <option key={r} value={r}>
               {r}
             </option>
           ))}
-        </select>
+        </datalist>
         <button
           type="button"
           onClick={onSync}
-          disabled={loading}
+          disabled={loading || repo.trim() === ''}
+          data-testid="community-sync-button"
           className="flex items-center gap-1 text-micro text-cafe-interactive/60 hover:text-cafe-interactive transition-colors disabled:opacity-50"
           title="手动同步"
         >
@@ -101,7 +107,7 @@ export function CommunityPanelFilters({
           <option value="all">全部负责猫</option>
           {uniqueCats.map((c) => (
             <option key={c} value={c}>
-              @{c}
+              {resolveCatName(c)}
             </option>
           ))}
         </select>

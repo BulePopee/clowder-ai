@@ -111,6 +111,28 @@ interface MentionPattern {
   catId: CatId;
 }
 
+type MarkdownMentionMarker = '*' | '_';
+
+interface MarkdownMentionMarkerRun {
+  marker: MarkdownMentionMarker;
+  count: number;
+}
+
+/**
+ * #969: Zero-width Unicode characters that LLMs may insert before mentions.
+ * These are invisible in consoles but break line-start `@` detection.
+ */
+function isZeroWidthChar(code: number): boolean {
+  return (
+    code === 0x200b || // Zero Width Space
+    code === 0x200c || // Zero Width Non-Joiner
+    code === 0x200d || // Zero Width Joiner
+    code === 0xfeff || // Zero Width No-Break Space (BOM)
+    code === 0x00ad || // Soft Hyphen
+    code === 0x2060 // Word Joiner
+  );
+}
+
 function getRouteLineStart(line: string): number | null {
   let cursor = line.match(LINE_START_MENTION_PREFIX_RE)?.[0].length ?? 0;
 
@@ -122,6 +144,10 @@ function getRouteLineStart(line: string): number | null {
   }
 
   while (line[cursor] === ' ' || line[cursor] === '\t') cursor++;
+  // #969: Skip zero-width chars and markdown bold/italic markers before @
+  while (cursor < line.length && isZeroWidthChar(line.charCodeAt(cursor))) cursor++;
+  while (cursor < line.length && (line[cursor] === '*' || line[cursor] === '_')) cursor++;
+  while (cursor < line.length && isZeroWidthChar(line.charCodeAt(cursor))) cursor++;
   return line[cursor] === '@' ? cursor : null;
 }
 
@@ -260,6 +286,40 @@ function isMentionEndBoundary(message: string, end: number): boolean {
   return !HANDLE_CONTINUATION_RE.test(next);
 }
 
+function getOpeningRouteMarkdownMarkers(message: string, pos: number): MarkdownMentionMarkerRun | null {
+  let cursor = pos - 1;
+  while (cursor >= 0 && isZeroWidthChar(message.charCodeAt(cursor))) cursor--;
+
+  const marker = message[cursor];
+  if (marker !== '*' && marker !== '_') return null;
+
+  let count = 0;
+  while (cursor >= 0 && message[cursor] === marker) {
+    count++;
+    cursor--;
+  }
+  return { marker, count };
+}
+
+function skipClosingRouteMarkdownMarkers(
+  message: string,
+  end: number,
+  openingMarkers: MarkdownMentionMarkerRun | null,
+): number {
+  if (!openingMarkers) return end;
+
+  let cursor = end;
+  let remaining = openingMarkers.count;
+  while (remaining > 0) {
+    while (cursor < message.length && isZeroWidthChar(message.charCodeAt(cursor))) cursor++;
+    if (message[cursor] !== openingMarkers.marker) return end;
+    cursor++;
+    remaining--;
+  }
+  while (cursor < message.length && isZeroWidthChar(message.charCodeAt(cursor))) cursor++;
+  return cursor;
+}
+
 function isUrlishMentionToken(message: string, pos: number): boolean {
   const tokenStart =
     Math.max(message.lastIndexOf(' ', pos), message.lastIndexOf('\n', pos), message.lastIndexOf('\t', pos)) + 1;
@@ -291,19 +351,33 @@ function findMentionPatternAt(
   message: string,
   pos: number,
   patterns: readonly MentionPattern[],
+  normalizePatternEnd?: (end: number) => number,
 ): MentionPattern | null {
   for (const entry of patterns) {
-    if (!message.startsWith(entry.pattern, pos)) continue;
-    if (!isMentionEndBoundary(message, pos + entry.pattern.length)) continue;
+    const patternEnd = matchMentionPatternEnd(message, pos, entry.pattern);
+    if (patternEnd === null) continue;
+    const boundaryEnd = normalizePatternEnd ? normalizePatternEnd(patternEnd) : patternEnd;
+    if (!isMentionEndBoundary(message, boundaryEnd)) continue;
     return entry;
   }
   return null;
 }
 
+function matchMentionPatternEnd(message: string, pos: number, pattern: string): number | null {
+  let cursor = pos;
+  for (let i = 0; i < pattern.length; i++) {
+    while (cursor < message.length && isZeroWidthChar(message.charCodeAt(cursor))) cursor++;
+    if (message[cursor] !== pattern[i]) return null;
+    cursor++;
+  }
+  while (cursor < message.length && isZeroWidthChar(message.charCodeAt(cursor))) cursor++;
+  return cursor;
+}
+
 function hasDomainSuffixedMentionPatternAt(message: string, pos: number, patterns: readonly MentionPattern[]): boolean {
   return patterns.some((entry) => {
-    if (!message.startsWith(entry.pattern, pos)) return false;
-    const suffixStart = pos + entry.pattern.length;
+    const suffixStart = matchMentionPatternEnd(message, pos, entry.pattern);
+    if (suffixStart === null) return false;
     const suffixNext = message[suffixStart + 1];
     return message[suffixStart] === '.' && suffixNext !== undefined && DOMAIN_SUFFIX_START_RE.test(suffixNext);
   });
@@ -320,7 +394,10 @@ function recordRouteLineMentions(
   forEachRouteLineMentionCandidate(message, (_line, lineOffset, candidate) => {
     const position = lineOffset + candidate;
     if (isInsideSpan(position, excluded)) return;
-    const matched = findMentionPatternAt(message, position, patterns);
+    const openingMarkers = getOpeningRouteMarkdownMarkers(message, position);
+    const matched = findMentionPatternAt(message, position, patterns, (end) =>
+      skipClosingRouteMarkdownMarkers(message, end, openingMarkers),
+    );
     if (matched) recordResolvedMention(matched.catId, position, seenCats, mentions, routingWarnings);
   });
 }
@@ -345,6 +422,12 @@ function recordResolvedMention(
   if (!seenCats.has(key)) {
     seenCats.add(key);
     mentions.push({ catId, position });
+    return;
+  }
+
+  const existing = mentions.find((mention) => String(mention.catId) === key);
+  if (existing && position < existing.position) {
+    existing.position = position;
   }
 }
 
@@ -494,10 +577,26 @@ export interface AgentRouterOptions {
   worldContextProvider?: import('../../../../world/WorldContextProvider.js').WorldContextProvider;
   /** F093: World store for thread→world lookup */
   worldStore?: import('../../../../world/interfaces.js').IWorldStore;
+  /** F233 Phase B (B2): ball-custody ingest（注入 route deps 供旁路写球权事件，fail-open） */
+  ballCustody?: import('../../../../ball-custody/BallCustodyIngest.js').IBallCustodyIngest;
   /** F222: Frustration auto-issue store */
   frustrationIssueStore?: import('../../stores/ports/FrustrationIssueStore.js').IFrustrationIssueStore;
   /** F222: Pending request store — cancel burst detection */
   pendingRequestStore?: import('../../stores/ports/PendingRequestStore.js').IPendingRequestStore;
+  /** F229: Concierge config store for duty-cat岗位 prompt injection */
+  conciergeConfigStore?: import('../../../../concierge/ConciergeConfigStore.js').IConciergeConfigStore;
+  /** F229 KD-17: HandleMap store for concierge R1/R2→anchor mapping */
+  conciergeHandleMapStore?: import('../../../../concierge/ConciergeHandleMapStore.js').IConciergeHandleMapStore;
+  /** F229 Phase B: TriagePlan store for triage-plan marker → confirm/cancel card actions */
+  conciergeTriagePlanStore?: import('../../../../concierge/ConciergeTriagePlanStore.js').IConciergeTriagePlanStore;
+  /** F247 AC-B1c-3 PR-C: Cloud invoke bridge for @gpt-pro → ChatGPT dispatch */
+  cloudInvokeBridge?: import('../../cloud-bridge/types.js').ICloudInvokeBridge;
+  /** F254 B3: freshnessReinvokeCheck for invoke-single-cat terminal hook */
+  freshnessReinvokeCheck?: import('../invocation/invoke-single-cat.js').InvocationDeps['freshnessReinvokeCheck'];
+  /** F254 Phase C: Freshness state store for carrier tier persistence */
+  freshnessStateStore?: import('../../freshness/FreshnessInvocationStateStore.js').FreshnessInvocationStateStore;
+  /** F237 Phase 2 (AC-P2-8): Injection trace store for pipeline observability */
+  injectionTraceStore?: import('../../../../prompt-hooks/InjectionTraceStore.js').InjectionTraceStore;
 }
 
 /**
@@ -552,9 +651,24 @@ export class AgentRouter {
   /** F093 */
   private worldContextProvider?: import('../../../../world/WorldContextProvider.js').WorldContextProvider;
   private worldStore?: import('../../../../world/interfaces.js').IWorldStore;
+  private ballCustody?: import('../../../../ball-custody/BallCustodyIngest.js').IBallCustodyIngest;
   /** F222 */
   private frustrationIssueStore?: import('../../stores/ports/FrustrationIssueStore.js').IFrustrationIssueStore;
   private pendingRequestStore?: import('../../stores/ports/PendingRequestStore.js').IPendingRequestStore;
+  /** F229 */
+  private conciergeConfigStore?: import('../../../../concierge/ConciergeConfigStore.js').IConciergeConfigStore;
+  /** F229 KD-17 */
+  private conciergeHandleMapStore?: import('../../../../concierge/ConciergeHandleMapStore.js').IConciergeHandleMapStore;
+  /** F229 Phase B */
+  private conciergeTriagePlanStore?: import('../../../../concierge/ConciergeTriagePlanStore.js').IConciergeTriagePlanStore;
+  /** F247 AC-B1c-3 PR-C */
+  private cloudInvokeBridge?: import('../../cloud-bridge/types.js').ICloudInvokeBridge;
+  /** F254 B3 */
+  private freshnessReinvokeCheck?: import('../invocation/invoke-single-cat.js').InvocationDeps['freshnessReinvokeCheck'];
+  /** F254 Phase C */
+  private freshnessStateStore?: import('../../freshness/FreshnessInvocationStateStore.js').FreshnessInvocationStateStore;
+  /** F237 Phase 2 (AC-P2-8) */
+  private injectionTraceStore?: import('../../../../prompt-hooks/InjectionTraceStore.js').InjectionTraceStore;
   private speechMentionRe: RegExp;
 
   /**
@@ -655,8 +769,16 @@ export class AgentRouter {
     this.dismissTracker = options.dismissTracker;
     this.worldContextProvider = options.worldContextProvider;
     this.worldStore = options.worldStore;
+    this.ballCustody = options.ballCustody;
     this.frustrationIssueStore = options.frustrationIssueStore;
     this.pendingRequestStore = options.pendingRequestStore;
+    this.conciergeConfigStore = options.conciergeConfigStore;
+    this.conciergeHandleMapStore = options.conciergeHandleMapStore;
+    this.conciergeTriagePlanStore = options.conciergeTriagePlanStore;
+    this.cloudInvokeBridge = options.cloudInvokeBridge;
+    this.freshnessReinvokeCheck = options.freshnessReinvokeCheck;
+    this.freshnessStateStore = options.freshnessStateStore;
+    this.injectionTraceStore = options.injectionTraceStore;
   }
 
   refreshFromRegistry(agentRegistry: AgentRegistry): void {
@@ -879,6 +1001,9 @@ export class AgentRouter {
     const mentions: ParsedMention[] = [];
     const seenCats = new Set<string>();
     const routing_warnings: CatRoutingError[] = [];
+
+    // Route-line grammar handles markdown/list wrappers before the broader inline scan.
+    recordRouteLineMentions(lowerMessage, allPatterns, seenCats, mentions, routing_warnings);
 
     // Explicit @mentions are user-authored route tokens and may appear anywhere in prose.
     forEachUserMentionCandidate(lowerMessage, (pos) => {
@@ -1103,9 +1228,18 @@ export class AgentRouter {
         return this.applyThreadRoutingPolicy(thread, message, validPreferred);
       }
 
+      // F229: Concierge threads always route to the configured duty cat (preferredCats).
+      // Placed BEFORE findRecentUserMentionFallback: a previous @mention in the concierge
+      // thread must not re-route follow-up messages to a non-duty cat. The front-desk duty
+      // cat is the always-on responder; explicit @mentions in the current message (parsed
+      // above) still override this, but implicit mention carry-over does not.
+      if (thread?.threadKind === 'concierge' && validPreferred.length > 0) {
+        return this.applyThreadRoutingPolicy(thread, message, validPreferred);
+      }
+
       // F194 Phase Z5 AC-Z16: 优先用上一条 user message 的 mentions 作 fallback 候选集，
       // 不让 thread 里其他猫的发言（vision guard / cross-post）抢路由。
-      // 铲屎官原话："明明 at 的最后一只猫是 47 or 55 但是召唤出来的却是 46"
+      // co-creator原话："明明 at 的最后一只猫是 47 or 55 但是召唤出来的却是 46"
       const userMentionFallback = await this.findRecentUserMentionFallback(threadId);
       if (userMentionFallback && userMentionFallback.length > 0) {
         return this.applyThreadRoutingPolicy(thread, message, userMentionFallback);
@@ -1169,9 +1303,15 @@ export class AgentRouter {
         return this.applyThreadRoutingPolicy(thread, message, validPreferred);
       }
 
+      // F229: Concierge threads always route to the configured duty cat (preferredCats).
+      // Placed BEFORE findRecentUserMentionFallback — see matching comment in peekTargets.
+      if (thread?.threadKind === 'concierge' && validPreferred.length > 0) {
+        return this.applyThreadRoutingPolicy(thread, message, validPreferred);
+      }
+
       // F194 Phase Z5 AC-Z16: 优先用上一条 user message 的 mentions 作 fallback 候选集，
       // 不让 thread 里其他猫的发言（vision guard / cross-post）抢路由。
-      // 铲屎官原话："明明 at 的最后一只猫是 47 or 55 但是召唤出来的却是 46"
+      // co-creator原话："明明 at 的最后一只猫是 47 or 55 但是召唤出来的却是 46"
       const userMentionFallback = await this.findRecentUserMentionFallback(threadId);
       if (userMentionFallback && userMentionFallback.length > 0) {
         return this.applyThreadRoutingPolicy(thread, message, userMentionFallback);
@@ -1230,6 +1370,12 @@ export class AgentRouter {
         ...(this.signalArticleLookup ? { signalArticleLookup: this.signalArticleLookup } : {}),
         ...(this.guideSessionStore ? { guideSessionStore: this.guideSessionStore } : {}),
         ...(this.dismissTracker ? { dismissTracker: this.dismissTracker } : {}),
+        ...(this.conciergeConfigStore ? { conciergeConfigStore: this.conciergeConfigStore } : {}),
+        ...(this.conciergeHandleMapStore ? { conciergeHandleMapStore: this.conciergeHandleMapStore } : {}),
+        ...(this.conciergeTriagePlanStore ? { conciergeTriagePlanStore: this.conciergeTriagePlanStore } : {}),
+        ...(this.cloudInvokeBridge ? { cloudInvokeBridge: this.cloudInvokeBridge } : {}),
+        ...(this.freshnessReinvokeCheck ? { freshnessReinvokeCheck: this.freshnessReinvokeCheck } : {}),
+        ...(this.freshnessStateStore ? { freshnessStateStore: this.freshnessStateStore } : {}),
       },
       messageStore: this.messageStore,
       deliveryCursorStore: this.deliveryCursorStore,
@@ -1244,6 +1390,8 @@ export class AgentRouter {
       ...(this.worldStore ? { worldStore: this.worldStore } : {}),
       ...(this.frustrationIssueStore ? { frustrationIssueStore: this.frustrationIssueStore } : {}),
       ...(this.pendingRequestStore ? { pendingRequestStore: this.pendingRequestStore } : {}),
+      ...(this.ballCustody ? { ballCustody: this.ballCustody } : {}),
+      ...(this.injectionTraceStore ? { injectionTraceStore: this.injectionTraceStore } : {}),
     };
   }
 
@@ -1440,6 +1588,11 @@ export class AgentRouter {
        *  true/undefined = user-origin (eligible, default for backward compat).
        *  false = agent/connector-origin (A2A handoff) — suppress detection. */
       frustrationAutoIssueEligible?: boolean;
+      /** #949 P2: Whether verdict-without-pass warning fires at route end.
+       *  true/undefined = warn (default). false = suppress for connector-sourced flows only. */
+      verdictPassWarningEnabled?: boolean;
+      /** F254 B3: Freshness re-invoke enqueue for routing layer consumption */
+      freshnessReinvokeEnqueue?: RouteOptions['freshnessReinvokeEnqueue'];
     },
   ): AsyncIterable<AgentMessage> {
     const cleanMessage = stripIntentTags(message);
@@ -1540,6 +1693,7 @@ export class AgentRouter {
       queueHasQueuedMessages: options?.queueHasQueuedMessages,
       hasQueuedOrActiveAgentForCat: options?.hasQueuedOrActiveAgentForCat,
       deferA2AEnqueue: options?.deferA2AEnqueue,
+      freshnessReinvokeEnqueue: options?.freshnessReinvokeEnqueue,
       invocationController: options?.invocationController,
       trackA2ASlot: options?.trackA2ASlot,
       completeA2ASlots: options?.completeA2ASlots,
@@ -1554,6 +1708,10 @@ export class AgentRouter {
       // F222 P1: thread provenance flag so route-serial/route-parallel can gate detection
       ...(options?.frustrationAutoIssueEligible !== undefined
         ? { frustrationAutoIssueEligible: options.frustrationAutoIssueEligible }
+        : {}),
+      // #949 P2: connector-sourced verdict-pass warning suppression
+      ...(options?.verdictPassWarningEnabled !== undefined
+        ? { verdictPassWarningEnabled: options.verdictPassWarningEnabled }
         : {}),
     };
 

@@ -212,7 +212,7 @@ describe('ReviewFeedbackTaskSpec', () => {
 
     let cursorCommitted = false;
     const signal = {
-      task: mockTaskItem,
+      repairedTask: mockTaskItem,
       repoFullName: 'owner/repo',
       prNumber: 42,
       newComments: [{ id: 1, author: 'alice', body: 'hi', createdAt: '2026-01-01', commentType: 'conversation' }],
@@ -254,11 +254,17 @@ describe('ReviewFeedbackTaskSpec', () => {
       commitCursor: () => {},
     };
 
-    await spec.run.execute({ ...baseSignal, task: mockTaskItem }, 'pr:owner/repo#42');
+    await spec.run.execute({ ...baseSignal, repairedTask: mockTaskItem }, 'pr:owner/repo#42');
     await spec.run.execute(
       {
         ...baseSignal,
-        task: mockTask({ repoFullName: 'owner/repo', prNumber: 42, catId: 'codex', threadId: 'th-1', userId: 'u-1' }),
+        repairedTask: mockTask({
+          repoFullName: 'owner/repo',
+          prNumber: 42,
+          catId: 'codex',
+          threadId: 'th-1',
+          userId: 'u-1',
+        }),
       },
       'pr:owner/repo#42',
     );
@@ -286,7 +292,7 @@ describe('ReviewFeedbackTaskSpec', () => {
     });
 
     const signal = {
-      task: mockTaskItem,
+      repairedTask: mockTaskItem,
       repoFullName: 'owner/repo',
       prNumber: 42,
       newComments: [],
@@ -557,7 +563,7 @@ describe('ReviewFeedbackTaskSpec', () => {
 
     let cursorCommitted = false;
     const signal = {
-      task: mockTaskItem,
+      repairedTask: mockTaskItem,
       repoFullName: 'owner/repo',
       prNumber: 42,
       newComments: [],
@@ -773,7 +779,12 @@ describe('ReviewFeedbackTaskSpec', () => {
       { repoFullName: 'owner/repo', prNumber: 42, catId: 'opus', threadId: 'th-1', userId: 'u-1' },
       {
         automationState: {
-          review: { lastCommentCursor: 5, lastDecisionCursor: 3 },
+          review: {
+            lastCommentCursor: 5,
+            lastInlineCommentCursor: 5,
+            lastConversationCommentCursor: 5,
+            lastDecisionCursor: 3,
+          },
         },
       },
     );
@@ -801,6 +812,47 @@ describe('ReviewFeedbackTaskSpec', () => {
     assert.equal(result.workItems[0].signal.newDecisions.length, 0);
   });
 
+  it('PR #1181 P1: a later inline comment is not hidden by a higher conversation-comment cursor', async () => {
+    const { createReviewFeedbackTaskSpec } = await import('../../dist/infrastructure/email/ReviewFeedbackTaskSpec.js');
+    const { router } = stubRouter();
+    const taskWithLegacyCursor = mockTask(
+      { repoFullName: 'owner/repo', prNumber: 1128, catId: 'opus', threadId: 'th-1', userId: 'u-1' },
+      {
+        automationState: {
+          review: { lastCommentCursor: 5_015_000_000, lastDecisionCursor: 0 },
+        },
+      },
+    );
+    const seenCursors = [];
+    const spec = createReviewFeedbackTaskSpec({
+      taskStore: mockTaskStore([taskWithLegacyCursor]),
+      fetchComments: async (_repo, _pr, cursors) => {
+        seenCursors.push(cursors);
+        return [
+          {
+            id: 3_611_000_000,
+            author: 'maintainer',
+            body: 'later inline finding',
+            createdAt: '2026-07-19T13:49:00Z',
+            commentType: 'inline',
+          },
+        ];
+      },
+      fetchReviews: async () => [],
+      reviewFeedbackRouter: router,
+      log: noopLog,
+    });
+
+    const result = await spec.admission.gate({ taskId: spec.id, lastRunAt: null, tickCount: 1 });
+    assert.equal(result.run, true, 'independent inline cursor must admit the later inline comment');
+    assert.equal(result.workItems[0].signal.newComments[0].id, 3_611_000_000);
+    assert.deepEqual(
+      seenCursors[0],
+      { inline: 0, conversation: 0 },
+      'legacy combined cursors must migrate by replaying each independent source safely',
+    );
+  });
+
   it('gate prefers advanced persisted cursors over stale in-memory cursors (#406 sibling)', async () => {
     const { createReviewFeedbackTaskSpec } = await import('../../dist/infrastructure/email/ReviewFeedbackTaskSpec.js');
     const { router } = stubRouter();
@@ -808,7 +860,12 @@ describe('ReviewFeedbackTaskSpec', () => {
       { repoFullName: 'owner/repo', prNumber: 43, catId: 'opus', threadId: 'th-1', userId: 'u-1' },
       {
         automationState: {
-          review: { lastCommentCursor: 5, lastDecisionCursor: 3 },
+          review: {
+            lastCommentCursor: 5,
+            lastInlineCommentCursor: 5,
+            lastConversationCommentCursor: 5,
+            lastDecisionCursor: 3,
+          },
         },
       },
     );
@@ -816,9 +873,9 @@ describe('ReviewFeedbackTaskSpec', () => {
     const reviewSinceIds = [];
     const spec = createReviewFeedbackTaskSpec({
       taskStore: mockTaskStore([taskWithCursors]),
-      fetchComments: async (_repoFullName, _prNumber, sinceId) => {
-        commentSinceIds.push(sinceId);
-        return sinceId === 5
+      fetchComments: async (_repoFullName, _prNumber, cursors) => {
+        commentSinceIds.push(cursors);
+        return cursors.conversation === 5
           ? [{ id: 7, author: 'alice', body: 'new comment', createdAt: '2026-01-02', commentType: 'conversation' }]
           : [];
       },
@@ -836,11 +893,21 @@ describe('ReviewFeedbackTaskSpec', () => {
     assert.equal(first.run, true);
     await first.workItems[0].signal.commitCursor();
 
-    taskWithCursors.automationState = { review: { lastCommentCursor: 10, lastDecisionCursor: 9 } };
+    taskWithCursors.automationState = {
+      review: {
+        lastCommentCursor: 10,
+        lastInlineCommentCursor: 10,
+        lastConversationCommentCursor: 10,
+        lastDecisionCursor: 9,
+      },
+    };
 
     const second = await spec.admission.gate({ taskId: spec.id, lastRunAt: null, tickCount: 2 });
     assert.equal(second.run, false);
-    assert.deepEqual(commentSinceIds, [5, 10]);
+    assert.deepEqual(commentSinceIds, [
+      { inline: 5, conversation: 5 },
+      { inline: 10, conversation: 10 },
+    ]);
     assert.deepEqual(reviewSinceIds, [3, 9]);
   });
 
@@ -891,9 +958,17 @@ describe('ReviewFeedbackTaskSpec', () => {
 
     assert.equal(result.run, false);
     assert.equal(fetchCalled, false, 'merged PRs must not fetch review feedback');
+    assert.equal(store._patchCalls.length, 1);
+    assert.equal(store._patchCalls[0].taskId, mockTaskItem.id);
+    assert.deepEqual(store._patchCalls[0].patch.review, { prState: 'merged' });
     assert.equal(store._updateCalls.length, 1);
     assert.equal(store._updateCalls[0].taskId, mockTaskItem.id);
     assert.equal(store._updateCalls[0].input.status, 'done');
+    assert.equal(
+      store._updateCalls[0].input.automationState,
+      undefined,
+      'marking done must not replace existing automationState',
+    );
   });
 
   it('gate continues with fresh feedback when PR metadata lookup is unavailable', async () => {
@@ -966,7 +1041,12 @@ describe('ReviewFeedbackTaskSpec', () => {
       { repoFullName: 'owner/repo', prNumber: 42, catId: 'opus', threadId: 'th-1', userId: 'u-1' },
       {
         automationState: {
-          review: { lastCommentCursor: 10, lastDecisionCursor: 5 },
+          review: {
+            lastCommentCursor: 10,
+            lastInlineCommentCursor: 10,
+            lastConversationCommentCursor: 10,
+            lastDecisionCursor: 5,
+          },
         },
       },
     );
@@ -1004,13 +1084,14 @@ describe('ReviewFeedbackTaskSpec', () => {
     assert.equal(gateResult.run, true);
     await spec.run.execute(gateResult.workItems[0].signal, 'pr:owner/repo#42', {});
 
-    // Verify patchAutomationState was called with correct cursor values
-    assert.equal(store._patchCalls.length, 1);
-    const call = store._patchCalls[0];
-    assert.equal(call.taskId, mockTaskItem.id);
-    assert.equal(call.patch.review.lastCommentCursor, 7);
-    assert.equal(call.patch.review.lastDecisionCursor, 4);
-    assert.equal(typeof call.patch.review.lastNotifiedAt, 'number');
+    // Verify patchAutomationState was called with correct cursor values.
+    assert.ok(store._patchCalls.length >= 1, 'should have at least 1 patchAutomationState call');
+    const cursorCall = store._patchCalls.find((c) => c.patch.review?.lastCommentCursor !== undefined);
+    assert.ok(cursorCall, 'should have a cursor commit patch');
+    assert.equal(cursorCall.taskId, mockTaskItem.id);
+    assert.equal(cursorCall.patch.review.lastCommentCursor, 7);
+    assert.equal(cursorCall.patch.review.lastDecisionCursor, 4);
+    assert.equal(typeof cursorCall.patch.review.lastNotifiedAt, 'number');
   });
 
   it('echo-skip path also persists cursor to automationState (#406)', async () => {

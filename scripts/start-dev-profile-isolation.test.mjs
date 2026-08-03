@@ -1,12 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { buildWindowsStatus, resolveWindowsStatusPorts } from './lib/platform-status.mjs';
 
 const ROOT = resolve(process.cwd());
+const localRequire = createRequire(import.meta.url);
+
+function resolvePackageBin(packageName) {
+  const pkgPath = localRequire.resolve(`${packageName}/package.json`);
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.[packageName];
+  assert.equal(typeof bin, 'string', `${packageName} package.json must declare a bin entry`);
+  return resolve(dirname(pkgPath), bin);
+}
 
 function createSandbox(envFile = '') {
   const dir = mkdtempSync(join(tmpdir(), 'cc-start-dev-profile-'));
@@ -200,6 +210,38 @@ describe('start-dev strict profile isolation', () => {
     }
   });
 
+  it('bridges .env EMBED_ENABLED=1 to CAT_CAFE_SERVICE_EMBED_ENABLED for API lifecycle', () => {
+    // When .env sets EMBED_ENABLED=1, the script must export
+    // CAT_CAFE_SERVICE_EMBED_ENABLED=1 so the API startup reconciler knows to
+    // launch the embedding sidecar.  A previous bug (d93b109d8) wrote the
+    // source tag as "env/.env override" instead of ".env override", causing
+    // preserve_explicit_service_flag_for_api() to skip the bridge.
+    const sandboxDir = createSandbox('EMBED_ENABLED=1\n');
+    try {
+      const command = [
+        'source scripts/start-dev.sh --source-only',
+        'printf "SERVICE_EMBED=%s\\n" "${CAT_CAFE_SERVICE_EMBED_ENABLED:-unset}"',
+      ].join('; ');
+      const result = spawnSync('bash', ['-lc', command], {
+        cwd: sandboxDir,
+        env: {
+          PATH: process.env.PATH ?? '',
+          HOME: process.env.HOME ?? '',
+          TERM: process.env.TERM ?? 'xterm-256color',
+        },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(
+        result.stdout,
+        /SERVICE_EMBED=1/,
+        'EMBED_ENABLED=1 in .env must bridge to CAT_CAFE_SERVICE_EMBED_ENABLED=1',
+      );
+    } finally {
+      rmSync(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
   it('respects explicit EMBED_ENABLED=0 override even when EMBED_MODE=on', () => {
     const sandboxDir = createSandbox('EMBED_MODE=on\nEMBED_ENABLED=0\n');
     try {
@@ -231,6 +273,28 @@ describe('start-dev strict profile isolation', () => {
     }
   });
 
+  it('keeps API dev watcher away from build artifacts', () => {
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'packages/api/package.json'), 'utf8'));
+    const devScript = pkg.scripts.dev;
+
+    assert.match(devScript, /\btsx watch\b/, devScript);
+    assert.match(devScript, /--exclude "dist\/\*\*"/, devScript);
+    assert.match(devScript, /--exclude "\.\.\/shared\/dist\/\*\*"/, devScript);
+
+    const help = spawnSync(process.execPath, [resolvePackageBin('tsx'), 'watch', '--help'], {
+      cwd: resolve(ROOT, 'packages/api'),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: '',
+      },
+    });
+    assert.equal(help.status, 0, help.error?.message || help.stderr || help.stdout);
+    const helpText = `${help.stdout}\n${help.stderr}`;
+    assert.match(helpText, /--exclude <string>/);
+    assert.match(helpText, /--ignore <string>.*Deprecated: use --exclude/);
+  });
+
   it('marks opensource profile API launches WITHOUT --prod-web as NODE_ENV=development (dev:direct path)', () => {
     const sandboxDir = createSandbox();
     try {
@@ -256,6 +320,21 @@ describe('start-dev strict profile isolation', () => {
       });
       assert.equal(result.status, 0, result.stderr || result.stdout);
       assert.match(result.stdout, /NODE_ENV=production/, result.stdout);
+    } finally {
+      rmSync(sandboxDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs --prod-web API launches without the dev watcher even when no env wrapper injects it', () => {
+    const sandboxDir = createSandbox();
+    try {
+      const result = runApiLaunchCommand({
+        sandboxDir,
+        extraArgs: ['--prod-web'],
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /pnpm run start/, result.stdout);
+      assert.doesNotMatch(result.stdout, /pnpm run dev/, result.stdout);
     } finally {
       rmSync(sandboxDir, { recursive: true, force: true });
     }
@@ -296,7 +375,7 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
 
       assert.equal(result.exitCode, 0);
       assert.deepEqual(result.lines, [
-        'Cat Cafe Windows status',
+        'Clowder AI Windows status',
         `  api-${apiPort}: running (PID: 41)`,
         `  web-${webPort}: running (PID: 42)`,
       ]);
@@ -322,7 +401,7 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
 
       assert.equal(result.exitCode, 1);
       assert.deepEqual(result.lines, [
-        'Cat Cafe Windows status',
+        'Clowder AI Windows status',
         `  api-${apiPort}: running (PID: 41)`,
         `  web-${webPort}: not running (missing PID file)`,
       ]);
@@ -348,7 +427,7 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
 
       assert.equal(result.exitCode, 0);
       assert.deepEqual(result.lines, [
-        'Cat Cafe Windows status',
+        'Clowder AI Windows status',
         '  api-3112: running (PID: 51)',
         '  web-3111: running (PID: 52)',
       ]);
@@ -370,6 +449,50 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
     );
 
     assert.ok(source.includes('env: childEnv'), 'Windows spawn must use childEnv (which contains profile env vars)');
+  });
+
+  it('start-entry.mjs defaults direct Unix starts to connector gateway autostart off', () => {
+    const source = readFileSync(resolve(ROOT, 'scripts/start-entry.mjs'), 'utf8');
+    const unixDispatchStart = source.indexOf('// Unix: dispatch based on mode');
+    const startDirectBlock = source.slice(
+      source.indexOf("mode === 'start:direct'", unixDispatchStart),
+      source.indexOf("} else if (mode === 'dev:direct'", unixDispatchStart),
+    );
+    const devDirectBlock = source.slice(
+      source.indexOf("mode === 'dev:direct'", unixDispatchStart),
+      source.indexOf('} else {', source.indexOf("mode === 'dev:direct'", unixDispatchStart)),
+    );
+
+    assert.match(
+      source,
+      /CONNECTOR_GATEWAY_AUTOSTART:\s*'0'/,
+      'direct fail-closed helper must default CONNECTOR_GATEWAY_AUTOSTART=0',
+    );
+    assert.match(
+      startDirectBlock,
+      /directConnectorAutostartFailClosed/,
+      'start:direct must explicitly fail closed for preconfigured IM connector autostart',
+    );
+    assert.match(
+      devDirectBlock,
+      /directConnectorAutostartFailClosed/,
+      'dev:direct must explicitly fail closed for preconfigured IM connector autostart',
+    );
+  });
+
+  it('start-entry.mjs marks Unix runtime-worktree starts as no-watch before dispatch', () => {
+    const source = readFileSync(resolve(ROOT, 'scripts/start-entry.mjs'), 'utf8');
+    const unixDispatchStart = source.indexOf('// Unix: dispatch based on mode');
+    const runtimeStartBlock = source.slice(
+      source.indexOf("mode === 'start'", unixDispatchStart),
+      source.indexOf("} else if (mode === 'start:direct'", unixDispatchStart),
+    );
+
+    assert.match(
+      runtimeStartBlock,
+      /CAT_CAFE_DIRECT_NO_WATCH:\s*'1'/,
+      'pnpm start must mark runtime-worktree startup as no-watch before dispatching',
+    );
   });
 
   it('start-windows.ps1 clears inherited profile vars when strict mode is on', () => {
@@ -413,6 +536,73 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
     assert.ok(
       ps1.includes('CAT_CAFE_SERVICE_ASR_ENABLED') && ps1.includes('CAT_CAFE_SERVICE_TTS_ENABLED'),
       'start-windows.ps1 must preserve explicit .env sidecar flags for API startup lifecycle',
+    );
+  });
+
+  it('start-windows.ps1 fails closed when an external Redis URL is unreachable', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+
+    assert.match(
+      ps1,
+      /function Stop-RedisStartup\s*\{[\s\S]*?Get-Job -Name "redis-bootstrap"[\s\S]*?Stop-Job[\s\S]*?Remove-Job[\s\S]*?install\.ps1[\s\S]*?REDIS_URL[\s\S]*?-Memory[\s\S]*?exit 1[\s\S]*?\}/,
+      'the shared failure path must clean the bootstrap job, explain both persistent-storage repairs, and exit non-zero',
+    );
+
+    assert.match(
+      ps1,
+      /Stop-RedisStartup\s+-Reason\s+"Redis is not reachable at \$safeConfiguredRedisUrl\."/,
+      'an unreachable external REDIS_URL must stop startup instead of selecting memory storage',
+    );
+    assert.ok(
+      ps1.lastIndexOf('Stop-RedisStartup -Reason') < ps1.indexOf('Start-Job -Name "api"'),
+      'every Redis failure path must run before API startup',
+    );
+  });
+
+  it('start-windows.ps1 fails closed when managed Redis does not start', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+
+    assert.match(
+      ps1,
+      /Stop-RedisStartup\s+-Reason\s+"Managed Redis failed to start on port \$RedisPort\. Check \$redisLogFile for details\."/,
+      'a failed managed Redis start must stop startup before the API and web jobs are created',
+    );
+  });
+
+  it('start-windows.ps1 fails closed when no Redis binary is installed', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+
+    assert.match(
+      ps1,
+      /Stop-RedisStartup\s+-Reason\s+"Redis is not installed\."/,
+      'a missing Redis binary must stop startup instead of silently choosing volatile storage',
+    );
+  });
+
+  it('start-windows.ps1 fails closed on an unexpected Redis bootstrap exception', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+
+    assert.match(
+      ps1,
+      /catch\s*\{[\s\S]*?Write-InstallerExceptionDetails\s+-Context\s+"Redis start"[\s\S]*?Stop-RedisStartup\s+-Reason\s+"Redis bootstrap failed\."/,
+      'an unexpected Redis bootstrap exception must stop startup after printing its diagnostic details',
+    );
+  });
+
+  it('start-windows.ps1 enables volatile storage only for explicit -Memory mode', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+    const assignments = ps1.match(/\$env:MEMORY_STORE\s*=\s*["']1["']/g) ?? [];
+
+    assert.equal(assignments.length, 1, 'the launcher must have exactly one MEMORY_STORE opt-in');
+    assert.match(
+      ps1,
+      /if\s*\(\$Memory\)\s*\{[\s\S]*?Remove-Item Env:REDIS_URL[\s\S]*?\$env:MEMORY_STORE\s*=\s*["']1["'][\s\S]*?\}/,
+      'MEMORY_STORE=1 must be scoped to the explicit -Memory switch',
+    );
+    assert.doesNotMatch(
+      ps1,
+      /\$useRedis\s*=\s*\$false/,
+      'Redis failure branches must not converge on an implicit memory fallback',
     );
   });
 
@@ -470,6 +660,57 @@ describe('cross-platform pnpm-start profile propagation (#421)', () => {
     }
   });
 
+  it('start-windows.ps1 marks production Redis API job as global sidecar owner', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+    const overridesMatch = ps1.match(/\$runtimeEnvOverrides\s*=\s*@\{([^}]+)\}/s);
+    assert.ok(overridesMatch, 'start-windows.ps1 must define $runtimeEnvOverrides');
+    const overridesBlock = overridesMatch[1];
+
+    assert.match(
+      ps1,
+      /\$globalSidecarOwner\s*=\s*if\s*\(\$useRedis\s*-and\s*-not\s*\$Dev\)\s*\{\s*['"]1['"]\s*\}\s*else\s*\{\s*\$null\s*\}/,
+      'Windows production Redis starts must opt into global sidecar ownership, while -Dev/-Memory stay non-owner',
+    );
+    assert.match(
+      overridesBlock,
+      /CAT_CAFE_PROVISION_GLOBAL_SIDECAR\s*=\s*\$globalSidecarOwner/,
+      'runtimeEnvOverrides must pass CAT_CAFE_PROVISION_GLOBAL_SIDECAR into the API job after dotenv reload',
+    );
+  });
+
+  it('start-windows.ps1 marks production API job as connector runtime but leaves -Dev unmarked', () => {
+    const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
+    const overridesMatch = ps1.match(/\$runtimeEnvOverrides\s*=\s*@\{([^}]+)\}/s);
+    assert.ok(overridesMatch, 'start-windows.ps1 must define $runtimeEnvOverrides');
+    const overridesBlock = overridesMatch[1];
+
+    assert.match(
+      ps1,
+      /\$runtimeRootMarker\s*=\s*if\s*\(-not\s*\$Dev\)\s*\{\s*\$ProjectRoot\s*\}\s*else\s*\{\s*\$null\s*\}/,
+      'Windows production starts must mark the API job as runtime, while -Dev stays fail-closed',
+    );
+    assert.match(
+      overridesBlock,
+      /CAT_CAFE_RUNTIME_ROOT\s*=\s*\$runtimeRootMarker/,
+      'runtimeEnvOverrides must pass CAT_CAFE_RUNTIME_ROOT into the API job after dotenv reload',
+    );
+    assert.match(
+      ps1,
+      /\$workspaceRootMarker\s*=\s*if\s*\(-not\s*\$Dev\)\s*\{\s*[\s\S]*\$ProjectRoot[\s\S]*\}\s*else\s*\{\s*\$env:CAT_CAFE_WORKSPACE_ROOT\s*\}/,
+      'Windows production starts must default CAT_CAFE_WORKSPACE_ROOT to $ProjectRoot while preserving explicit env overrides',
+    );
+    assert.match(
+      ps1,
+      /\$workspaceRootMarker\s*=\s*if\s*\(-not\s*\$Dev\)\s*\{\s*if\s*\(\$env:CAT_CAFE_WORKSPACE_ROOT\)\s*\{\s*\$env:CAT_CAFE_WORKSPACE_ROOT\s*\}\s*else\s*\{\s*\$ProjectRoot\s*\}\s*\}/,
+      'Windows production CAT_CAFE_WORKSPACE_ROOT must prefer explicit $env override before falling back to $ProjectRoot (guards against accidental override-stripping refactors)',
+    );
+    assert.match(
+      overridesBlock,
+      /CAT_CAFE_WORKSPACE_ROOT\s*=\s*\$workspaceRootMarker/,
+      'runtimeEnvOverrides must pass CAT_CAFE_WORKSPACE_ROOT into the API job after dotenv reload',
+    );
+  });
+
   it('start-windows.ps1 assigns NODE_ENV inside the API Start-Job', () => {
     const ps1 = readFileSync(resolve(ROOT, 'scripts/start-windows.ps1'), 'utf8');
     const jobBlocks = ps1.match(/Start-Job[\s\S]*?-ScriptBlock\s*\{([\s\S]*?)\}\s*-ArgumentList/g);
@@ -522,6 +763,7 @@ describe('embedding sidecar startup guards', () => {
 describe('TTS sidecar startup guards', () => {
   it('preloads runtime voice assets during install and starts from cache', () => {
     const installScript = readFileSync(resolve(ROOT, 'scripts/services/tts-install.sh'), 'utf8');
+    const installPs1 = readFileSync(resolve(ROOT, 'scripts/services/tts-install.ps1'), 'utf8');
     const serverScript = readFileSync(resolve(ROOT, 'scripts/services/tts-server.sh'), 'utf8');
     const apiScript = readFileSync(resolve(ROOT, 'scripts/services/tts-api.py'), 'utf8');
 
@@ -532,6 +774,13 @@ describe('TTS sidecar startup guards', () => {
     assert.match(serverScript, /HF_HUB_OFFLINE/);
     assert.match(serverScript, /mlx-audio\|qwen3-clone/);
     assert.doesNotMatch(apiScript, /except Exception:\s*\n\s*pass\s+# Warmup may fail/);
+    assert.match(apiScript, /os\.environ\.get\(["']CAT_CAFE_HOME["']\)/);
+    assert.match(apiScript, /CAT_CAFE_HOME[\s\S]*piper-models/);
+    assert.doesNotMatch(apiScript, /Path\.home\(\)\s*\/\s*["']\.cat-cafe["']\s*\/\s*["']piper-models["']/);
+    assert.match(installScript, /HF_ENDPOINT/);
+    assert.match(installPs1, /HF_ENDPOINT/);
+    assert.doesNotMatch(installScript, /base="https:\/\/huggingface\.co\/rhasspy\/piper-voices/);
+    assert.doesNotMatch(installPs1, /\{ "https:\/\/huggingface\.co\/rhasspy\/piper-voices/);
   });
 });
 

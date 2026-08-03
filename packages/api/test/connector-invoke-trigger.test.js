@@ -290,7 +290,7 @@ describe('ConnectorInvokeTrigger', () => {
 
   it('updates InvocationRecord through lifecycle: userMessageId → running → succeeded', async () => {
     const trigger = createTrigger();
-    trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
+    await trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
     await waitForTrigger();
 
     // Check update sequence
@@ -396,7 +396,10 @@ describe('ConnectorInvokeTrigger', () => {
     };
 
     const trigger = createTrigger();
-    trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
+    await assert.rejects(
+      trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1'),
+      /create boom/,
+    );
     await waitForTrigger();
 
     // start() not called (F185: tryStartThread used instead)
@@ -408,6 +411,21 @@ describe('ConnectorInvokeTrigger', () => {
     // Should NOT call routeExecution
     assert.strictEqual(routerMock.calls.length, 0);
     // No unhandledRejection = test process survives
+  });
+
+  it('PR #1181 P1: dispatched is returned only after the invocation record is durable', async () => {
+    recordMock.store.create = async () => {
+      throw new Error('record store unavailable');
+    };
+
+    const trigger = createTrigger();
+    await assert.rejects(
+      trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-durable-admission'),
+      /record store unavailable/,
+    );
+
+    assert.strictEqual(routerMock.calls.length, 0, 'execution must not start without a durable invocation record');
+    assert.strictEqual(trackerMock.completes.length, 1, 'failed admission must release the pre-acquired controller');
   });
 
   it('R1-P1 regression: userMessageId backfill throws → tracker completes, status=failed', async () => {
@@ -613,8 +631,9 @@ describe('ConnectorInvokeTrigger', () => {
     assert.deepStrictEqual(deliverOrder, ['opus', 'codex'], 'Should deliver in cat order, not race order');
   });
 
-  it('cloud-P1: does NOT deliver empty reply for silent invocation (no text, no richBlocks)', async () => {
-    // Router yields only 'done' — no text, no richBlocks
+  it('cloud-P1: delivers fallback message for silent invocation (#873)', async () => {
+    // Router yields only 'done' — no text, no richBlocks.
+    // #873 fix: silent path now delivers a fallback so IM users aren't left hanging.
     const silentRouter = /** @type {any} */ ({
       async *routeExecution(userId, message, threadId, userMessageId, targetCats, intent, options) {
         yield {
@@ -639,7 +658,9 @@ describe('ConnectorInvokeTrigger', () => {
     trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
     await waitForTrigger();
 
-    assert.strictEqual(deliverCalls.length, 0, 'Should NOT deliver empty reply for silent cat');
+    assert.strictEqual(deliverCalls.length, 1, 'Should deliver fallback for silent invocation');
+    assert.strictEqual(deliverCalls[0].catId, 'opus');
+    assert.ok(deliverCalls[0].content, 'Fallback content should be non-empty');
   });
 
   it('cloud-P1: hanging deliver does not block tracker cleanup', async () => {
@@ -757,6 +778,117 @@ describe('ConnectorInvokeTrigger', () => {
       cleanupCalled,
       false,
       'cleanup must NOT run after hard delivery failure (R5-P1: preserve placeholder)',
+    );
+  });
+
+  it('R7: silent fallback late-success triggers deferred placeholder cleanup', async () => {
+    // Silent invocation (only done, no text) → deliver times out → deliver later succeeds
+    // → cleanupPlaceholders must be called on late-success (R7 fix).
+    const silentRouter = /** @type {any} */ ({
+      async *routeExecution(_u, _m, _t, _mid, targetCats, _i, _o) {
+        yield {
+          type: 'done',
+          catId: targetCats[0],
+          content: '',
+          timestamp: Date.now(),
+          metadata: { usage: { inputTokens: 0, outputTokens: 0 } },
+        };
+      },
+      async ackCollectedCursors() {},
+    });
+
+    /** @type {() => void} */
+    let resolveDeliver = () => {};
+    const deliverPromise = new Promise((r) => {
+      resolveDeliver = r;
+    });
+    const outboundHook = {
+      deliver: async () => {
+        await deliverPromise;
+      },
+    };
+    let cleanupCalled = false;
+    const streamingHook = {
+      async onStreamStart() {},
+      async onStreamChunk() {},
+      async onStreamEnd() {},
+      cleanupPlaceholders: async () => {
+        cleanupCalled = true;
+      },
+    };
+
+    const trigger = createTrigger({
+      router: silentRouter,
+      outboundHook,
+      streamingHook,
+      deliverTimeoutMs: 50,
+    });
+    trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
+
+    // Wait for timeout to fire
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(cleanupCalled, false, 'cleanup must NOT run immediately after silent timeout');
+
+    // Late-success: deliver finally resolves
+    resolveDeliver();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual(cleanupCalled, true, 'cleanup must run after silent late-success delivery (R7)');
+  });
+
+  it('R7: silent fallback late-failure must NOT trigger cleanup (preserve placeholder)', async () => {
+    // Silent invocation → deliver times out → deliver later rejects
+    // → cleanupPlaceholders must NOT be called (thinking card stays as fallback UX).
+    const silentRouter = /** @type {any} */ ({
+      async *routeExecution(_u, _m, _t, _mid, targetCats, _i, _o) {
+        yield {
+          type: 'done',
+          catId: targetCats[0],
+          content: '',
+          timestamp: Date.now(),
+          metadata: { usage: { inputTokens: 0, outputTokens: 0 } },
+        };
+      },
+      async ackCollectedCursors() {},
+    });
+
+    /** @type {(err: Error) => void} */
+    let rejectDeliver = () => {};
+    const deliverPromise = new Promise((_, rej) => {
+      rejectDeliver = rej;
+    });
+    const outboundHook = {
+      deliver: async () => {
+        await deliverPromise;
+      },
+    };
+    let cleanupCalled = false;
+    const streamingHook = {
+      async onStreamStart() {},
+      async onStreamChunk() {},
+      async onStreamEnd() {},
+      cleanupPlaceholders: async () => {
+        cleanupCalled = true;
+      },
+    };
+
+    const trigger = createTrigger({
+      router: silentRouter,
+      outboundHook,
+      streamingHook,
+      deliverTimeoutMs: 50,
+    });
+    trigger.trigger('thread-1', /** @type {any} */ ('opus'), 'user-1', 'msg', 'msg-1');
+
+    await new Promise((r) => setTimeout(r, 200));
+    assert.strictEqual(cleanupCalled, false, 'cleanup must NOT run after silent timeout');
+
+    // Late-failure: deliver rejects
+    rejectDeliver(new Error('connector down'));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.strictEqual(
+      cleanupCalled,
+      false,
+      'cleanup must NOT run after silent hard failure (R7: preserve placeholder)',
     );
   });
 

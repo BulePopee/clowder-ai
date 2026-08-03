@@ -14,7 +14,7 @@ import type { ReportingMode, RichCardBlock, ThreadProposal } from '@cat-cafe/sha
 // the default; Phase AC lets the approver override this before creation.
 const REPORTING_MODE_LABEL: Record<ReportingMode, string> = {
   none: 'autonomous（下游自治，无强制回报）',
-  'final-only': 'final-only（默认 · 完成时回报一次）',
+  'final-only': 'final-only（默认 · 自治推进，任务闭环后回报一次）',
   'state-transitions': 'state-transitions（每阶段边界回报）',
   'blocking-ack': 'blocking-ack（遇阻塞点等 ack）',
 };
@@ -43,7 +43,7 @@ export function buildProposalCardBlock(proposal: ThreadProposal): RichCardBlock 
     id: `proposal-${proposal.proposalId}`,
     kind: 'card',
     v: 1,
-    title: `📥 提议新建 thread：${proposal.title}`,
+    title: `提议新建 thread：${proposal.title}`,
     bodyMarkdown: proposal.reason,
     tone: 'info',
     fields,

@@ -51,11 +51,11 @@ export function buildMessageMap(messages: readonly StoredMessage[]): ReadonlyMap
 
 /**
  * Get display name for a message sender.
- * catId === null → user ("铲屎官"), otherwise look up catRegistry.
+ * catId === null → user ("co-creator"), otherwise look up catRegistry.
  * For variant cats (e.g. sonnet, opus-45), includes variantLabel to distinguish same-family members.
  */
 export function getSenderName(catId: string | null): string {
-  if (catId === null) return '铲屎官';
+  if (catId === null) return 'co-creator';
   const entry = catRegistry.tryGet(catId);
   const config = entry?.config;
   if (!config) return catId;
@@ -65,6 +65,39 @@ export function getSenderName(catId: string | null): string {
     return config.displayName;
   }
   return `${config.displayName}(${variantLabel})`;
+}
+
+/**
+ * Sanitize an external display name for safe embedding in prompt history
+ * headers. Strips characters that could break the `[HH:MM sender] content`
+ * format or spoof other speakers:
+ *  - Line breaks (`\n`, `\r`, U+2028, U+2029) → space
+ *  - Brackets (`[`, `]`) → removed
+ *  - C0/C1 control chars (U+0000–U+001F except \t, U+007F–U+009F) → removed
+ */
+function sanitizeDisplaySegment(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw
+    .replace(/[\n\r\u2028\u2029]/g, ' ')
+    .replace(/[[\]]/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    .trim();
+}
+
+/**
+ * Get display name for a connector source, including individual sender
+ * for group chat messages. Without sender info (p2p / system), falls
+ * back to source.label as before.
+ *
+ * Format: `SenderName via Label` (group) | `Label` (p2p/system)
+ */
+function getSourceDisplayName(source: { label: string; sender?: { id: string; name?: string } }): string {
+  const safeLabel = sanitizeDisplaySegment(source.label);
+  if (source.sender) {
+    const name = sanitizeDisplaySegment(source.sender.name || source.sender.id);
+    return `${name} via ${safeLabel}`;
+  }
+  return safeLabel;
 }
 
 /**
@@ -104,7 +137,7 @@ export function formatMessage(
   // export route) pass their own formatter to avoid leaking UTC into documents
   // whose header/footer use host-local time.
   const time = (options?.formatTime ?? formatPromptTime)(msg.timestamp);
-  const sender = msg.source ? msg.source.label : getSenderName(msg.catId);
+  const sender = msg.source ? getSourceDisplayName(msg.source) : getSenderName(msg.catId);
   // F52: Annotate cross-thread messages with source thread
   const crossPostTag = msg.extra?.crossPost?.sourceThreadId
     ? ` ← from thread:${msg.extra.crossPost.sourceThreadId.slice(0, 8)}`
@@ -116,7 +149,7 @@ export function formatMessage(
   if (msg.replyTo && options?.messageMap) {
     const parent = options.messageMap.get(msg.replyTo);
     if (parent) {
-      const parentSender = parent.source ? parent.source.label : getSenderName(parent.catId);
+      const parentSender = parent.source ? getSourceDisplayName(parent.source) : getSenderName(parent.catId);
       const sanitized = options?.sanitizeContent ? options.sanitizeContent(parent.content) : parent.content;
       const raw = sanitized.replaceAll('\n', ' ');
       const preview = raw.length > REPLY_PREVIEW_LENGTH ? `${raw.slice(0, REPLY_PREVIEW_LENGTH)}…` : raw;
@@ -143,7 +176,7 @@ export function assembleContext(messages: StoredMessage[], options?: ContextAsse
 
   // F117: exclude undelivered messages (queued/canceled) from prompt context
   // Also exclude system-generated messages (userId='system') — these are display-only
-  // (e.g. persisted error badges) and must not re-enter the prompt as "铲屎官" messages.
+  // (e.g. persisted error badges) and must not re-enter the prompt as "co-creator" messages.
   // #699: exclude briefing messages (origin='briefing') — non-routing internal artifacts
   // that must not appear in prompt context or reply preview maps (consistent with
   // isEligibleReplyParent and incremental context paths which already exclude them).

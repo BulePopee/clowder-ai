@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { formatCatDisplayName } from '@/lib/cat-display-name';
 import { UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 import { refreshMentionData } from '@/lib/mention-highlight';
 import { sortCatsByOrder } from '@/lib/sort-cats-by-order';
@@ -34,6 +35,21 @@ export interface CatData {
   cliConfigArgs?: string[];
   /** clowder-ai#340 P5: Model provider name (renamed from ocProviderName). */
   provider?: string;
+  /** F161: ACP transport config. Presence means this member runs through ACP instead of legacy CLI. */
+  acp?: {
+    command: string;
+    startupArgs: string[];
+    /** F161 Phase C: wire transport. 'stdio' (default) or 'httpstream'. */
+    transport?: 'stdio' | 'httpstream';
+    /** Required for httpstream until ACP publishes a stable HTTP transport spec. */
+    experimental?: boolean;
+    mcpWhitelist?: string[];
+    supportsMultiplexing?: boolean;
+    pool?: {
+      maxLiveProcesses?: number;
+      idleTtlMs?: number;
+    };
+  };
   contextBudget?: {
     maxPromptTokens: number;
     maxContextTokens: number;
@@ -47,6 +63,8 @@ export interface CatData {
   caution?: string | null;
   strengths?: string[];
   sessionChain?: boolean;
+  /** #712: MCP support toggle — when false, disables all MCP for this cat. */
+  mcpSupport?: boolean;
   /** F32-b P4: Human-readable variant label (e.g. "4.5", "Sonnet") */
   variantLabel?: string;
   /** F32-b P4: Whether this is the default variant for its breed */
@@ -164,9 +182,20 @@ async function refreshCatsNow(): Promise<FetchResult> {
 
 // ── Hook ────────────────────────────────────────────────
 
-export function useCatData() {
+interface UseCatDataOptions {
+  /**
+   * Subscribe to the shared registry without starting a request.
+   *
+   * Leaf presentation components use this mode because the Console shell already
+   * owns registry loading. It keeps name projection reactive without turning each
+   * label into an independent data-fetch boundary.
+   */
+  fetch?: boolean;
+}
+
+export function useCatData({ fetch: shouldFetch = true }: UseCatDataOptions = {}) {
   const [cats, setCats] = useState<CatData[]>(() => _cached ?? []);
-  const [isLoading, setIsLoading] = useState(!_cached);
+  const [isLoading, setIsLoading] = useState(shouldFetch && !_cached);
   const [hasFetched, setHasFetched] = useState(!!_cached);
   const [retryCount, setRetryCount] = useState(0);
 
@@ -182,6 +211,11 @@ export function useCatData() {
   }, []);
 
   useEffect(() => {
+    if (!shouldFetch) {
+      setCats(_cached ?? []);
+      setIsLoading(false);
+      return;
+    }
     if (_cached) {
       setCats(_cached);
       setIsLoading(false);
@@ -217,7 +251,7 @@ export function useCatData() {
       cancelled = true;
       clearTimeout(retryTimer);
     };
-  }, [retryCount]);
+  }, [retryCount, shouldFetch]);
 
   const refresh = useMemo(
     () => async () => {
@@ -254,7 +288,7 @@ export function useCatData() {
 
 /** Format cat name with optional variant label for multi-variant disambiguation */
 export function formatCatName(cat: { displayName: string; variantLabel?: string }): string {
-  return cat.variantLabel ? `${cat.displayName}（${cat.variantLabel}）` : cat.displayName;
+  return formatCatDisplayName(cat);
 }
 
 /** Get cached cats synchronously (for non-hook contexts). Returns empty if not loaded. */

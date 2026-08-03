@@ -13,6 +13,11 @@
 export type CliErrorReasonCode =
   | 'invalid_thinking_signature'
   | 'missing_rollout'
+  /** opencode (and similar) reports the resumed session no longer exists — stderr
+   *  `Error: Session not found` — e.g. the CLI session DB was recreated/cleared while
+   *  Redis still held the old cliSessionId. Self-heals by dropping the sessionId and
+   *  retrying fresh (invoke-single-cat Path A). clowder-ai#1038 */
+  | 'session_not_found'
   | 'model_not_found'
   | 'auth_failed'
   | 'quota_exceeded'
@@ -56,12 +61,20 @@ export interface CliDiagnostics {
    *  excerpt rendering on `KNOWN_EXCERPT_SOURCES.has(excerptSource)` — both protects
    *  malformed payloads (no source) AND fails closed when older clients see a future
    *  source value they don't recognize (e.g. a hypothetical 'pii_redacted'). */
-  excerptSource?: 'classifier' | 'cc_structured';
+  excerptSource?: 'classifier' | 'cc_structured' | 'unknown_raw';
   /** Debug correlation metadata — safe to expose */
   debugRef: {
     command: string;
     exitCode: number | null;
     signal: NodeJS.Signals | string | null;
     invocationId?: string;
+    /**
+     * Provider-owned, path-safe spawn context. Values must be finite enum/hash
+     * tokens only: no raw cwd/HOME/prompt/env values.
+     */
+    homeMode?: 'process_home' | 'child_env_home' | 'agy_profile_home';
+    spawnCwdMode?: 'cat_cafe_agy_cwd' | 'agy_profile_cwd';
+    spawnCwdKey?: string;
+    profileId?: string;
   };
 }

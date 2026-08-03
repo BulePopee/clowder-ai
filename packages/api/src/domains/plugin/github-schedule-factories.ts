@@ -14,6 +14,8 @@ import { dirname, join } from 'node:path';
 import type { CapabilitiesConfig } from '@cat-cafe/shared';
 import type { IConnectorThreadBindingStore } from '../../infrastructure/connectors/ConnectorThreadBindingStore.js';
 import type { ReconciliationDedup } from '../../infrastructure/connectors/github-repo-event/ReconciliationDedup.js';
+import type { RepoIssueComment } from '../../infrastructure/connectors/github-repo-event/RepoCommentPollTaskSpec.js';
+import { repoCommentPollTaskSpec } from '../../infrastructure/connectors/github-repo-event/RepoCommentPollTaskSpec.js';
 import type { GhIssueItem, GhPrItem } from '../../infrastructure/connectors/github-repo-event/RepoScanTaskSpec.js';
 import { createRepoScanTaskSpec } from '../../infrastructure/connectors/github-repo-event/RepoScanTaskSpec.js';
 import { createCiCdCheckTaskSpec } from '../../infrastructure/email/CiCdCheckTaskSpec.js';
@@ -34,11 +36,26 @@ import type {
   PrReviewDecision,
   ReviewFeedbackRouter,
 } from '../../infrastructure/email/ReviewFeedbackRouter.js';
-import type { ReviewFeedbackPrMetadata } from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
+import type {
+  PrFeedbackCommentCursors,
+  ReviewFeedbackPrMetadata,
+} from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
 import { createReviewFeedbackTaskSpec } from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
 import type { TaskSpec_P1 } from '../../infrastructure/scheduler/types.js';
 import type { ITaskStore } from '../cats/services/stores/ports/TaskStore.js';
+import type { IThreadStore } from '../cats/services/stores/ports/ThreadStore.js';
+import type { ICommunityEventLog } from '../community/CommunityEventLog.js';
+import type { ICommunityObjectStore } from '../community/CommunityObjectStore.js';
+import type { SlaPolicy } from '../community/community-sla-policy.js';
+import type { GitHubSnapshot } from '../community/reconciliation/CommunityReconciler.js';
+import { createCommunityReconcilerTaskSpec } from '../community/reconciliation/CommunityReconcilerTaskSpec.js';
+import type { CommunityReconciliationFindingStore } from '../community/reconciliation/CommunityReconciliationFindingStore.js';
 import type { ScheduleFactory, ScheduleFactoryDeps, ScheduleFactoryRegistry } from './ScheduleFactoryRegistry.js';
+
+/** Minimal projector interface for optional DI in factories — avoids importing concrete class. */
+interface IFactoryProjectorMin {
+  apply(event: Parameters<ICommunityEventLog['append']>[0]): Promise<void>;
+}
 
 /**
  * Typed dep extraction for GitHub schedule factories.
@@ -52,11 +69,16 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
   fetchPrStatus?: (repoFullName: string, prNumber: number) => Promise<CiPollResult | null>;
   conflictRouter: ConflictRouter;
   reviewFeedbackRouter: ReviewFeedbackRouter;
+  /** F140/#949 correction + F167 R2: `get` lets ReviewFeedbackTaskSpec repair already-rotated
+   *  PR tracking tasks; `create`/`updateThreadKind` are for RepoScanTaskSpec reconciliation. */
+  threadStore?: Pick<IThreadStore, 'create' | 'get' | 'updateThreadKind'>;
   invokeTrigger: ConnectorInvokeTrigger;
+  // Repo-scan connector delivery deps. Review-feedback delivery stays encapsulated
+  // in ReviewFeedbackRouter; no rotation/backlink delivery path exists post-#2394.
   checkMergeable: (repo: string, pr: number) => Promise<{ mergeState: string; headSha: string }>;
   autoExecutor: ConflictAutoExecutor;
   fetchPrMetadata: (repo: string, pr: number) => Promise<ReviewFeedbackPrMetadata | null>;
-  fetchComments: (repo: string, pr: number, sinceId?: number) => Promise<PrFeedbackComment[]>;
+  fetchComments: (repo: string, pr: number, cursors: PrFeedbackCommentCursors) => Promise<PrFeedbackComment[]>;
   fetchReviews: (repo: string, pr: number, sinceId?: number) => Promise<PrReviewDecision[]>;
   isEchoComment: (c: PrFeedbackComment) => boolean;
   isEchoReview: (r: PrReviewDecision) => boolean;
@@ -79,6 +101,39 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
   fetchIssueComments?: (repoFullName: string, issueNumber: number, sinceId?: number) => Promise<IssueComment[]>;
   fetchIssueState?: (repoFullName: string, issueNumber: number) => Promise<'open' | 'closed'>;
   isEchoIssueComment?: (c: IssueComment) => boolean;
+  /**
+   * F168 Phase A P1-1 fix: community event services.
+   * Provided by index.ts when Redis is available; factories thread them to spec constructors.
+   */
+  eventLog?: ICommunityEventLog;
+  projector?: IFactoryProjectorMin;
+  /**
+   * F168 Phase C C0.3: repo-level comment poller deps.
+   * Assembled in index.ts inside the same Redis+allowlist block as repo-scan, so
+   * availability is identical to repo-scan (redis-gated). Collection-only: needs the
+   * event log + a Redis-backed per-repo cursor (read/write), NOT the delivery deps
+   * (inbox / reconciliationDedup / bindingStore) that repo-scan uses.
+   */
+  fetchRepoComments?: (repo: string, sinceIso?: string) => Promise<RepoIssueComment[]>;
+  readRepoCommentCursor?: (repo: string) => Promise<string | undefined>;
+  writeRepoCommentCursor?: (repo: string, cursor: string) => Promise<void>;
+  /**
+   * F168 Phase D D3: community reconciler deps.
+   * Redis-gated (same as repo-scan): needs objectStore, findingStore, projector,
+   * and GitHub fetch functions for issue/PR state.
+   */
+  objectStore?: Pick<ICommunityObjectStore, 'get' | 'listSubjectKeys'>;
+  findingStore?: CommunityReconciliationFindingStore;
+  fetchGitHubIssueState?: (repo: string, number: number) => Promise<GitHubSnapshot | null>;
+  fetchGitHubPrState?: (repo: string, number: number) => Promise<GitHubSnapshot | null>;
+  reconcilerSlaPolicy?: SlaPolicy;
+  isReconcilerBaselineEstablished?: () => Promise<boolean>;
+  markReconcilerBaselineEstablished?: () => Promise<void>;
+  /**
+   * F208 Phase E AC-E2: distillation checkpoint for review-complete + feat-phase-close hooks.
+   * Optional — only available when wired in index.ts (always, since InMemoryOpportunityStore).
+   */
+  distillationCheckpoint?: import('../../infrastructure/distillation/DistillationCheckpoint.js').DistillationCheckpoint;
 }
 
 /** Cast ScheduleFactoryDeps to GitHubScheduleDeps with runtime validation */
@@ -133,11 +188,17 @@ const reviewFeedbackFactory: ScheduleFactory = {
       fetchComments: d.fetchComments,
       fetchReviews: d.fetchReviews,
       reviewFeedbackRouter: d.reviewFeedbackRouter,
+      threadStore: d.threadStore,
       invokeTrigger: d.invokeTrigger,
       log: d.log,
       isEchoComment: d.isEchoComment,
       isEchoReview: d.isEchoReview,
       isNoiseComment: d.isNoiseComment,
+      // F168 Phase A P1-1: thread community event services to spec
+      eventLog: d.eventLog,
+      projector: d.projector,
+      // F208 Phase E AC-E2: distillation checkpoint
+      distillationCheckpoint: d.distillationCheckpoint,
     }) as TaskSpec_P1;
   },
 };
@@ -169,12 +230,17 @@ const repoScanFactory: ScheduleFactory = {
       defaultUserId: d.defaultUserId,
       reconciliationDedup: d.reconciliationDedup,
       bindingStore: d.bindingStore,
+      // F167 R2 P1#2: wire threadStore so reconciliation can self-heal gate-keeping marker
+      threadStore: d.threadStore,
       deliverFn: d.deliverFn,
       deliveryDeps: d.deliveryDeps,
       invokeTrigger: d.invokeTrigger,
       fetchOpenPRs: d.fetchOpenPRs,
       fetchOpenIssues: d.fetchOpenIssues,
       log: d.log,
+      // F168 Phase A P1-1: thread community event services to spec
+      eventLog: d.eventLog,
+      projector: d.projector,
     }) as TaskSpec_P1;
   },
 };
@@ -199,18 +265,117 @@ const issueTrackingFactory: ScheduleFactory = {
       invokeTrigger: d.invokeTrigger,
       isEchoComment: d.isEchoIssueComment,
       log: d.log,
+      // F168 Phase B Task 4: thread community event log for dual-cursor collection/delivery.
+      // Without this, the dual-cursor code path in IssueCommentTaskSpec is never activated
+      // and Task 4 is dead code in production. eventLog is optional — TaskSpec falls back
+      // to single-cursor mode when undefined (backward-compat for tests without Redis).
+      eventLog: d.eventLog,
+      // Cloud R5 P1: thread projector so polled issue.commented events update the community
+      // projection immediately (awaiting_external → in_progress, lastExternalActivityAt) —
+      // matches ReviewFeedbackTaskSpec + repoScanFactory wiring.
+      projector: d.projector,
     }) as TaskSpec_P1;
   },
 };
 
-/** Register all 5 GitHub schedule factories in the registry. */
+/**
+ * F168 Phase C C0.3: repo-level comment poller — closes the un-routed issue
+ * follow-up-comment blind spot (IssueCommentTaskSpec only polls already-tracked
+ * issues). Collection-only (append + project, never delivers), redis-gated (same
+ * availability as repo-scan; deps assembled in the same index.ts block).
+ */
+const repoCommentPollFactory: ScheduleFactory = {
+  pluginId: 'github',
+  factoryId: 'github.repo-comment-poll',
+  createTaskSpec(instanceId, deps) {
+    const d = deps as GitHubScheduleDeps;
+    if (!d.repoAllowlist || d.repoAllowlist.length === 0) {
+      throw new Error(
+        '[F168-C0.3] github.repo-comment-poll requires repoAllowlist in deps. Set GITHUB_REPO_ALLOWLIST.',
+      );
+    }
+    if (!d.eventLog) {
+      throw new Error('[F168-C0.3] github.repo-comment-poll requires eventLog (community event log) in deps');
+    }
+    if (!d.fetchRepoComments || !d.readRepoCommentCursor || !d.writeRepoCommentCursor) {
+      throw new Error(
+        '[F168-C0.3] github.repo-comment-poll requires fetchRepoComments + readRepoCommentCursor + writeRepoCommentCursor (Redis-backed cursor) in deps',
+      );
+    }
+    return repoCommentPollTaskSpec({
+      id: instanceId,
+      eventLog: d.eventLog,
+      projector: d.projector,
+      fetchRepoComments: d.fetchRepoComments,
+      repoAllowlist: d.repoAllowlist,
+      readCursor: d.readRepoCommentCursor,
+      writeCursor: d.writeRepoCommentCursor,
+      log: d.log,
+    }) as TaskSpec_P1;
+  },
+};
+
+/**
+ * F168 Phase D D3: community reconciler — drift detection + SLA enforcement.
+ * Redis-gated (same availability as repo-scan).
+ */
+const communityReconcilerFactory: ScheduleFactory = {
+  pluginId: 'github',
+  factoryId: 'github.community-reconciler',
+  createTaskSpec(instanceId, deps) {
+    const d = deps as GitHubScheduleDeps;
+    if (!d.objectStore || !d.eventLog || !d.projector || !d.findingStore) {
+      throw new Error(
+        '[F168-D3] github.community-reconciler requires objectStore, eventLog, projector, findingStore in deps',
+      );
+    }
+    if (!d.fetchGitHubIssueState || !d.fetchGitHubPrState) {
+      throw new Error(
+        '[F168-D3] github.community-reconciler requires fetchGitHubIssueState and fetchGitHubPrState in deps',
+      );
+    }
+    if (!d.isReconcilerBaselineEstablished || !d.markReconcilerBaselineEstablished) {
+      throw new Error(
+        '[F168-D3] github.community-reconciler requires isReconcilerBaselineEstablished and markReconcilerBaselineEstablished in deps',
+      );
+    }
+    return createCommunityReconcilerTaskSpec({
+      id: instanceId,
+      objectStore: d.objectStore,
+      eventLog: d.eventLog,
+      projector: d.projector,
+      findingStore: d.findingStore,
+      fetchIssueState: d.fetchGitHubIssueState,
+      fetchPrState: d.fetchGitHubPrState,
+      slaPolicy: d.reconcilerSlaPolicy,
+      isBaselineEstablished: d.isReconcilerBaselineEstablished,
+      markBaselineEstablished: d.markReconcilerBaselineEstablished,
+      log: d.log,
+    }) as TaskSpec_P1;
+  },
+};
+
+/** Register all 7 GitHub schedule factories in the registry. */
 export function registerGitHubScheduleFactories(registry: ScheduleFactoryRegistry): void {
   registry.register(cicdCheckFactory);
   registry.register(conflictCheckFactory);
   registry.register(reviewFeedbackFactory);
   registry.register(repoScanFactory);
   registry.register(issueTrackingFactory);
+  registry.register(repoCommentPollFactory);
+  registry.register(communityReconcilerFactory);
 }
+
+/** Exported for testing — allows direct factory lookup without constructing a full registry. */
+export const githubScheduleFactories = [
+  cicdCheckFactory,
+  conflictCheckFactory,
+  reviewFeedbackFactory,
+  repoScanFactory,
+  issueTrackingFactory,
+  repoCommentPollFactory,
+  communityReconcilerFactory,
+] as const;
 
 // --- F202-2B Migration helpers (P2-1 fix) ---
 
@@ -244,9 +409,43 @@ export function markGitHubScheduleMigrationDone(projectRoot: string): void {
   writeFileSync(markerPath, new Date().toISOString());
 }
 
+/**
+ * F168 C0.3 (cloud review R2 P1): one-time marker so backfillMissingGitHubScheduleEntries
+ * runs exactly once per install. After it has run, a TARGET resource the operator later
+ * disables is not resurrected on the next startup.
+ */
+const GITHUB_SCHEDULE_BACKFILL_MARKER_PATH = '.cat-cafe/f168-github-schedule-backfilled';
+
+export function hasGitHubScheduleBackfillRun(projectRoot: string): boolean {
+  return existsSync(join(projectRoot, GITHUB_SCHEDULE_BACKFILL_MARKER_PATH));
+}
+
+export function markGitHubScheduleBackfillDone(projectRoot: string): void {
+  const markerPath = join(projectRoot, GITHUB_SCHEDULE_BACKFILL_MARKER_PATH);
+  mkdirSync(dirname(markerPath), { recursive: true });
+  writeFileSync(markerPath, new Date().toISOString());
+}
+
 /** Repo-scan env deps that must be present for the schedule to actually run. */
 const REPO_SCAN_REQUIRED_ENV = ['GITHUB_REPO_ALLOWLIST', 'GITHUB_REPO_INBOX_CAT_ID'] as const;
 const REPO_SCAN_PENDING_REASON = 'deps-unavailable' as const;
+/**
+ * F168 C0.3: schedule resources whose factory construction needs Redis (+ repo env).
+ * repo-scan and repo-comment-poll are assembled together in index.ts behind the same
+ * `ghRepoAllowlist && ghInboxCatId && redisClient` guard, so their migration-time
+ * availability is identical. Gated as pending until deps exist to avoid a ghost
+ * "enabled" capability with no running task (P2-1).
+ */
+const REDIS_GATED_GITHUB_RESOURCES = new Set(['repo-scan', 'repo-comment-poll', 'community-reconciler']);
+/**
+ * F168 C0.3 (cloud review R2 P1): schedule resources THIS version introduces and must
+ * backfill into existing installs (the one-time migration already ran for them, so it
+ * won't re-run). Deliberately excludes legacy resources — backfilling those would
+ * resurrect a schedule the operator disabled before upgrading (disable physically removes
+ * the capability row via removeCapabilityEntry). When a future version adds another
+ * schedule, add it here AND bump the backfill marker so it backfills exactly once.
+ */
+const BACKFILL_TARGET_RESOURCES = new Set(['repo-comment-poll', 'community-reconciler']);
 const LEGACY_GITHUB_SCHEDULE_TASK_IDS = new Map([
   ['cicd-check', 'cicd-check'],
   ['conflict-check', 'conflict-check'],
@@ -329,7 +528,7 @@ export function buildGitHubMigrationEntries(
   return manifest.resources.flatMap((r) => {
     const resourceName = r.name;
     if (r.type !== 'schedule' || !resourceName) return [];
-    if (resourceName !== 'repo-scan') return [buildGitHubMigrationEntry(resourceName)];
+    if (!REDIS_GATED_GITHUB_RESOURCES.has(resourceName)) return [buildGitHubMigrationEntry(resourceName)];
     if (hasRepoScanDeps) return [buildGitHubMigrationEntry(resourceName)];
     return [
       buildGitHubMigrationEntry(resourceName, {
@@ -346,26 +545,98 @@ export function promotePendingGitHubMigrationEntries(
   env: Record<string, string | undefined> = process.env,
   opts?: { repoScanDepsAvailable?: boolean },
 ): { changed: boolean; config: CapabilitiesConfig } {
-  const manifestHasRepoScan = manifest.resources.some((r) => r.type === 'schedule' && r.name === 'repo-scan');
-  if (!manifestHasRepoScan || !hasRepoScanEnvDeps(env) || opts?.repoScanDepsAvailable === false) {
+  const pendingResourceNames = manifest.resources
+    .filter((r) => r.type === 'schedule' && !!r.name && REDIS_GATED_GITHUB_RESOURCES.has(r.name))
+    .map((r) => r.name as string);
+  if (pendingResourceNames.length === 0 || !hasRepoScanEnvDeps(env) || opts?.repoScanDepsAvailable === false) {
     return { changed: false, config };
   }
 
   const next = structuredClone(config);
-  const repoScan = next.capabilities.find(
-    (entry) =>
-      entry.id === 'plugin:github:repo-scan' &&
-      entry.type === 'schedule' &&
-      entry.pluginId === 'github' &&
-      (entry as GitHubMigrationScheduleEntry).migrationPendingReason === REPO_SCAN_PENDING_REASON,
-  ) as GitHubMigrationScheduleEntry | undefined;
+  let changed = false;
+  for (const resourceName of pendingResourceNames) {
+    const entry = next.capabilities.find(
+      (e) =>
+        e.id === `plugin:github:${resourceName}` &&
+        e.type === 'schedule' &&
+        e.pluginId === 'github' &&
+        (e as GitHubMigrationScheduleEntry).migrationPendingReason === REPO_SCAN_PENDING_REASON,
+    ) as GitHubMigrationScheduleEntry | undefined;
+    if (!entry) continue;
+    entry.enabled = true;
+    entry.scheduleTaskId = entry.scheduleTaskId ?? `schedule:github:${resourceName}`;
+    delete entry.migrationPendingReason;
+    changed = true;
+  }
+  return { changed, config: changed ? next : config };
+}
 
-  if (!repoScan) return { changed: false, config };
+/**
+ * F168 C0.3 (cloud review): backfill the NEW manifest schedule resource(s) this version
+ * introduces (BACKFILL_TARGET_RESOURCES) into existing installs.
+ *
+ * shouldRunGitHubScheduleMigration returns false as soon as ANY github schedule entry
+ * exists, so a NEW manifest resource (repo-comment-poll, added after the one-time migration
+ * already ran) would never be added — the poller silently never starts and the un-routed
+ * comment blind spot is never closed on existing installs.
+ *
+ * Three guards prevent resurrecting disabled schedules (disable physically removes the
+ * capability row via removeCapabilityEntry, so "absent" alone is NOT safe to recreate —
+ * cloud review R2/R3 P1). Complete backfill precondition: plugin-active ∧ first-run ∧
+ * TARGET ∧ absent. Failure-mode audit of every "absent" cause:
+ *  1. plugin-active (R3 P1): only backfill when ≥1 github schedule row exists. If the
+ *     operator disabled the whole GitHub plugin before upgrading, capabilities has NO
+ *     github rows but the f202 marker still suppresses migration — backfilling would
+ *     resurrect part of a disabled plugin. (Also covers the all-schedules-disabled case.)
+ *  2. TARGET only (R2 P1): never backfill legacy resources — a legacy schedule disabled
+ *     before upgrading is never re-created.
+ *  3. one-time via opts.alreadyBackfilled (R2 P1): a TARGET resource disabled AFTER backfill
+ *     ran is not resurrected (backfill never runs again; a TARGET is new so it can't have
+ *     been disabled before its first backfill).
+ * Redis-gated resources are backfilled as pending until deps are available, then enabled by
+ * promotePendingGitHubMigrationEntries.
+ */
+export function backfillMissingGitHubScheduleEntries(
+  config: CapabilitiesConfig,
+  manifest: { resources: { type: string; name?: string }[] },
+  env: Record<string, string | undefined> = process.env,
+  opts?: { repoScanDepsAvailable?: boolean; alreadyBackfilled?: boolean },
+): { changed: boolean; config: CapabilitiesConfig } {
+  // Guard 3 — one-time (cloud R2 P1): once backfill has run, never run again.
+  if (opts?.alreadyBackfilled) return { changed: false, config };
 
-  repoScan.enabled = true;
-  repoScan.scheduleTaskId = repoScan.scheduleTaskId ?? 'schedule:github:repo-scan';
-  delete repoScan.migrationPendingReason;
-  return { changed: true, config: next };
+  // Guard 1 — plugin-active (cloud R3 P1): if the GitHub plugin was disabled before this
+  // upgrade, capabilities has no github schedule rows (physically removed) while the f202
+  // marker still suppresses migration. Backfilling would resurrect a disabled plugin. Only
+  // backfill when the plugin is active (≥1 github schedule row exists).
+  const githubPluginActive = config.capabilities.some((c) => c.type === 'schedule' && c.pluginId === 'github');
+  if (!githubPluginActive) return { changed: false, config };
+
+  const existingIds = new Set(config.capabilities.map((c) => c.id));
+  const hasRepoScanDeps = hasRepoScanEnvDeps(env) && opts?.repoScanDepsAvailable !== false;
+
+  const missing = manifest.resources.flatMap((r) => {
+    const resourceName = r.name;
+    if (r.type !== 'schedule' || !resourceName) return [];
+    // Only backfill resources this version introduces — never legacy ones (a legacy
+    // schedule disabled before upgrade is physically removed; backfilling resurrects it).
+    if (!BACKFILL_TARGET_RESOURCES.has(resourceName)) return [];
+    if (existingIds.has(`plugin:github:${resourceName}`)) return []; // already present
+    if (!REDIS_GATED_GITHUB_RESOURCES.has(resourceName)) return [buildGitHubMigrationEntry(resourceName)];
+    if (hasRepoScanDeps) return [buildGitHubMigrationEntry(resourceName)];
+    return [
+      buildGitHubMigrationEntry(resourceName, {
+        enabled: false,
+        migrationPendingReason: REPO_SCAN_PENDING_REASON,
+      }),
+    ];
+  });
+
+  if (missing.length === 0) return { changed: false, config };
+  return {
+    changed: true,
+    config: { ...config, capabilities: [...config.capabilities, ...missing] },
+  };
 }
 
 function resourceNameFromMigrationEntry(entry: Pick<GitHubMigrationScheduleEntry, 'id' | 'scheduleTaskId'>): string {

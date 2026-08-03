@@ -27,6 +27,8 @@ export interface TokenUsage {
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   costUsd?: number;
+  /** True when costUsd is estimated from a pricing table, not reported by CLI */
+  costEstimated?: boolean;
   durationMs?: number;
   durationApiMs?: number;
   numTurns?: number;
@@ -228,6 +230,13 @@ export interface ConnectorSourceData {
   sender?: { id: string; name?: string };
 }
 
+/** Structured identity-bearing notice retained for reactive render-time projection. */
+export interface SystemInfoProjection {
+  readonly v: 1;
+  readonly payload: Record<string, unknown>;
+  readonly fallbackCatId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   type: 'user' | 'assistant' | 'system' | 'summary' | 'connector';
@@ -274,11 +283,14 @@ export interface ChatMessage {
     stream?: {
       invocationId?: string;
       turnInvocationId?: string;
+      textMode?: 'append' | 'replace';
       cliStdout?: string;
       speechContent?: string;
     };
     /** F098-C1: Explicit target cats from post_message API */
     targetCats?: string[];
+    /** #814: True when message originated from an explicit post_message callback (not stream duplicate) */
+    isExplicitPost?: boolean;
     /** Scheduler presentation metadata (hidden trigger / ephemeral lifecycle toast) */
     scheduler?: SchedulerMessageExtra['scheduler'];
     /** F118 AC-C3: Timeout diagnostics for enhanced error display */
@@ -302,9 +314,11 @@ export interface ChatMessage {
      * pipeline race; without marker it ends up visually after the bubble it
      * should precede.
      */
-    systemKind?: 'a2a_routing';
+    systemKind?: 'a2a_routing' | 'context_briefing';
     /** Machine-readable A2A route metadata. The visible pill text is human-readable; this survives F5. */
     a2aRouting?: { fromCatId?: string; targetCatId?: string; invocationId?: string };
+    /** Original visible system_info payload; content remains the persisted fallback copy. */
+    systemInfo?: SystemInfoProjection;
   };
   /** F045: Extended thinking content, rendered as collapsible block inside assistant bubble */
   thinking?: string;
@@ -318,7 +332,7 @@ export interface ChatMessage {
   whisperTo?: string[];
   /** F35: Timestamp when whisper was revealed (made public) */
   revealedAt?: number;
-  /** F057-C2: Whether this message mentions the user (@user / @铲屎官) */
+  /** F057-C2: Whether this message mentions the user (@user / @co-creator) */
   mentionsUser?: boolean;
   /** F121: ID of the message this is replying to */
   replyTo?: string;
@@ -366,7 +380,7 @@ export interface Thread {
   parentThreadId?: string;
   /** F095 Phase D: Soft-delete timestamp. Null/undefined = not deleted. */
   deletedAt?: number | null;
-  /** F087: CVO Bootcamp onboarding state. */
+  /** F087: operator Bootcamp onboarding state. */
   bootcampState?: BootcampStateV1;
   /** F192 livefix: System thread kind for sidebar grouping (connector_hub | eval_domain). */
   systemKind?: 'connector_hub' | 'eval_domain';
@@ -376,7 +390,7 @@ export interface Thread {
   labels?: string[];
 }
 
-/** F087: Bootcamp state for CVO onboarding threads */
+/** F087: Bootcamp state for operator onboarding threads */
 export interface BootcampStateV1 {
   v: 1;
   phase: string;
@@ -486,6 +500,24 @@ export interface CatInvocationInfo {
   taskProgress?: TaskProgressState;
   /** F118 Phase C: Latest liveness warning snapshot */
   livenessWarning?: LivenessWarningSnapshot;
+  /** #939 part A (kimi auth dual-path): Latest provider capability reports keyed by capability
+   *  name (e.g. 'thinking', 'image_input'). Backend emits these as `system_info` events with
+   *  inner type `provider_capability`. Stored silently — MUST NOT render as a user-facing
+   *  system bubble (that was the bug: frontend fell through to default addMessage path and
+   *  surfaced raw JSON, which users read as "thinking failed"). A dedicated capability UI
+   *  (tooltip / status badge) is a future follow-up; for now the data is preserved here so
+   *  such UI can read it. */
+  providerCapabilities?: Record<string, ProviderCapabilityReport>;
+}
+
+/** #939 part A (kimi auth dual-path): per-capability report from a provider backend.
+ *  Populated by the `provider_capability` system_info handler in useAgentMessages.ts;
+ *  consumed silently there so the bubble layer never sees these. */
+export interface ProviderCapabilityReport {
+  status: 'available' | 'limited' | 'unavailable';
+  reason: string;
+  provider: string;
+  receivedAt: number;
 }
 
 /** F118 Phase C: Liveness warning snapshot from ProcessLivenessProbe */

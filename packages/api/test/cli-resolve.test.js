@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const { resolveCliCommand, resolveCliCommandOrBare, formatCliNotFoundError, invalidateCliCommand } = await import(
-  '../dist/utils/cli-resolve.js'
-);
+const {
+  resolveCliCommand,
+  resolveCliCommandOrBare,
+  formatCliNotFoundError,
+  invalidateCliCommand,
+  selectWindowsPathEntry,
+} = await import('../dist/utils/cli-resolve.js');
 
 // --- formatCliNotFoundError ---
 
@@ -19,7 +23,18 @@ test('formatCliNotFoundError returns install hint for known CLI', () => {
 test('formatCliNotFoundError returns native installer hint for agy', () => {
   const msg = formatCliNotFoundError('agy');
   assert.match(msg, /agy CLI 未找到/);
-  assert.match(msg, /https:\/\/antigravity\.google\/cli\/install\.sh/);
+  if (process.platform === 'win32') {
+    assert.match(msg, /install\.cmd/);
+  } else {
+    assert.match(msg, /https:\/\/antigravity\.google\/cli\/install\.sh/);
+  }
+});
+
+test('formatCliNotFoundError points opencode users at the npm package that installs the opencode binary', () => {
+  const msg = formatCliNotFoundError('opencode');
+  assert.match(msg, /opencode CLI 未找到/);
+  assert.match(msg, /npm install -g opencode-ai/);
+  assert.doesNotMatch(msg, /npm install -g opencode`/);
 });
 
 test('formatCliNotFoundError returns Windows installer hint for agy on win32', () => {
@@ -35,6 +50,16 @@ test('formatCliNotFoundError returns generic hint for unknown CLI', () => {
   assert.match(msg, /install the "unknown-tool" CLI/);
 });
 
+test('formatCliNotFoundError points Kimi users at official Kimi Code installer', () => {
+  const msg = formatCliNotFoundError('kimi');
+  assert.match(msg, /kimi CLI 未找到/);
+  if (process.platform === 'win32') {
+    assert.match(msg, /code\.kimi\.com\/kimi-code\/install\.ps1/);
+  } else {
+    assert.match(msg, /code\.kimi\.com\/kimi-code\/install\.sh/);
+  }
+});
+
 // --- resolveCliCommandOrBare ---
 
 test('resolveCliCommandOrBare returns bare name when CLI not found', () => {
@@ -48,6 +73,50 @@ test('resolveCliCommand returns null for non-existent CLI', () => {
   const result = resolveCliCommand('nonexistent-cli-tool-abc-99999');
   assert.equal(result, null);
 });
+
+test('selectWindowsPathEntry prefers .exe over extensionless hits from the same directory', () => {
+  const selected = selectWindowsPathEntry(['C:\\Users\\me\\bin\\codex', 'C:\\Users\\me\\bin\\codex.exe']);
+  assert.equal(selected, 'C:\\Users\\me\\bin\\codex.exe');
+});
+
+test('selectWindowsPathEntry preserves an earlier PATH wrapper over a later .exe in another directory', () => {
+  const selected = selectWindowsPathEntry(['C:\\Users\\me\\bin\\codex.bat', 'C:\\Program Files\\Codex\\codex.exe']);
+  assert.equal(selected, 'C:\\Users\\me\\bin\\codex.bat');
+});
+
+test(
+  'resolveCliCommand prefers .exe over extensionless Windows PATH hits',
+  { skip: process.platform !== 'win32' && 'Windows-only (.exe PATH preference)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-exe-prefer-'));
+    const binDir = join(tempRoot, 'bin');
+    mkdirSync(binDir, { recursive: true });
+
+    const cmdName = `fake-cliresolve-exe-prefer-${process.pid}-${Date.now()}`;
+    const extensionless = join(binDir, cmdName);
+    const exePath = join(binDir, `${cmdName}.exe`);
+    writeFileSync(extensionless, 'ELF fake linux binary', 'utf8');
+    writeFileSync(exePath, 'MZ fake windows binary', 'utf8');
+
+    const originalPath = process.env.PATH;
+    const originalPathMixed = process.env.Path;
+    try {
+      process.env.PATH = `${binDir};${originalPath ?? ''}`;
+      process.env.Path = `${binDir};${originalPathMixed ?? originalPath ?? ''}`;
+      invalidateCliCommand(cmdName);
+
+      const result = resolveCliCommand(cmdName);
+      assert.equal(result, exePath, 'Windows resolver must prefer the native .exe over extensionless PATH hits');
+    } finally {
+      invalidateCliCommand(cmdName);
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      if (originalPathMixed === undefined) delete process.env.Path;
+      else process.env.Path = originalPathMixed;
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 // --- Windows APPDATA fallback ---
 
@@ -168,6 +237,44 @@ test(
   },
 );
 
+// --- #894: skipPathProbe skips PATH and goes straight to fallback dirs ---
+
+test(
+  'resolveCliCommand with skipPathProbe finds CLI in fallback dir without PATH probe (#894)',
+  { skip: process.platform === 'win32' && 'Unix-only (HOME fallback)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-skipprobe-'));
+    const localBin = join(tempRoot, '.local', 'bin');
+    mkdirSync(localBin, { recursive: true });
+
+    // Use a unique name that definitely won't be on PATH
+    const cmdName = 'fake-skipprobe-test-tool-894';
+    const fakeBin = join(localBin, cmdName);
+    writeFileSync(fakeBin, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+
+    const originalHome = process.env.HOME;
+    try {
+      process.env.HOME = tempRoot;
+      // Clear any cached result first
+      invalidateCliCommand(cmdName);
+
+      const result = resolveCliCommand(cmdName, { skipPathProbe: true });
+      assert.equal(result, fakeBin, 'should find binary in fallback dir even with skipPathProbe');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test('resolveCliCommand with skipPathProbe returns null when not in fallback dirs', () => {
+  const cmdName = 'nonexistent-skipprobe-xyz-894';
+  invalidateCliCommand(cmdName);
+  const result = resolveCliCommand(cmdName, { skipPathProbe: true });
+  assert.equal(result, null, 'should return null for truly missing CLI');
+});
+
 // --- F173 Phase D AC-D1/D2: cache invalidation on stale entry ---
 
 test(
@@ -282,6 +389,144 @@ test(
     } finally {
       if (originalHome === undefined) delete process.env.HOME;
       else process.env.HOME = originalHome;
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+// --- #1173: Kimi Code official installer layout ---
+
+test(
+  'resolveCliCommand finds official Kimi Code binary in HOME/.kimi-code/bin (Unix)',
+  { skip: process.platform === 'win32' && 'Unix-only (Kimi Code fallback)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-kimi-code-'));
+    const officialBin = join(tempRoot, '.kimi-code', 'bin');
+    mkdirSync(officialBin, { recursive: true });
+
+    const officialKimi = join(officialBin, 'kimi');
+    writeFileSync(officialKimi, '#!/bin/sh\necho official\n', { mode: 0o755 });
+
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.HOME = tempRoot;
+      // Empty PATH so the test exercises HOME fallback, not PATH.
+      process.env.PATH = '';
+      invalidateCliCommand('kimi');
+
+      const result = resolveCliCommand('kimi');
+      assert.equal(result, officialKimi, 'should find official ~/.kimi-code/bin/kimi');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      invalidateCliCommand('kimi');
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'resolveCliCommand prefers Kimi Code official binary over legacy HOME/.local/bin/kimi when PATH misses (Unix)',
+  { skip: process.platform === 'win32' && 'Unix-only (Kimi Code layout priority)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-kimi-code-priority-'));
+    const legacyBin = join(tempRoot, '.local', 'bin');
+    const officialBin = join(tempRoot, '.kimi-code', 'bin');
+    mkdirSync(legacyBin, { recursive: true });
+    mkdirSync(officialBin, { recursive: true });
+
+    const legacyKimi = join(legacyBin, 'kimi');
+    const officialKimi = join(officialBin, 'kimi');
+    writeFileSync(legacyKimi, '#!/bin/sh\necho legacy\n', { mode: 0o755 });
+    writeFileSync(officialKimi, '#!/bin/sh\necho official\n', { mode: 0o755 });
+
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.HOME = tempRoot;
+      // Empty PATH: resolver must fall back to HOME directories.
+      process.env.PATH = '';
+      invalidateCliCommand('kimi');
+
+      const result = resolveCliCommand('kimi');
+      assert.equal(result, officialKimi, 'should prefer official ~/.kimi-code/bin/kimi over legacy ~/.local/bin/kimi');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      invalidateCliCommand('kimi');
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'resolveCliCommand prefers official Kimi Code binary over legacy PATH hit (Unix)',
+  { skip: process.platform === 'win32' && 'Unix-only (Kimi Code PATH priority)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-kimi-code-path-priority-'));
+    const pathBin = join(tempRoot, 'path-bin');
+    const officialBin = join(tempRoot, '.kimi-code', 'bin');
+    mkdirSync(pathBin, { recursive: true });
+    mkdirSync(officialBin, { recursive: true });
+
+    const pathKimi = join(pathBin, 'kimi');
+    const officialKimi = join(officialBin, 'kimi');
+    writeFileSync(pathKimi, '#!/bin/sh\necho path-legacy\n', { mode: 0o755 });
+    writeFileSync(officialKimi, '#!/bin/sh\necho official\n', { mode: 0o755 });
+
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.HOME = tempRoot;
+      // PATH contains a legacy `kimi`; official layout is also present.
+      process.env.PATH = pathBin;
+      invalidateCliCommand('kimi');
+
+      const result = resolveCliCommand('kimi');
+      assert.equal(result, officialKimi, 'should prefer official ~/.kimi-code/bin/kimi over legacy PATH hit');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      invalidateCliCommand('kimi');
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'resolveCliCommand does not search HOME/.kimi-code/bin for non-kimi commands (Unix)',
+  { skip: process.platform === 'win32' && 'Unix-only (command-specific fallback isolation)' },
+  () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'cli-resolve-kimi-code-isolation-'));
+    const officialBin = join(tempRoot, '.kimi-code', 'bin');
+    mkdirSync(officialBin, { recursive: true });
+
+    const cmdName = `fake-kimi-code-isolated-tool-${process.pid}-${Date.now()}`;
+    const fakeBin = join(officialBin, cmdName);
+    writeFileSync(fakeBin, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.HOME = tempRoot;
+      process.env.PATH = '';
+      invalidateCliCommand(cmdName);
+
+      const result = resolveCliCommand(cmdName);
+      assert.equal(result, null, 'should not find non-kimi commands in ~/.kimi-code/bin');
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      invalidateCliCommand(cmdName);
       rmSync(tempRoot, { recursive: true, force: true });
     }
   },

@@ -12,6 +12,7 @@
 
 import type { CoCreatorConfig } from '@/components/config-viewer-types';
 import type { CatData } from '@/hooks/useCatData';
+import { formatCatDisplayName } from '@/lib/cat-display-name';
 import { CO_CREATOR_COLOR, UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 
 export interface SenderMeta {
@@ -26,7 +27,7 @@ export interface SenderMeta {
 /**
  * Resolve any senderCatId to display metadata.
  *
- * - `null` → co-creator (铲屎官 is a member too)
+ * - `null` → co-creator (co-creator is a member too)
  * - known catId → cat display name + cat color
  * - unknown catId → raw ID + fallback color
  */
@@ -48,7 +49,7 @@ export function resolveSender(
   const cat = getCatById(senderCatId);
   if (cat) {
     return {
-      label: `@${cat.displayName}`,
+      label: `@${formatCatDisplayName(cat)}`,
       color: cat.color.primary,
       isCoCreator: false,
     };

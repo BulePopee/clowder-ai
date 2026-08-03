@@ -139,12 +139,30 @@ export interface CliSpawnerDeps {
   spawnFn?: SpawnFn;
 }
 
+const CLI_SUPERVISOR_ENV_FILE_FLAGS = new Set(['--env-file', '--env-file-if-exists']);
+
+function sanitizeCliSupervisorExecArgv(execArgv: string[]): string[] {
+  const safeArgs: string[] = [];
+  for (let index = 0; index < execArgv.length; index += 1) {
+    const arg = execArgv[index];
+    if (CLI_SUPERVISOR_ENV_FILE_FLAGS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--env-file=') || arg.startsWith('--env-file-if-exists=')) {
+      continue;
+    }
+    safeArgs.push(arg);
+  }
+  return safeArgs;
+}
+
 export function resolveCliSupervisorNodeArgs(moduleUrl = import.meta.url, execArgv = process.execArgv): string[] {
   const jsPath = fileURLToPath(new URL('./cli-supervisor.js', moduleUrl));
   if (existsSync(jsPath)) return [jsPath];
 
   const tsPath = fileURLToPath(new URL('./cli-supervisor.ts', moduleUrl));
-  if (existsSync(tsPath)) return [...execArgv, tsPath];
+  if (existsSync(tsPath)) return [...sanitizeCliSupervisorExecArgv(execArgv), tsPath];
 
   return [jsPath];
 }
@@ -941,7 +959,7 @@ function defaultSpawn(
   // managers (nvm/fnm/Volta). CLI shims use `#!/usr/bin/env node`, so the
   // child process must be able to find `node` in its PATH. Prepend the
   // directory containing the resolved CLI binary — it typically sits next
-  // to the `node` binary that installed it (e.g. ~/.nvm/versions/node/v20/bin/).
+  // to the `node` binary that installed it (e.g. ~/.nvm/versions/node/v24/bin/).
   const env = { ...options.env };
   if (isAbsolute(command)) {
     const binDir = dirname(command);
