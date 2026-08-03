@@ -1,0 +1,68 @@
+[
+  {
+    "indicator": "A1",
+    "source": "ifind",
+    "status": "null_value",
+    "error": "null value"
+  },
+  {
+    "indicator": "N7",
+    "source": "ifind",
+    "status": "null_value",
+    "error": "null value"
+  },
+  {
+    "indicator": "S1",
+    "status": "staleGap",
+    "ageDays": 4,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-17",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "AG",
+    "status": "staleGap",
+    "ageDays": 4,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-17",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N2",
+    "status": "staleGap",
+    "ageDays": 4,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-17",
+    "source": "ifind"
+  },
+  {
+    "indicator": "B10",
+    "status": "staleGap",
+    "ageDays": 4,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-17",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N6",
+    "status": "staleGap",
+    "ageDays": 4,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-17",
+    "source": "ifind"
+  },
+  {
+    "indicator": "R3",
+    "status": "staleGap",
+    "ageDays": 21,
+    "effectiveAge": 21,
+    "maxAgeDays": 7,
+    "date": "2026-06-30",
+    "source": "ifind"
+  }
+]

@@ -1,0 +1,920 @@
+{
+  "runId": "20260724-1720-auto",
+  "round": "routine",
+  "version": "2.5.1",
+  "collectedAt": "2026-07-24T09:26:47.497Z",
+  "summary": {
+    "total": 55,
+    "collected": 47,
+    "missing": 1,
+    "fresh": 45,
+    "staleSuccess": 2,
+    "staleGap": 4,
+    "noDate": 0,
+    "invalidDate": 0,
+    "websearchPending": 0,
+    "websearchPendingIds": [],
+    "websearchBlocked": 2,
+    "websearchDisclosures": [
+      {
+        "id": "F1",
+        "reason": "Wind contract explicitly forbids websearch fallback for critical indicators",
+        "hasAdvisoryNote": true
+      },
+      {
+        "id": "F2",
+        "reason": "Wind contract explicitly forbids websearch fallback for critical indicators",
+        "hasAdvisoryNote": true
+      }
+    ],
+    "websearchFilled": 6,
+    "websearchFailed": 1
+  },
+  "results": {
+    "B1": {
+      "indicator": "B1",
+      "value": 5.17,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B2": {
+      "indicator": "B2",
+      "value": 4.71,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B3": {
+      "indicator": "B3",
+      "value": 4.37,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B6": {
+      "indicator": "B6",
+      "value": 1.7325,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "S1": {
+      "indicator": "S1",
+      "value": 18.7,
+      "date": "2026-07-23",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "X1": {
+      "indicator": "X1",
+      "value": 101.4445,
+      "date": "2026-07-23",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "X3": {
+      "indicator": "X3",
+      "value": 6.7939,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "G1_am": {
+      "indicator": "G1_am",
+      "value": 897.7,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G1_pm": {
+      "indicator": "G1_pm",
+      "value": 896.63,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G2": {
+      "indicator": "G2",
+      "value": 883.66,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G3": {
+      "indicator": "G3",
+      "value": 883.69,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G5": {
+      "indicator": "G5",
+      "value": 883.8,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G6": {
+      "indicator": "G6",
+      "value": 7544,
+      "date": "2026-06-01",
+      "source": "ttfund",
+      "unit": "万盎司",
+      "_freshStatus": "staleSuccess"
+    },
+    "CPI": {
+      "indicator": "CPI",
+      "value": 3.5,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "E2": {
+      "indicator": "E2",
+      "value": 4649.19,
+      "date": "2026-07-24",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "M3": {
+      "indicator": "M3",
+      "value": 1.623,
+      "date": "2026-07-23",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "G4": {
+      "indicator": "G4",
+      "value": 4047.7,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh"
+    },
+    "G4b": {
+      "indicator": "G4b",
+      "value": 4044.9,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh"
+    },
+    "AG": {
+      "indicator": "AG",
+      "value": 58.66,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh"
+    },
+    "O1": {
+      "indicator": "O1",
+      "value": 100.69,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh"
+    },
+    "O2": {
+      "indicator": "O2",
+      "value": 92.36,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh"
+    },
+    "G7": {
+      "indicator": "G7",
+      "value": 32449925.49,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "oz",
+      "_freshStatus": "fresh"
+    },
+    "G8l": {
+      "indicator": "G8l",
+      "value": 136905,
+      "date": "2026-07-14",
+      "source": "ifind",
+      "unit": "万张",
+      "_freshStatus": "fresh"
+    },
+    "G8s": {
+      "indicator": "G8s",
+      "value": 16126,
+      "date": "2026-07-14",
+      "source": "ifind",
+      "unit": "张",
+      "_freshStatus": "fresh"
+    },
+    "A2a": {
+      "indicator": "A2a",
+      "value": 1.6279,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "A2g": {
+      "indicator": "A2g",
+      "value": 1.2858,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "A1": {
+      "indicator": "A1",
+      "value": "75.03",
+      "date": "2026-07-14",
+      "source": "websearch",
+      "unit": "",
+      "_sourceUrl": "https://markets.ft.com/data/indices/tearsheet/summary?s=MOVE:PSE",
+      "_sourceTitle": "ICE BofA US Bond Market Option Volatility Estimate Index — FT Markets",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
+    },
+    "N4": {
+      "indicator": "N4",
+      "value": 3.65,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "X4": {
+      "indicator": "X4",
+      "value": 6.777173350719745,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "B8": {
+      "indicator": "B8",
+      "value": 2.43,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B9": {
+      "indicator": "B9",
+      "value": 2.28,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "M1": {
+      "indicator": "M1",
+      "value": 1.428,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "M2": {
+      "indicator": "M2",
+      "value": 1.4023,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "M2a": {
+      "indicator": "M2a",
+      "value": 1.4,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "N1": {
+      "indicator": "N1",
+      "value": 3.95,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B5": {
+      "indicator": "B5",
+      "value": 2.2045,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B7": {
+      "indicator": "B7",
+      "value": 1.2691,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "E1": {
+      "indicator": "E1",
+      "value": 28454.81,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "X2": {
+      "indicator": "X2",
+      "value": 6.7939,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "N2": {
+      "indicator": "N2",
+      "value": 3.62,
+      "date": "2026-07-22",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "E3": {
+      "indicator": "E3",
+      "value": 3480.8702,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "M4": {
+      "indicator": "M4",
+      "value": 1.417,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "E1_kl": {
+      "indicator": "E1_kl",
+      "value": [
+        [
+          "2026-07-23",
+          28454.81
+        ],
+        [
+          "2026-07-22",
+          28998.1
+        ],
+        [
+          "2026-07-21",
+          29155.18
+        ],
+        [
+          "2026-07-20",
+          28604.23
+        ],
+        [
+          "2026-07-17",
+          28592.66
+        ],
+        [
+          "2026-07-16",
+          29025.77
+        ],
+        [
+          "2026-07-15",
+          29502.6
+        ],
+        [
+          "2026-07-14",
+          29586.29
+        ],
+        [
+          "2026-07-13",
+          29264.1
+        ],
+        [
+          "2026-07-10",
+          29825.11
+        ],
+        [
+          "2026-07-09",
+          29727.1
+        ],
+        [
+          "2026-07-08",
+          29252.56
+        ],
+        [
+          "2026-07-07",
+          29173.02
+        ],
+        [
+          "2026-07-06",
+          29697.87
+        ],
+        [
+          "2026-07-02",
+          29329.21
+        ],
+        [
+          "2026-07-01",
+          29809.13
+        ],
+        [
+          "2026-06-30",
+          30276.35
+        ],
+        [
+          "2026-06-29",
+          29774.75
+        ],
+        [
+          "2026-06-26",
+          29118.24
+        ],
+        [
+          "2026-06-25",
+          29440.32
+        ],
+        [
+          "2026-06-24",
+          29220.06
+        ],
+        [
+          "2026-06-23",
+          29347.27
+        ],
+        [
+          "2026-06-22",
+          30347.08
+        ],
+        [
+          "2026-06-18",
+          30406.19
+        ],
+        [
+          "2026-06-17",
+          29670.95
+        ],
+        [
+          "2026-06-16",
+          29968.13
+        ],
+        [
+          "2026-06-15",
+          30543.92
+        ],
+        [
+          "2026-06-12",
+          29635.95
+        ],
+        [
+          "2026-06-11",
+          29446.18
+        ],
+        [
+          "2026-06-10",
+          28508.03
+        ],
+        [
+          "2026-06-09",
+          29084.5
+        ]
+      ],
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:31",
+      "_klineInsufficient": false,
+      "_freshStatus": "unknown"
+    },
+    "E2_kl": {
+      "indicator": "E2_kl",
+      "value": [
+        [
+          "2026-07-24",
+          4649.1917
+        ],
+        [
+          "2026-07-23",
+          4728.0018
+        ],
+        [
+          "2026-07-22",
+          4717.2442
+        ],
+        [
+          "2026-07-21",
+          4739.2287
+        ],
+        [
+          "2026-07-20",
+          4598.3208
+        ],
+        [
+          "2026-07-17",
+          4529.0953
+        ],
+        [
+          "2026-07-16",
+          4698.4344
+        ],
+        [
+          "2026-07-15",
+          4786.7828
+        ],
+        [
+          "2026-07-14",
+          4796.502
+        ],
+        [
+          "2026-07-13",
+          4695.383
+        ],
+        [
+          "2026-07-10",
+          4780.7867
+        ],
+        [
+          "2026-07-09",
+          4876.3125
+        ],
+        [
+          "2026-07-08",
+          4755.5338
+        ],
+        [
+          "2026-07-07",
+          4792.2624
+        ],
+        [
+          "2026-07-06",
+          4841.998
+        ],
+        [
+          "2026-07-03",
+          4842.1737
+        ],
+        [
+          "2026-07-02",
+          4812.2957
+        ],
+        [
+          "2026-07-01",
+          4958.9773
+        ],
+        [
+          "2026-06-30",
+          4979.4328
+        ],
+        [
+          "2026-06-29",
+          4926.921
+        ],
+        [
+          "2026-06-26",
+          4868.2205
+        ],
+        [
+          "2026-06-25",
+          5020.1038
+        ],
+        [
+          "2026-06-24",
+          4943.0197
+        ],
+        [
+          "2026-06-23",
+          4919.386
+        ],
+        [
+          "2026-06-22",
+          5059.6582
+        ],
+        [
+          "2026-06-18",
+          4941.5986
+        ],
+        [
+          "2026-06-17",
+          4931.3861
+        ],
+        [
+          "2026-06-16",
+          4884.2322
+        ],
+        [
+          "2026-06-15",
+          4891.7126
+        ],
+        [
+          "2026-06-12",
+          4777.3206
+        ],
+        [
+          "2026-06-11",
+          4722.4122
+        ],
+        [
+          "2026-06-10",
+          4748.5932
+        ],
+        [
+          "2026-06-09",
+          4801.8106
+        ]
+      ],
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:33",
+      "_klineInsufficient": false,
+      "_freshStatus": "unknown"
+    },
+    "E3_kl": {
+      "indicator": "E3_kl",
+      "value": [
+        [
+          "2026-07-24",
+          3480.8702
+        ],
+        [
+          "2026-07-23",
+          3575.5202
+        ],
+        [
+          "2026-07-22",
+          3566.7323
+        ],
+        [
+          "2026-07-21",
+          3685.9684
+        ],
+        [
+          "2026-07-20",
+          3443.1015
+        ],
+        [
+          "2026-07-17",
+          3428.6298
+        ],
+        [
+          "2026-07-16",
+          3692.4573
+        ],
+        [
+          "2026-07-15",
+          3804.7038
+        ],
+        [
+          "2026-07-14",
+          3851.1372
+        ],
+        [
+          "2026-07-13",
+          3723.5166
+        ],
+        [
+          "2026-07-10",
+          3842.7314
+        ],
+        [
+          "2026-07-09",
+          4018.1744
+        ],
+        [
+          "2026-07-08",
+          3845.3513
+        ],
+        [
+          "2026-07-07",
+          3911.9075
+        ],
+        [
+          "2026-07-06",
+          3948.86
+        ],
+        [
+          "2026-07-03",
+          4019.9341
+        ],
+        [
+          "2026-07-02",
+          4017.2735
+        ],
+        [
+          "2026-07-01",
+          4260.7208
+        ],
+        [
+          "2026-06-30",
+          4342.7123
+        ],
+        [
+          "2026-06-29",
+          4216.6985
+        ],
+        [
+          "2026-06-26",
+          4194.2089
+        ],
+        [
+          "2026-06-25",
+          4371.9891
+        ],
+        [
+          "2026-06-24",
+          4251.4244
+        ],
+        [
+          "2026-06-23",
+          4192.1945
+        ],
+        [
+          "2026-06-22",
+          4359.392
+        ],
+        [
+          "2026-06-18",
+          4252.3903
+        ],
+        [
+          "2026-06-17",
+          4167.0478
+        ],
+        [
+          "2026-06-16",
+          4102.9421
+        ],
+        [
+          "2026-06-15",
+          4033.5349
+        ],
+        [
+          "2026-06-12",
+          3830.353
+        ],
+        [
+          "2026-06-11",
+          3811.246
+        ],
+        [
+          "2026-06-10",
+          3854.7935
+        ],
+        [
+          "2026-06-09",
+          3961.7493
+        ]
+      ],
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:33",
+      "_klineInsufficient": false,
+      "_freshStatus": "unknown"
+    },
+    "B10": {
+      "indicator": "B10",
+      "value": 2.68,
+      "date": "2026-07-22",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "N6": {
+      "indicator": "N6",
+      "value": -0.07,
+      "date": "2026-07-21",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "S3": {
+      "indicator": "S3",
+      "value": 42.3,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "S2": {
+      "indicator": "S2",
+      "value": 38.8,
+      "date": "2026-07-24",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "M5": {
+      "indicator": "M5",
+      "value": 15.623589,
+      "date": "2026-06-30",
+      "source": "ifind",
+      "unit": "万亿元",
+      "_freshStatus": "fresh"
+    },
+    "N5": {
+      "indicator": "N5",
+      "value": "7.861",
+      "date": "2026-07-22",
+      "source": "websearch",
+      "unit": "T",
+      "_sourceUrl": "http://stock.10jqka.com.cn/20260724/c678396748.shtml",
+      "_sourceTitle": "美国投资公司协会（ICI）：美国货币市场基金资产降至7.86万亿美元 — 同花顺",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
+    },
+    "R3": {
+      "indicator": "R3",
+      "value": "80",
+      "date": "2026-07-09",
+      "source": "websearch",
+      "unit": "bp",
+      "_sourceUrl": "https://www.macrotrends.net/3042/us-corporate-bond-spread",
+      "_sourceTitle": "U.S. Corporate Bond Spread — Macrotrends / ICE BofA",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_fallback": true,
+      "_freshStatus": "fresh"
+    },
+    "R4": {
+      "indicator": "R4",
+      "value": 0.88,
+      "date": "2026-07-23",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "F1": {
+      "indicator": "F1",
+      "value": 3.75,
+      "date": "2025-12-11",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "staleSuccess"
+    },
+    "F2": {
+      "indicator": "F2",
+      "value": 3.412,
+      "date": "2026-05-31",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B4": {
+      "indicator": "B4",
+      "value": "33.7% Jul / 82% Sep",
+      "date": "2026-07-23",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://www.cnbc.com/2026/07/23/fed-interest-rate-odds-oil-jobless-claims.html",
+      "_sourceTitle": "Odds of Federal Reserve rate hike surge as oil prices rip higher — CNBC",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_freshStatus": "fresh"
+    },
+    "F3": {
+      "indicator": "F3",
+      "value": "Jul 28-29, 2026",
+      "date": "2026-07-24",
+      "source": "websearch",
+      "unit": "",
+      "_sourceUrl": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "_sourceTitle": "FOMC Meeting calendars and information — Federal Reserve",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_freshStatus": "fresh"
+    },
+    "N3": {
+      "indicator": "N3",
+      "value": "3.45",
+      "date": "2026-07-10",
+      "source": "websearch",
+      "unit": "%",
+      "_sourceUrl": "https://www.cranedata.us/archives/daily-links/2026/7",
+      "_sourceTitle": "Crane Data Daily Links — July 2026 Archives",
+      "_filledAt": "2026-07-24T09:26:47.497Z",
+      "_freshStatus": "fresh"
+    }
+  }
+}

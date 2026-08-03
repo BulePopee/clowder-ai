@@ -1,0 +1,140 @@
+{
+  "$schema": "indicator-contract-v1",
+  "version": "1.0.0",
+  "description": "Indicator onboarding contract — machine-verifiable cross-reference of every indicator across all configs, sources, validators, and report layers. Used by validate-indicator-contract.cjs.",
+  "indicatorKinds": {
+    "raw": "Directly collected from a data source adapter",
+    "derived": "Computed from raw indicators via formula",
+    "portfolio": "Extracted from portfolio/account holdings"
+  },
+  "reportExposure": {
+    "direct": "Appears as a named value in a report section table",
+    "indirect": "Used in reasoning/evidence but not directly displayed in report",
+    "none": "Collect-only; not consumed by reasoning or report"
+  },
+  "indicators": {
+    "G7": {
+      "id": "G7",
+      "name": "SPDR持仓",
+      "kind": "raw",
+      "tier": 1,
+      "critical": false,
+      "description": "SPDR Gold Trust ETF持仓量 — 全球最大黄金ETF实物持仓",
+      "source": {
+        "primary": "ifind",
+        "allowedFallbacks": [],
+        "forbiddenFallbacks": ["websearch"],
+        "fallbackNote": "iFinD返回oz，unit-normalizer自动转为吨；fallback_not_implemented时不阻塞管道"
+      },
+      "unit": {
+        "contractRequired": true,
+        "configId": "G7",
+        "canonicalUnit": "吨",
+        "rawUnit": "oz",
+        "declaredIn": "config/indicator-units.json"
+      },
+      "freshness": {
+        "maxAgeDays": 3,
+        "staleAction": "fallback_not_implemented"
+      },
+      "temporalDiff": {
+        "tracked": true,
+        "group": "持仓",
+        "tier": 1
+      },
+      "feedback": {
+        "blueprint": "gold-rate-conflict",
+        "tracked": true
+      },
+      "report": {
+        "exposure": "direct",
+        "section": "3-gold",
+        "sectionTitle": "黄金",
+        "displayAs": "G7 SPDR持仓"
+      },
+      "compute": null,
+      "catalogEntry": "data/indicator-catalog.md"
+    },
+    "B8": {
+      "id": "B8",
+      "name": "TIPS实际利率",
+      "kind": "raw",
+      "tier": 1,
+      "critical": true,
+      "description": "美国10年期TIPS收益率 — 实际利率锚，Fed政策传导/黄金定价核心变量",
+      "source": {
+        "primary": "ifind",
+        "allowedFallbacks": [],
+        "forbiddenFallbacks": ["websearch"],
+        "fallbackNote": "TIPS是防御触发器核心指标，不允许WebSearch近似值替代"
+      },
+      "unit": {
+        "contractRequired": false,
+        "note": "百分比，无需单位归一化"
+      },
+      "freshness": {
+        "maxAgeDays": 3,
+        "staleAction": "staleGap"
+      },
+      "temporalDiff": {
+        "tracked": true,
+        "group": "利率",
+        "tier": 1
+      },
+      "feedback": {
+        "blueprint": "macro-regime",
+        "tracked": true
+      },
+      "report": {
+        "exposure": "direct",
+        "section": "2-regime",
+        "sectionTitle": "宏观判定",
+        "displayAs": "TIPS实际利率"
+      },
+      "compute": null,
+      "catalogEntry": "data/indicator-catalog.md"
+    },
+    "N7": {
+      "id": "N7",
+      "name": "SOFR-IORB利差",
+      "kind": "derived",
+      "tier": 2,
+      "critical": false,
+      "description": "SOFR-IORB利差 — 替代废弃的TED利差(LIBOR已停用)，反映银行间资金市场压力",
+      "source": {
+        "primary": "derived",
+        "derivedFrom": ["N2", "N4"],
+        "allowedFallbacks": [],
+        "forbiddenFallbacks": ["websearch", "ifind"],
+        "fallbackNote": "N7为派生指标，依赖N2(SOFR)+N4(IORB)；N2/N4缺失时N7自动missingDerived"
+      },
+      "unit": {
+        "contractRequired": false,
+        "canonicalUnit": "bp",
+        "note": "compute/index.cjs 中由 N2(%)-N4(%) 乘以100转换为bp"
+      },
+      "freshness": {
+        "maxAgeDays": 3,
+        "staleAction": "derived"
+      },
+      "temporalDiff": {
+        "tracked": false
+      },
+      "feedback": {
+        "blueprint": "macro-regime",
+        "tracked": true
+      },
+      "report": {
+        "exposure": "indirect",
+        "note": "由 decision-engine 和 2-regime 消费，值来自 derived.json"
+      },
+      "compute": {
+        "formula": "N2 - N4",
+        "components": ["N2", "N4"],
+        "unitConversion": "*100 (pct→bp)",
+        "file": "compute/index.cjs"
+      },
+      "catalogEntry": "data/indicator-catalog.md"
+    }
+  }
+}

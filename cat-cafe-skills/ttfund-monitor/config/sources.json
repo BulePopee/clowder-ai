@@ -1,0 +1,168 @@
+{
+  "version": "2.5.1",
+  "description": "Source adapter call configs — NO tool paths (those live in config/tools.json).",
+  "ttfund": {
+    "calls": [
+      {
+        "name": "GOLD_INFO",
+        "skill": "TTFUND_GOLD_INFO",
+        "body": "{}",
+        "datePath": ["macro_fiscal.trade_date", "gold_quotes.au9999.date"],
+        "requirePerIndicatorDate": true,
+        "extracts": {
+          "B1":  { "path": "macro_fiscal.treasury_yields.us_30y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B2":  { "path": "macro_fiscal.treasury_yields.us_10y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B3":  { "path": "macro_fiscal.treasury_yields.us_2y",      "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "B6":  { "path": "macro_fiscal.treasury_yields.cn_10y",     "unit": "%",  "critical": true,  "datePath": "macro_fiscal.trade_date" },
+          "S1":  { "path": "risk_indicators.vix.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.vix.date" },
+          "X1":  { "path": "risk_indicators.dxy.INDICATOR_VAL",      "unit": "",   "critical": true,  "datePath": "risk_indicators.dxy.date" },
+          "X3":  { "path": "risk_indicators.exchprice.EXCHPRICE",    "unit": "",   "critical": true,  "datePath": "risk_indicators.exchprice.date" },
+          "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
+          "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
+          "G2":  { "path": "gold_quotes.au9999.close",               "unit": "元/克", "critical": true,  "datePath": "gold_quotes.au9999.date" },
+          "G3":  { "path": "gold_quotes.au_td.close",                "unit": "元/克", "critical": false, "datePath": "gold_quotes.au_td.date" },
+          "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false, "datePath": "macro_fiscal.trade_date" },
+          "G6":  { "path": "gold_quotes.central_bank_gold.gold_reserves", "unit": "万盎司", "critical": false, "datePath": "gold_quotes.central_bank_gold.date" },
+          "CPI": { "path": "macro_fiscal.cpi_yoy.value",             "unit": "%",  "critical": false, "datePath": "macro_fiscal.trade_date" }
+        }
+      },
+      {
+        "name": "INDEX_INFO_000300",
+        "skill": "TTFUND_INDEX_INFO",
+        "body": "{\"index_id\":\"000300\"}",
+        "datePath": ["quote.quote_time", "quote.latest_nav_date"],
+        "extracts": {
+          "E2": { "path": "quote.current_point", "unit": "", "critical": true }
+        }
+      },
+      {
+        "name": "HUOQIBAO_LIST",
+        "skill": "TTFUND_HUOQIBAO_LIST",
+        "body": "{}",
+        "datePath": ["yield_date"],
+        "extracts": {
+          "M3": { "path": "items[0].yield_7d_annualized", "unit": "%", "critical": false }
+        }
+      }
+    ]
+  },
+
+  "ifind": {
+    "batchDelayMs": 2200,
+    "callType": "edb",
+    "method": "get_edb_data",
+    "batches": [
+      {
+        "name": "批1_商品",
+        "calls": [
+          { "id": "G4_comex",  "query": "COMEX黄金期货 收盘价 $MONTH",          "type": "single",  "indicator": "G4",  "unit": "$",       "critical": true  },
+          { "id": "G4_lbma",   "query": "伦敦金现货 下午定盘价 $MONTH",         "type": "single",  "indicator": "G4b", "unit": "$",       "critical": false },
+          { "id": "AG_comex",  "query": "COMEX白银期货 收盘价 $MONTH",          "type": "single",  "indicator": "AG",  "unit": "$",       "critical": false },
+          { "id": "O1",        "query": "Brent原油期货 收盘价 $MONTH",           "type": "single",  "indicator": "O1",  "unit": "$",       "critical": true  },
+          { "id": "O2",        "query": "WTI原油期货 收盘价 $MONTH",              "type": "single",  "indicator": "O2",  "unit": "$",       "critical": true  }
+        ]
+      },
+      {
+        "name": "批2_资金",
+        "calls": [
+          { "id": "G7",        "query": "SPDR黄金ETF持仓量 $MONTH",              "type": "single",  "indicator": "G7",  "unit": "oz",     "critical": false },
+          { "id": "G8_long",   "query": "COMEX黄金 资产管理机构多头持仓 $YEAR", "type": "single",  "indicator": "G8l", "unit": "万张",  "critical": false },
+          { "id": "G8_short",  "query": "COMEX黄金 资产管理机构空头持仓 $YEAR", "type": "single",  "indicator": "G8s", "unit": "张",    "critical": false }
+        ]
+      },
+      {
+        "name": "批3_债券",
+        "calls": [
+          { "id": "A2_aaa",    "query": "中债企业债到期收益率(AAA):3Y",          "type": "single",  "indicator": "A2a", "unit": "%",      "critical": false },
+          { "id": "A2_gb",     "query": "中债国债到期收益率:3Y",                 "type": "single",  "indicator": "A2g", "unit": "%",      "critical": false },
+          { "id": "A1_move",   "query": "ICE BofA MOVE指数 $MONTH",              "type": "single",  "indicator": "A1",  "unit": "",       "critical": false },
+          { "id": "N4",        "query": "美国 准备金余额利率 IORB 最新",        "type": "single",  "indicator": "N4",  "unit": "%",      "critical": false },
+          { "id": "X4",        "query": "美元兑人民币离岸 $MONTH",               "type": "single",  "indicator": "X4",  "unit": "",       "critical": true  },
+          { "id": "B8",        "query": "美国通胀保值国债收益率 10年期 $MONTH", "type": "single",  "indicator": "B8",  "unit": "%",      "critical": true  },
+          { "id": "B9",        "query": "美国10年期盈亏平衡通胀率 $MONTH",      "type": "single",  "indicator": "B9",  "unit": "%",      "critical": true  }
+        ]
+      },
+      {
+        "name": "批3b_货币",
+        "calls": [
+          { "id": "M1",        "query": "SHIBOR 3个月 $MONTH",                  "type": "single",  "indicator": "M1",  "unit": "%",      "critical": false },
+          { "id": "M2",        "query": "DR007 存款类机构质押式回购 $MONTH",    "type": "single",  "indicator": "M2",  "unit": "%",      "critical": false },
+          { "id": "M2a",       "query": "央行7天逆回购操作利率 OMO $YEAR",      "type": "single",  "indicator": "M2a", "unit": "%",      "critical": false },
+          { "id": "N1",        "query": "美国国债收益率 3个月 $MONTH",           "type": "single",  "indicator": "N1",  "unit": "%",      "critical": false },
+          { "id": "B5",        "query": "中债国债收益率 30年 $MONTH",            "type": "single",  "indicator": "B5",  "unit": "%",      "critical": false },
+          { "id": "B7",        "query": "中债国债收益率 2年 $MONTH",             "type": "single",  "indicator": "B7",  "unit": "%",      "critical": false }
+        ]
+      },
+      {
+        "name": "批3c_Wind替代",
+        "calls": [
+          { "id": "E1_ifind",  "query": "纳斯达克100指数 收盘价 $MONTH",       "type": "single",  "indicator": "E1",  "unit": "",   "critical": true  },
+          { "id": "X2_ifind",  "query": "美元兑人民币中间价 $MONTH",            "type": "single",  "indicator": "X2",  "unit": "",   "critical": true  },
+          { "id": "N2_ifind",  "query": "SOFR利率 $MONTH",                      "type": "single",  "indicator": "N2",  "unit": "%",  "critical": true  },
+          { "id": "E3_ifind",  "query": "创业板指 收盘价 $MONTH",               "type": "single",  "indicator": "E3",  "unit": "",   "critical": true  },
+          { "id": "M4_ifind",  "query": "R007 利率 $MONTH",                     "type": "single",  "indicator": "M4",  "unit": "%",  "critical": false }
+        ]
+      },
+      {
+        "name": "批4_K线",
+        "calls": [
+          { "id": "E1_kl",     "query": "纳斯达克100指数 收盘价（$DATERANGE）", "type": "kline", "indicator": "E1_kl", "unit": "", "critical": true  },
+          { "id": "E2_kl",     "query": "沪深300指数 收盘价（$DATERANGE）",      "type": "kline", "indicator": "E2_kl", "unit": "", "critical": true  },
+          { "id": "E3_kl",     "query": "创业板指 收盘价 $DATEFROM-$DATETO",    "type": "kline", "indicator": "E3_kl", "unit": "", "critical": true  }
+        ]
+      },
+      {
+        "name": "批5_P1扩展",
+        "calls": [
+          { "id": "B10",       "query": "美银美林美国高收益利差 $MONTH",        "type": "single",  "indicator": "B10", "unit": "%",      "critical": false },
+          { "id": "N6",        "query": "FRA-OIS利差 $MONTH",                   "type": "single",  "indicator": "N6",  "unit": "%",      "critical": false },
+
+          { "id": "S3",        "query": "AAII投资者情绪 $MONTH",                 "type": "single",  "indicator": "S3",  "unit": "",       "critical": false }
+        ]
+      },
+      {
+        "name": "批6_情绪与资金",
+        "calls": [
+          { "id": "S2",        "query": "CNN 恐惧 贪婪 指数 $MONTH",            "type": "single",  "indicator": "S2",  "unit": "",       "critical": false },
+          { "id": "M5",        "query": "货币基金 净值 总规模",                  "type": "single",  "indicator": "M5",  "unit": "万亿元", "critical": false, "scale": 1e-12 },
+          { "id": "N5",        "query": "美国 货币市场基金 总规模 $MONTH",      "type": "single",  "indicator": "N5",  "unit": "T",      "critical": false, "scale": 1e-12 },
+          { "id": "R3",        "query": "美国 投资级 企业债 OAS 利差",          "type": "single",  "indicator": "R3",  "unit": "bp",     "critical": false, "scale": 100 },
+          { "id": "R4",        "query": "CBOE 看跌看涨 比率 $MONTH",            "type": "single",  "indicator": "R4",  "unit": "",       "critical": false }
+        ]
+      }
+    ]
+  },
+
+  "wind": {
+    "serverType": "analytics_data",
+    "method": "get_financial_data",
+    "calls": [
+      { "id": "F1",  "question": "联邦基金目标利率 最新值",                "indicator": "F1",  "unit": "%",  "critical": true  },
+      { "id": "F2",  "question": "核心PCE物价指数 同比 最新",              "indicator": "F2",  "unit": "%",  "critical": true  }
+    ]
+  },
+
+  "mxdata": {
+    "method": "browse",
+    "calls": [
+      { "id": "A3_mx", "url": "https://data.eastmoney.com/hsgt/index.html", "indicator": "A3", "unit": "亿元", "critical": false, "note": "备选源，主源 eastmoney" }
+    ]
+  },
+
+  "websearch": {
+    "description": "WebSearch items — remaining after iFinD batch6 covers S2/M5/N5/R3/R4. F1/F2 moved to disclosures (blocked_by_contract).",
+    "items": [
+      { "id": "A1",  "name": "MOVE",           "query": "ICE BofA MOVE index latest value",                "unit": "",   "critical": false },
+      { "id": "B4",  "name": "FedWatch",       "query": "CME FedWatch latest rate hike probability",      "unit": "%",  "critical": false },
+      { "id": "F3",  "name": "下次FOMC",        "query": "FOMC meeting schedule 2026 next meeting date",    "unit": "",   "critical": false },
+      { "id": "N3",  "name": "Crane 100 MMF",   "query": "Crane 100 money fund yield index latest",       "unit": "%",  "critical": false },
+      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额",                            "unit": "亿元", "critical": false },
+      { "id": "N5",  "name": "美国MMF总规模",      "query": "ICI US money market fund total assets latest",    "unit": "T",   "critical": false },
+      { "id": "R3",  "name": "IG OAS",              "query": "US investment grade corporate bond OAS spread latest", "unit": "bp", "critical": false }
+    ],
+    "disclosures": [
+      { "id": "F1",  "name": "联邦基金利率上限", "query": "Federal funds rate target upper bound latest",     "unit": "%",   "critical": true,  "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)" },
+      { "id": "F2",  "name": "核心PCE YoY",       "query": "US core PCE price index year-over-year latest",   "unit": "%",   "critical": true,  "reason": "Wind contract explicitly forbids websearch fallback for critical indicators (source-contracts.json wind.fallbackRestrictions.websearch.forbiddenFor)" }
+    ]
+  }
+}

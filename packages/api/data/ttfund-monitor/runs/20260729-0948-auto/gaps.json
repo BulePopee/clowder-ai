@@ -1,0 +1,102 @@
+[
+  {
+    "indicator": "A1",
+    "source": "ifind",
+    "status": "null_value",
+    "error": "null value"
+  },
+  {
+    "indicator": "B1",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "B2",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "B3",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "B6",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "S1",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-27",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "G1_am",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "G1_pm",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "G5",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "CPI",
+    "status": "no_date",
+    "source": "ttfund"
+  },
+  {
+    "indicator": "AG",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-27",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N2",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-27",
+    "source": "ifind"
+  },
+  {
+    "indicator": "B10",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-27",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N6",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-27",
+    "source": "ifind"
+  },
+  {
+    "indicator": "R3",
+    "status": "staleGap",
+    "ageDays": 29,
+    "effectiveAge": 29,
+    "maxAgeDays": 7,
+    "date": "2026-06-30",
+    "source": "ifind"
+  }
+]

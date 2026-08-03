@@ -1,0 +1,244 @@
+{
+  "version": "2.4.0",
+  "description": "ttfund-monitor indicator registry — machine-readable config for collector/index.cjs",
+  "sources": {
+    "ttfund": {
+      "cli": "$HOME/AppData/Local/TTFund/ttskill-base/ttskill-base-win32-x64-0.1.1/bin/ttskill.js",
+      "calls": [
+        {
+          "name": "GOLD_INFO",
+          "skill": "TTFUND_GOLD_INFO",
+          "body": "{}",
+          "datePath": ["macro_fiscal.trade_date", "gold_quotes.au9999.date"],
+          "extracts": {
+            "B1":  { "path": "macro_fiscal.treasury_yields.us_30y",     "unit": "%",  "critical": true  },
+            "B2":  { "path": "macro_fiscal.treasury_yields.us_10y",     "unit": "%",  "critical": true  },
+            "B3":  { "path": "macro_fiscal.treasury_yields.us_2y",      "unit": "%",  "critical": true  },
+            "B6":  { "path": "macro_fiscal.treasury_yields.cn_10y",     "unit": "%",  "critical": true  },
+            "S1":  { "path": "risk_indicators.vix.INDICATOR_VAL",      "unit": "",   "critical": true  },
+            "X1":  { "path": "risk_indicators.dxy.INDICATOR_VAL",      "unit": "",   "critical": true  },
+            "X3":  { "path": "risk_indicators.exchprice.EXCHPRICE",    "unit": "",   "critical": true  },
+            "G1_am":  { "path": "gold_quotes.sge_benchmark.morning_price",  "unit": "元/克", "critical": false },
+            "G1_pm":  { "path": "gold_quotes.sge_benchmark.evening_price",  "unit": "元/克", "critical": false },
+            "G2":  { "path": "gold_quotes.au9999.close",               "unit": "元/克", "critical": true  },
+            "G3":  { "path": "gold_quotes.au_td.close",                "unit": "元/克", "critical": false },
+            "G5":  { "path": "gold_quotes.gold_futures_shfe.close",    "unit": "元/克", "critical": false },
+            "G6":  { "path": "gold_quotes.central_bank_gold.gold_reserves", "unit": "万盎司", "critical": false },
+            "CPI": { "path": "macro_fiscal.cpi_yoy.value",             "unit": "%",  "critical": false }
+          }
+        },
+        {
+          "name": "INDEX_INFO_000300",
+          "skill": "TTFUND_INDEX_INFO",
+          "body": "{\"index_id\":\"000300\"}",
+          "datePath": ["quote.date", "trade_date"],
+          "extracts": {
+            "E2": { "path": "quote.current_point", "unit": "", "critical": true }
+          }
+        },
+        {
+          "name": "HUOQIBAO_LIST",
+          "skill": "TTFUND_HUOQIBAO_LIST",
+          "body": "{}",
+          "datePath": ["yield_date"],
+          "extracts": {
+            "M3": { "path": "items[0].yield_7d_annualized", "unit": "%", "critical": false }
+          }
+        }
+      ]
+    },
+
+    "ifind": {
+      "entry": "D:/clowder-ai/packages/api/skills/ifind-finance-data-1.1.0/call-node.js",
+      "cwd": "D:/clowder-ai/packages/api",
+      "batchDelayMs": 2200,
+      "callType": "edb",
+      "method": "get_edb_data",
+      "batches": [
+        {
+          "name": "批1_商品",
+          "calls": [
+            { "id": "G4_comex",  "query": "COMEX黄金期货 收盘价 $MONTH",          "type": "single",  "indicator": "G4",  "unit": "$",       "critical": true  },
+            { "id": "G4_lbma",   "query": "伦敦金现货 下午定盘价 $MONTH",         "type": "single",  "indicator": "G4b", "unit": "$",       "critical": false },
+            { "id": "AG_comex",  "query": "COMEX白银期货 收盘价 $MONTH",          "type": "single",  "indicator": "AG",  "unit": "$",       "critical": false },
+            { "id": "O1",        "query": "Brent原油期货 收盘价 $MONTH",           "type": "single",  "indicator": "O1",  "unit": "$",       "critical": true  },
+            { "id": "O2",        "query": "WTI原油期货 收盘价 $MONTH",              "type": "single",  "indicator": "O2",  "unit": "$",       "critical": true  }
+          ]
+        },
+        {
+          "name": "批2_资金",
+          "calls": [
+            { "id": "G7",        "query": "SPDR黄金ETF持仓量 $MONTH",              "type": "single",  "indicator": "G7",  "unit": "oz",     "critical": false },
+            { "id": "G8_long",   "query": "COMEX黄金 资产管理机构多头持仓 $YEAR", "type": "single",  "indicator": "G8l", "unit": "万张",  "critical": false },
+            { "id": "G8_short",  "query": "COMEX黄金 资产管理机构空头持仓 $YEAR", "type": "single",  "indicator": "G8s", "unit": "张",    "critical": false }
+          ]
+        },
+        {
+          "name": "批3_债券",
+          "calls": [
+            { "id": "A2_aaa",    "query": "中债企业债到期收益率(AAA):3Y",          "type": "single",  "indicator": "A2a", "unit": "%",      "critical": false },
+            { "id": "A2_gb",     "query": "中债国债到期收益率:3Y",                 "type": "single",  "indicator": "A2g", "unit": "%",      "critical": false },
+            { "id": "N4",        "query": "美国 准备金余额利率 IORB 最新",        "type": "single",  "indicator": "N4",  "unit": "%",      "critical": false },
+            { "id": "X4",        "query": "美元兑人民币离岸 $MONTH",               "type": "single",  "indicator": "X4",  "unit": "",       "critical": true  },
+            { "id": "B8",        "query": "美国通胀保值国债收益率 10年期 $MONTH", "type": "single",  "indicator": "B8",  "unit": "%",      "critical": true  },
+            { "id": "B9",        "query": "美国10年期盈亏平衡通胀率 $MONTH",      "type": "single",  "indicator": "B9",  "unit": "%",      "critical": true  }
+          ]
+        },
+        {
+          "name": "批3b_货币",
+          "calls": [
+            { "id": "M1",        "query": "SHIBOR 3个月 $MONTH",                  "type": "single",  "indicator": "M1",  "unit": "%",      "critical": false },
+            { "id": "M2",        "query": "DR007 存款类机构质押式回购 $MONTH",    "type": "single",  "indicator": "M2",  "unit": "%",      "critical": false },
+            { "id": "M2a",       "query": "央行7天逆回购操作利率 OMO $YEAR",      "type": "single",  "indicator": "M2a", "unit": "%",      "critical": false },
+            { "id": "N1",        "query": "美国国债收益率 3个月 $MONTH",           "type": "single",  "indicator": "N1",  "unit": "%",      "critical": false },
+            { "id": "B5",        "query": "中债国债收益率 30年 $MONTH",            "type": "single",  "indicator": "B5",  "unit": "%",      "critical": false },
+            { "id": "B7",        "query": "中债国债收益率 2年 $MONTH",             "type": "single",  "indicator": "B7",  "unit": "%",      "critical": false }
+          ]
+        },
+        {
+          "name": "批4_K线",
+          "calls": [
+            { "id": "E1_kl",     "query": "纳斯达克100指数 $MONTH_PREV $MONTH 收盘价", "type": "kline", "indicator": "E1_kl", "unit": "", "critical": true  },
+            { "id": "E2_kl",     "query": "沪深300指数 $MONTH_PREV $MONTH 收盘价",      "type": "kline", "indicator": "E2_kl", "unit": "", "critical": true  },
+            { "id": "E3_kl",     "query": "创业板指 $MONTH_PREV $MONTH 收盘价",        "type": "kline", "indicator": "E3_kl", "unit": "", "critical": true  }
+          ]
+        },
+        {
+          "name": "批5_P1扩展",
+          "calls": [
+            { "id": "B10",       "query": "美银美林美国高收益利差 $MONTH",        "type": "single",  "indicator": "B10", "unit": "%",      "critical": false },
+            { "id": "N6",        "query": "FRA-OIS利差 $MONTH",                   "type": "single",  "indicator": "N6",  "unit": "%",      "critical": false },
+            { "id": "N7",        "query": "SOFR-IORB利差 (N2−N4派生)",              "type": "derived", "indicator": "N7",  "unit": "bp",     "critical": false },
+            { "id": "S3",        "query": "AAII投资者情绪 $MONTH",                 "type": "single",  "indicator": "S3",  "unit": "",       "critical": false }
+          ]
+        },
+        {
+          "name": "批6_情绪与资金",
+          "calls": [
+            { "id": "S2",        "query": "CNN 恐惧 贪婪 指数 $MONTH",            "type": "single",  "indicator": "S2",  "unit": "",       "critical": false },
+            { "id": "M5",        "query": "货币基金 净值 总规模",                  "type": "single",  "indicator": "M5",  "unit": "万亿元", "critical": false, "scale": 1e-12 },
+            { "id": "N5",        "query": "美国 货币市场基金 总规模 $MONTH",      "type": "single",  "indicator": "N5",  "unit": "T",      "critical": false, "scale": 1e-12 },
+            { "id": "R3",        "query": "美国 投资级 企业债 OAS 利差",          "type": "single",  "indicator": "R3",  "unit": "bp",     "critical": false, "scale": 100 },
+            { "id": "R4",        "query": "CBOE 看跌看涨 比率 $MONTH",            "type": "single",  "indicator": "R4",  "unit": "",       "critical": false }
+          ]
+        }
+      ]
+    },
+
+    "wind": {
+      "entry": "$HOME/.agents/skills/wind-mcp-skill/scripts/cli.mjs",
+      "cwd": "$HOME/.agents/skills/wind-mcp-skill",
+      "serverType": "analytics_data",
+      "method": "get_financial_data",
+      "calls": [
+        { "id": "F1",  "question": "联邦基金目标利率 最新值",                "indicator": "F1",  "unit": "%",  "critical": true  },
+        { "id": "F2",  "question": "核心PCE物价指数 同比 最新",              "indicator": "F2",  "unit": "%",  "critical": true  },
+        { "id": "N2",  "question": "SOFR利率 最新",                          "indicator": "N2",  "unit": "%",  "critical": true  },
+        { "id": "X2",  "question": "美元兑人民币中间价 最新",                 "indicator": "X2",  "unit": "",   "critical": true  },
+        { "id": "E1",  "question": "纳斯达克100指数 最新价格",               "indicator": "E1",  "unit": "",   "critical": true, "valueCol": 2, "dateCol": 4 },
+        { "id": "M4",  "question": "银行间7天质押式回购加权利率 最新",      "indicator": "M4",  "unit": "%",  "critical": false }
+      ]
+    },
+
+    "mxdata": {
+      "entry": "D:/clowder-ai/packages/api/skills/mx-data/mx_data.py",
+      "method": "browse",
+      "calls": [
+        { "id": "A3_mx", "url": "https://data.eastmoney.com/hsgt/index.html", "indicator": "A3", "unit": "亿元", "critical": false, "note": "备选源，主源 eastmoney" }
+      ]
+    }
+  },
+
+  "websearch": {
+    "description": "WebSearch items — remaining after iFinD batch6 covers S2/M5/N5/R3/R4",
+    "items": [
+      { "id": "A1",  "name": "MOVE",           "query": "ICE BofA MOVE index June 2026 latest value",       "unit": "",   "critical": false },
+      { "id": "B4",  "name": "FedWatch",       "query": "CME FedWatch July 2026 rate hike probability",     "unit": "%",  "critical": false },
+      { "id": "F3",  "name": "下次FOMC",        "query": "FOMC meeting schedule 2026 next meeting date",    "unit": "",   "critical": false },
+      { "id": "N3",  "name": "Crane 100 MMF",   "query": "Crane 100 money fund yield index June 2026",      "unit": "%",  "critical": false },
+      { "id": "A3",  "name": "北向成交额",       "query": "北向资金 今日成交额 2026年6月",                   "unit": "亿元", "critical": false }
+    ]
+  },
+
+  "criticalIds": ["B1","B2","B3","B6","B8","B9","F1","F2","O1","G2","G4","X1","X3","X4","E1","E2","E3"],
+
+  "indicatorNames": {
+    "A1": "MOVE", "A2a": "AAA企业债3Y", "A2g": "国债3Y", "A3": "北向成交额",
+    "B1": "US 30Y", "B2": "US 10Y", "B3": "US 2Y", "B4": "CME FedWatch",
+    "B5": "CN 30Y", "B6": "CN 10Y", "B7": "CN 2Y",
+    "B8": "10Y TIPS real yield", "B9": "10Y breakeven inflation", "B10": "HY OAS",
+    "M1": "SHIBOR 3M", "M2": "DR007", "M2a": "OMO 7D", "M3": "货基7日年化", "M4": "R007", "M5": "货基AUM",
+    "N1": "US 3M T-Bill", "N2": "SOFR", "N3": "Crane 100 MMF", "N4": "IORB",
+    "N5": "MMF AUM", "N6": "FRA-OIS利差", "N7": "SOFR-IORB利差",
+    "F1": "联邦基金利率上限", "F2": "核心PCE YoY", "F3": "下次FOMC",
+    "E1": "Nasdaq 100", "E1_kl": "Nasdaq 100 K线", "E2": "沪深300", "E2_kl": "沪深300 K线", "E3": "创业板指", "E3_kl": "创业板指 K线",
+    "O1": "Brent", "O2": "WTI",
+    "G1_am": "SGE基准价(上午)", "G1_pm": "SGE基准价(下午)", "G2": "Au99.99", "G3": "Au(T+D)",
+    "G4": "COMEX黄金", "G4b": "LBMA午盘定盘价", "G5": "期货主力", "G6": "央行黄金储备",
+    "G7": "SPDR持仓", "G8l": "CFTC多头", "G8s": "CFTC空头",
+    "X1": "DXY", "X2": "PBOC中间价", "X3": "USD/CNY即期", "X4": "USD/CNH离岸",
+    "S1": "VIX", "S2": "CNN F&G", "S3": "AAII sentiment",
+    "R3": "IG OAS", "R4": "CBOE put/call ratio",
+    "AG": "COMEX白银", "CPI": "CPI同比"
+  },
+
+  "freshness": {
+    "B1":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B3":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B4":  { "maxAgeDays": 3,  "staleAction": "staleGap" },
+    "B5":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B6":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B7":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "B8":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "B9":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "B10": { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "M1":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "M2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "M2a": { "maxAgeDays": 30, "staleAction": "acceptable" },
+    "M3":  { "maxAgeDays": 3,  "staleAction": "fallback_not_implemented" },
+    "M4":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "M5":  { "maxAgeDays": 45, "staleAction": "acceptable" },
+    "N1":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "N2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "N3":  { "maxAgeDays": 7,  "staleAction": "staleGap" },
+    "N4":  { "maxAgeDays": 30, "staleAction": "acceptable" },
+    "N5":  { "maxAgeDays": 14, "staleAction": "staleGap" },
+    "N6":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "N7":  { "maxAgeDays": 3,  "staleAction": "derived" },
+    "F1":  { "maxAgeDays": 30, "staleAction": "acceptable" },
+    "F2":  { "maxAgeDays": 90, "staleAction": "acceptable" },
+    "F3":  { "maxAgeDays": 7,  "staleAction": "staleGap" },
+    "E1":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "E2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "E3":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "O1":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "O2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "G1_am": { "maxAgeDays": 1, "staleAction": "staleGap" },
+    "G1_pm": { "maxAgeDays": 1, "staleAction": "staleGap" },
+    "G2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "G3":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "G4":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "G5":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "G6":  { "maxAgeDays": 45, "staleAction": "acceptable" },
+    "G7":  { "maxAgeDays": 3,  "staleAction": "fallback_not_implemented" },
+    "G8l": { "maxAgeDays": 10, "staleAction": "acceptable" },
+    "G8s": { "maxAgeDays": 10, "staleAction": "acceptable" },
+    "X1":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "X2":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "X3":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "X4":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "S1":  { "maxAgeDays": 1,  "staleAction": "staleGap" },
+    "S2":  { "maxAgeDays": 3,  "staleAction": "staleGap" },
+    "S3":  { "maxAgeDays": 7,  "staleAction": "staleGap" },
+    "A1":  { "maxAgeDays": 5,  "staleAction": "staleGap" },
+    "A2a": { "maxAgeDays": 7,  "staleAction": "fallback_not_implemented" },
+    "A2g": { "maxAgeDays": 7,  "staleAction": "fallback_not_implemented" },
+    "A3":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "R3":  { "maxAgeDays": 7,  "staleAction": "staleGap" },
+    "R4":  { "maxAgeDays": 3,  "staleAction": "staleGap" },
+    "AG":  { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" },
+    "CPI": { "maxAgeDays": 30, "staleAction": "acceptable" },
+    "G4b": { "maxAgeDays": 1,  "staleAction": "fallback_not_implemented" }
+  }
+}

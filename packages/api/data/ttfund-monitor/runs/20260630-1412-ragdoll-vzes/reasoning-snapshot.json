@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "runId": "20260630-1412-ragdoll-vzes",
+    "generated": "2026-06-30T08:10:00Z",
+    "data_as_of": "2026-06-30",
+    "version": "2.5.0",
+    "blueprints": ["macro-regime", "gold-rate-conflict", "portfolio-action-gate"],
+    "freshness": {
+      "fresh": 42,
+      "staleGap": 4,
+      "missing": 2,
+      "blockers": 0,
+      "warnings": 2
+    }
+  },
+  "macro_regime": {
+    "regime_claim": "Policy Divergence（政策分化）— 美国紧缩 · 中国宽松 · 收益率曲线非倒挂化进行中",
+    "regime": "Policy Divergence",
+    "confidence": "medium-high",
+    "step1_real_rate": {
+      "real_yield_pct": 2.16,
+      "breakeven_pct": 2.22,
+      "nominal_10y_pct": 4.38,
+      "nominal_self_consistent": true,
+      "core_pce_yoy": 3.37,
+      "real_rate_trend": "elevated and stable",
+      "driver": "real yield movement (not inflation repricing)",
+      "implication": "tightening financial conditions — historically, TIPS >2% precedes economic slowing",
+      "causal_chain": "TIPS 2.16% driven by real yield (not breakeven spike) → financial conditions tight → economic slowdown risk elevated"
+    },
+    "step2_usd_liquidity": {
+      "dxy": 101.12,
+      "dxy_trend": "below 102 threshold, off recent highs",
+      "sofr_iorb_spread_bp": -3,
+      "fra_ois_spread_pct": -0.03,
+      "cnh_cny_spread": -0.0185,
+      "us_liquidity": "ample — no funding stress signals",
+      "china_liquidity": "ample — DR007 1.45% near OMO 1.40%",
+      "conclusion": "USD liquidity充裕，无压力信号；人民币无贬值恐慌"
+    },
+    "step3_risk_sentiment": {
+      "vix": 17.65,
+      "vix_zone": "moderate (below 25)",
+      "cnn_fear_greed": 27.17,
+      "cnn_zone": "fear",
+      "aaii_bullish": 36.12,
+      "aaii_zone": "bearish but not extreme",
+      "nasdaq_100": 29774.75,
+      "conclusion": "wall of worry — fear present but no panic; sentiment may be a leading indicator"
+    },
+    "step4_china": {
+      "cn_10y": 1.717,
+      "cn_us_10y_spread_bp": -266,
+      "spread_signal": "extreme policy divergence",
+      "pboc_fixing": 6.8109,
+      "usd_cny_spot": 6.8175,
+      "dr007": 1.4531,
+      "csi300": 4963.86,
+      "a_share_20d_trend": "Nasdaq -2.42% vs CSI300 +1.7% — independent strength",
+      "conclusion": "中国独立宽松周期，PBOC管理汇率预期，A股展现相对强度"
+    },
+    "step5_yield_curve": {
+      "us_10y2y_bp": 28,
+      "us_30y10y_bp": 48,
+      "cn_10y2y_bp": 48,
+      "us_curve_status": "uninverted — late-cycle signal, not immediate crisis",
+      "key_signal": "US 10Y-2Y 已非倒挂化（从倒挂恢复中），传统上预示经济放缓而非即时危机"
+    },
+    "supporting_evidence": [
+      {"indicator": "B8", "value": "2.16%", "signal": "10Y TIPS elevated — tight financial conditions"},
+      {"indicator": "B9", "value": "2.22%", "signal": "Breakeven moderate — not an inflation-panic driver"},
+      {"indicator": "F2", "value": "3.37%", "signal": "Core PCE sticky — Fed cannot ease"},
+      {"indicator": "X1", "value": "101.12", "signal": "DXY below 102 — USD not at tightening threshold"},
+      {"indicator": "M2", "value": "1.45%", "signal": "DR007 near OMO — China liquidity充裕"},
+      {"indicator": "CN-US 10Y spread", "value": "-266bp", "signal": "Extreme policy divergence confirmed"}
+    ],
+    "opposing_evidence": [
+      {"indicator": "S1", "value": "17.65", "signal": "VIX moderate — not confirming risk-off"},
+      {"indicator": "S2", "value": "27.17", "signal": "CNN F&G in fear but not extreme panic"}
+    ],
+    "stale_or_missing_data": [
+      "B10 HY OAS (4d staleGap)",
+      "N6 FRA-OIS (4d staleGap)",
+      "R3 IG OAS (30d staleGap)",
+      "N2 SOFR (4d staleGap)",
+      "E2 沪深300 (no_date from ttfund)",
+      "M3 货基7日年化 (no_date from ttfund)"
+    ],
+    "invalid_inferences": [],
+    "invalidate_if": [
+      "核心PCE跌破3.0% → 软着陆路径，regime可能转向Goldilocks",
+      "VIX突破25 → 风险规避升级，可能转入Risk-Off",
+      "HY OAS突破4.0% → 信用压力信号",
+      "CN 10Y跌破1.5% → 中国增长恐慌"
+    ],
+    "china_factor": "A股20日趋势独立于美股（Nasdaq -2.42% vs CSI300 +1.7%），中国宽松周期与美国紧缩形成极端政策分化"
+  },
+  "gold_rate_conflict": {
+    "claim": "中期结构性支撑完好，但短期因极端投机头寸有回调风险",
+    "confidence": "medium",
+    "confidence_note": "CFTC数据滞后7天，降低置信度",
+    "model_conflict": {
+      "traditional_model_signal": "bearish",
+      "actual_price_signal": "bullish",
+      "tips_real_yield": 2.16,
+      "model_implied_gold": "$1,500-1,800",
+      "comex_gold": 4200,
+      "conflict_severity": "severe — real rate/gold correlation has broken down, requires non-traditional factors for explanation",
+      "conflict_resolution": "结构性资金流（央行+SPDR）和政策不确定性溢价抵消了实际利率压力。但CFTC投机头寸极端拥挤（8.35:1），短期回调风险高。回调到位后重新评估，非清仓信号。"
+    },
+    "positioning_and_flow": {
+      "cftc_long": 131102,
+      "cftc_short": 15707,
+      "cftc_long_short_ratio": "8.35:1",
+      "cftc_positioning": "extremely crowded",
+      "cftc_correction_threshold": ">5:1 historical correction threshold breached",
+      "spdr_holdings_oz": 32314227.65,
+      "spdr_trend": "structural demand",
+      "cb_reserves_wan_oz": 7496,
+      "cb_trend": "PBOC continuing accumulation",
+      "primary_driver": "both speculation and structural demand",
+      "gold_bid_quality": "structural bid durable, speculative layer fragile — vulnerable to positioning flush"
+    },
+    "china_premium": {
+      "au9999_cny_per_g": 886.74,
+      "comex_implied_cny_per_g": 920.5,
+      "domestic_premium_pct": -3.68,
+      "signal": "domestic gold demand weak — Chinese investors not chasing the rally"
+    },
+    "weighted_score": {
+      "factors": [
+        {"factor": "Real Rates (TIPS 2.16%)", "weight": "35%", "score": -1.5, "contribution": -0.525, "rationale": "TIPS >2% is bearish for gold in traditional model"},
+        {"factor": "USD (DXY 101.12)", "weight": "20%", "score": 0.5, "contribution": 0.1, "rationale": "DXY below 102, moderately supportive for gold"},
+        {"factor": "Positioning (CFTC 8.35:1)", "weight": "20%", "score": -1.0, "contribution": -0.2, "rationale": "Extreme crowding — historically precedes corrections"},
+        {"factor": "Structural Flow (SPDR + CB)", "weight": "15%", "score": 1.0, "contribution": 0.15, "rationale": "SPDR elevated + PBOC still accumulating — durable bid"},
+        {"factor": "China Premium (-3.68%)", "weight": "10%", "score": -0.5, "contribution": -0.05, "rationale": "Domestic discount signals weak local demand"}
+      ],
+      "total": -0.525,
+      "interpretation": "Moderately bearish — real rate headwind + crowded positioning outweigh structural flow support"
+    },
+    "supporting_evidence": [
+      {"indicator": "G7", "value": "32.3M oz", "signal": "SPDR holdings elevated — structural demand"},
+      {"indicator": "G6", "value": "7,496万盎司", "signal": "PBOC continues gold reserve accumulation"},
+      {"indicator": "G4", "value": "$4,200", "signal": "COMEX gold near all-time highs"}
+    ],
+    "opposing_evidence": [
+      {"indicator": "B8", "value": "2.16%", "signal": "10Y TIPS at restrictive level — bearish for gold in traditional model"},
+      {"indicator": "G8l/G8s", "value": "8.35:1", "signal": "CFTC positioning extremely crowded — correction risk elevated"},
+      {"indicator": "G11", "value": "-3.68%", "signal": "Domestic discount — Chinese investors not chasing gold"}
+    ],
+    "stale_or_missing_data": [
+      "G8l/G8s CFTC data lagged 7 days — positioning may have shifted"
+    ],
+    "invalidate_if": [
+      "TIPS re-breaks above 2.5% → gold traditional headwind intensifies, reduce conviction",
+      "CFTC ratio drops below 3:1 → positioning flush complete, re-evaluate gold allocation",
+      "DXY breaks above 104 → USD strength may overwhelm gold structural bid"
+    ],
+    "action_gate": {
+      "action_allowed": false,
+      "action_reason": "Gold signals are conflicting: structural support (CB + SPDR) vs. crowded positioning with correction risk. Weighted score -0.53 (moderately bearish). Hold current gold position (10.2% of portfolio), do not add. If gold corrects to $3,800, re-evaluate gold allocation — no predetermined action."
+    },
+    "scenarios": [
+      {
+        "scenario": "Positioning Flush (CFTC normalizes to <3:1)",
+        "trigger": "CFTC ratio drops below 3:1",
+        "probability": "medium-high",
+        "gold_impact": "bearish short-term (-5~10% → $3,800-4,000)",
+        "portfolio_implication": "Monitor gold during correction; re-evaluate gold allocation after flush completes. No predetermined action at $3,800."
+      },
+      {
+        "scenario": "Soft Landing / FOMC Cut",
+        "trigger": "TIPS < 1.8%, FOMC signals cuts",
+        "probability": "medium",
+        "gold_impact": "bullish",
+        "portfolio_implication": "Favorable for gold — hold through and re-evaluate allocation after FOMC clarity."
+      },
+      {
+        "scenario": "Hard Landing",
+        "trigger": "SOFR spikes, credit spreads blow out",
+        "probability": "low",
+        "gold_impact": "initially bearish, then bullish",
+        "portfolio_implication": "Re-evaluate at each stage: monitor initial liquidity squeeze, re-evaluate entry after panic subsides."
+      },
+      {
+        "scenario": "USD Regime Shift (DXY < 98)",
+        "trigger": "DXY breaks below 98",
+        "probability": "low",
+        "gold_impact": "very bullish",
+        "portfolio_implication": "Very favorable for gold — re-evaluate gold allocation upward and re-evaluate USD-denominated equity downward."
+      }
+    ]
+  },
+  "portfolio_action_gate": {
+    "action_advice_allowed": true,
+    "recommendation": "hold",
+    "confidence": "medium",
+    "blocker_check": {
+      "blockers": 0,
+      "can_advise": true
+    },
+    "current_allocation": {
+      "total_assets": 3425.07,
+      "hqb_assets": 0,
+      "hqb_pct": 0,
+      "hqb_note": "活期宝余额为零",
+      "mmf_assets": 2031.11,
+      "mmf_pct_of_total": 59.3,
+      "mmf_names": ["长城收益宝货币C"],
+      "mmf_note": "货币基金计入基金持仓，非现金等价物。按G003规则，MMF不得用于抵扣HQB目标缺口。",
+      "gold_assets": 350.49,
+      "gold_pct": 10.2,
+      "bond_assets": 311.04,
+      "bond_pct": 9.1,
+      "us_equity_assets": 217.04,
+      "us_equity_pct": 6.3,
+      "a_share_assets": 309.41,
+      "a_share_pct": 9.0,
+      "a_share_breakdown": {
+        "csi300": {"code": "007339", "name": "易方达沪深300ETF联接C", "value": 207.42, "pct": 6.1},
+        "csi500": {"code": "007413", "name": "长城中证500指数增强C", "value": 101.99, "pct": 3.0}
+      },
+      "other_assets": 205.98,
+      "other_pct": 6.0,
+      "other_note": "宝盈转型动力混合C — 混合基金",
+      "non_mmf_fund_assets": 1393.96
+    },
+    "deviation_analysis": {
+      "target_regime_assessed": "normal",
+      "defensive_triggers_active": 1,
+      "defensive_triggers_total": 5,
+      "trigger_detail": [
+        {"indicator": "TIPS > 2.0%", "threshold": "> 2.0%", "current": "2.16%", "triggered": true},
+        {"indicator": "DXY > 102", "threshold": "> 102", "current": "101.12", "triggered": false},
+        {"indicator": "VIX > 25", "threshold": "> 25", "current": "17.65", "triggered": false},
+        {"indicator": "HY OAS > 4%", "threshold": "> 4.0%", "current": "2.83% (4d stale)", "triggered": false},
+        {"indicator": "US 10Y-2Y inversion", "threshold": "< 0", "current": "+28bp", "triggered": false}
+      ],
+      "insufficient_for_defensive_switch": true,
+      "deviations": [
+        {"asset": "HQB (活期宝)", "current_pct": 0, "normal_target": "10-15%", "defensive_target": "35-40%", "gap": "severe — zero HQB holdings"},
+        {"asset": "A-share Equity", "current_pct": 9.0, "normal_target": "25-30%", "defensive_target": "15-20%", "gap": "below both targets"},
+        {"asset": "US Equity", "current_pct": 6.3, "normal_target": "15-20%", "defensive_target": "5-10%", "gap": "within defensive range, below normal"},
+        {"asset": "Gold", "current_pct": 10.2, "normal_target": "10-15%", "defensive_target": "10-15%", "gap": "within range"},
+        {"asset": "Fixed Income", "current_pct": 9.1, "normal_target": "15-20%", "defensive_target": "10-15%", "gap": "slightly below both targets"}
+      ],
+      "mmf_note": "MMF 59.3% must be listed separately as a fund holding — it does not offset HQB, bond, or any asset-class target gap per G003",
+      "total_deviation": "significant"
+    },
+    "macro_alignment": {
+      "regime": "Policy Divergence",
+      "defensive_triggers_active": 1,
+      "insufficient_for_action": true,
+      "note": "仅1/5防御触发，不满足防御切换条件（需≥2个同时激活）。宏观信号不够清晰，不应行动。"
+    },
+    "decision_path": {
+      "step1_blockers": "0 blockers → can advise",
+      "step2_deviation": "HQB严重不足(0%) + A股低于目标(9.0%) → 存在偏差",
+      "step3_macro_triggers": "仅1/5防御触发 → 不满足切换条件",
+      "step4_confidence": "中 — S2收益数据缺失 + G008/G009警告 → 置信度降低",
+      "step5_decision": "HOLD — 只有1/5防御触发，不满足防御切换条件；S2收益数据缺失无法验证当前配置是否损害收益；增加HQB需要卖出基金 → 信号不够清晰时不应行动；等待FOMC 7/28-29明确利率路径",
+      "next_checkpoint": "2026-07-29 (post-FOMC)"
+    },
+    "action_conditions": [
+      "FOMC结果明确利率方向",
+      "TIPS 10Y方向更清晰（突破2.5%或跌破1.8%）",
+      "S2收益数据可用",
+      "≥2个防御触发同时激活才考虑防御切换"
+    ],
+    "veto_triggers": [
+      "FOMC意外鹰派 → 重新评估权益敞口",
+      "金价跌破$3,800 → 重新评估黄金底部",
+      "VIX突破25 → 取消任何权益加仓",
+      "CN 10Y跌破1.5% → 暂停A股加仓",
+      "USD/CNY突破7.0 → PBOC控制力受考验"
+    ],
+    "supporting_evidence": [
+      {"source": "macro-regime", "finding": "Policy Divergence — China easing, US tightening"},
+      {"source": "gold-rate-conflict", "finding": "Gold hold — conflicting signals, weighted score -0.53"}
+    ],
+    "opposing_evidence": [
+      {"source": "portfolio-snapshot", "finding": "S2 profit data empty — cannot verify current return profile"},
+      {"source": "portfolio-snapshot", "finding": "S3 analysis unavailable, S4 trade empty — limited portfolio context"}
+    ],
+    "stale_or_missing_data": [
+      "S2_profit=empty",
+      "S3_analysis=unavailable",
+      "S4_trade=empty"
+    ],
+    "invalidate_if": [
+      "FOMC意外鹰派 → 重新评估权益敞口",
+      "金价跌破$3,800 → 重新评估黄金底部",
+      "VIX突破25 → 取消任何权益加仓",
+      "CN 10Y跌破1.5% → 暂停A股加仓",
+      "USD/CNY突破7.0 → PBOC控制力受考验"
+    ]
+  }
+}

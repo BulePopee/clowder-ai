@@ -1,0 +1,163 @@
+{
+  "version": "1.1.0",
+  "description": "Source adapter contracts — machine-verifiable constraints for each data source. Used by probe-sources.cjs (probe gate), collector/index.cjs (provenance), and validate-source-contract.cjs (validator). v1.1.0 adds depthProbe section per source (P5-C).",
+  "depthProbePolicy": {
+    "requiredSources": ["ttfund", "ifind", "wind"],
+    "requiredFailureAction": "hard_fail",
+    "optionalFailureAction": "warn",
+    "note": "Required sources failing depth probe must block pipeline before collect. Optional sources (mx-data, websearch) only warn."
+  },
+  "forbiddenFallbackTypes": {
+    "news_article": "新闻文章 — 不得作为精确值来源",
+    "proxy_etf": "ETF代理 — 不得替代原始指标（如GLD代理G7）",
+    "proxy_index": "指数代理 — 不得替代原始指标",
+    "approximate": "约数/~值 — 不得出现于精确指标",
+    "stale_proxy": "过期代理 — 不得用旧数据代理当前值",
+    "unattributed": "无来源标注 — 任何值必须有明确来源"
+  },
+  "sources": {
+    "ttfund": {
+      "id": "ttfund",
+      "name": "天天基金 CLI",
+      "type": "CLI",
+      "auth": { "required": true, "method": "builtin_login", "note": "登录态由 CLI 自带 session 管理" },
+      "supportedIndicators": {
+        "prefixes": ["B1","B2","B3","B6","S1","X1","X3","G1","G2","G3","G5","G6","E2","M3","CPI"],
+        "note": "通过 GOLD_INFO / INDEX_INFO_000300 / HUOQIBAO_LIST 三技能覆盖"
+      },
+      "valueType": "number_or_string",
+      "unitExpectation": { "note": "各 extract 的 unit 字段声明于 sources.json，collector 写入 raw.json" },
+      "allowedFailureModes": ["timeout", "login_expired", "null_value", "parse_error", "missing_field"],
+      "allowedFallbackTargets": [],
+      "isPrimaryFor": ["B1","B2","B3","B6","S1","X1","X3","G1_am","G1_pm","G2","G3","G5","G6","E2","M3","CPI"],
+      "probeCheck": { "command": "node", "argsTemplate": ["{cliPath}", "status", "--env", "prod", "--json"], "successPattern": "exit_0" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "cli_invoke",
+        "command": "node",
+        "argsTemplate": ["{cliPath}", "invoke", "TTFUND_GOLD_INFO", "--action", "query", "--env", "prod", "--body", "{}"],
+        "timeoutMs": 30000,
+        "responseParser": { "type": "jsonPath", "path": "data.raw_result.body.data" },
+        "checks": [
+          { "path": "macro_fiscal.treasury_yields.us_10y", "label": "B2 US 10Y yield", "valueKind": "number", "critical": true, "indicatorId": "B2" },
+          { "path": "macro_fiscal.trade_date", "label": "Trade date", "valueKind": "date", "critical": true },
+          { "path": "gold_quotes.au9999.close", "label": "G2 Au9999 close", "valueKind": "number", "critical": false, "indicatorId": "G2", "note": "G2_proxy fallback exists in collector; null Au9999 must not block pipeline" }
+        ]
+      }
+    },
+    "ifind": {
+      "id": "ifind",
+      "name": "同花顺 iFinD MCP",
+      "type": "module",
+      "auth": { "required": true, "method": "mcp_config", "note": "需 mcp_config.json 在入口同级目录" },
+      "supportedIndicators": {
+        "prefixes": ["G4","G7","G8","O1","O2","A1","A2","B5","B7","B8","B9","B10","M1","M2","M2a","M5","N1","N4","N5","N6","S2","S3","X4","E1","E3","R3","R4","AG"],
+        "note": "通过 edb/get_edb_data 批量查询覆盖"
+      },
+      "valueType": "number_or_array",
+      "unitExpectation": {
+        "declared": {
+          "G7": "oz (canonical: 吨, auto-normalized by unit-normalizer)",
+          "G8l": "万张",
+          "G8s": "张"
+        },
+        "note": "units 声明于 sources.json 各 batch item，unit-normalizer 处理跨 run 漂移"
+      },
+      "allowedFailureModes": ["timeout", "null_value", "parse_error", "empty_result", "month_no_data", "schema_drift"],
+      "allowedFallbackTargets": ["websearch"],
+      "fallbackRestrictions": {
+        "websearch": { "allowedFor": ["non_critical_only"], "forbiddenFor": ["G4","G7","O1","O2","X4","B8","B9"] },
+        "note": "WebSearch 不得替代 iFinD critical 指标"
+      },
+      "isPrimaryFor": ["G4","G4b","G7","G8l","G8s","O1","O2","A1","A2a","A2g","B5","B7","B8","B9","B10","M1","M2","M2a","M5","N1","N4","N5","N6","S2","S3","X4","R3","R4","AG","E1_kl","E2_kl","E3_kl"],
+      "probeCheck": { "command": "node", "argsTemplate": ["-e", "require('{entryPath}') && console.log('ok')"], "successPattern": "ok_in_stdout" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "require_call",
+        "modulePath": "{entryPath}",
+        "cwd": "{cwd}",
+        "timeoutMs": 25000,
+        "functionCall": { "export": "call", "args": ["edb", "get_edb_data", { "query": "美国通胀保值国债收益率 10年期" }] },
+        "checks": [
+          { "path": "value", "label": "B8 TIPS 10Y value", "valueKind": "number", "critical": true, "indicatorId": "B8" },
+          { "path": "date", "label": "B8 date", "valueKind": "date", "critical": true }
+        ]
+      }
+    },
+    "wind": {
+      "id": "wind",
+      "name": "Wind 万得 MCP",
+      "type": "module",
+      "auth": { "required": true, "method": "installed_skill", "note": "需 Wind skill 已安装并可通过 node 调用" },
+      "supportedIndicators": {
+        "prefixes": ["F1","F2","N2","X2","E1","M4"],
+        "note": "通过 analytics_data/get_financial_data 单问查询覆盖"
+      },
+      "valueType": "number_or_string",
+      "unitExpectation": { "note": "各 call 的 unit 字段声明于 sources.json" },
+      "allowedFailureModes": ["timeout", "auth_error", "null_value", "parse_error", "no_data", "policy_blocked"],
+      "allowedFallbackTargets": ["websearch", "ifind"],
+      "fallbackRestrictions": {
+        "websearch": { "allowedFor": ["F3"], "forbiddenFor": ["F1","F2","N2","X2","E1"] },
+        "ifind": { "allowedFor": ["E1","X2","N2","M4"], "note": "Wind unavailable or probe call failed for these → iFinD provides valid equivalent data" },
+        "note": "Wind 核心政策指标不得用 WebSearch 替代（除 F3 FOMC 日期外）。iFinD 允许作为非政策类指标的 fallback。"
+      },
+      "isPrimaryFor": ["F1","F2","N2","X2","E1","M4"],
+      "probeCheck": { "command": "node", "argsTemplate": ["{entryPath}", "call", "analytics_data", "get_financial_data", "{\"question\":\"联邦基金目标利率 最新值\"}"], "successPattern": "exit_0_and_json" },
+      "depthProbe": {
+        "enabled": true,
+        "kind": "cli_invoke",
+        "command": "node",
+        "argsTemplate": ["{entryPath}", "call", "analytics_data", "get_financial_data", "{\"question\":\"联邦基金目标利率 最新值\"}"],
+        "timeoutMs": 30000,
+        "responseParser": { "type": "json" },
+        "checks": [
+          { "path": "$any", "label": "F1 Fed funds rate (any response field)", "valueKind": "number", "critical": true, "indicatorId": "F1" }
+        ]
+      }
+    },
+    "mx-data": {
+      "id": "mx-data",
+      "name": "妙想金融数据 (东方财富)",
+      "type": "browser_or_script",
+      "auth": { "required": false, "method": "none", "note": "公开数据接口" },
+      "supportedIndicators": {
+        "prefixes": ["A3"],
+        "note": "东方财富沪深港通数据"
+      },
+      "valueType": "number",
+      "unitExpectation": { "note": "亿元" },
+      "allowedFailureModes": ["timeout", "no_data", "parse_error", "browser_unavailable"],
+      "allowedFallbackTargets": ["websearch"],
+      "fallbackRestrictions": {
+        "websearch": { "allowedFor": ["A3"], "note": "A3 备选 websearch 获取北向资金" }
+      },
+      "isPrimaryFor": [],
+      "isFallbackFor": ["A3"],
+      "probeCheck": { "command": "path_exists", "argsTemplate": ["{entryPath}"], "successPattern": "exists" }
+    },
+    "websearch": {
+      "id": "websearch",
+      "name": "网络搜索",
+      "type": "websearch",
+      "auth": { "required": false, "method": "none", "note": "通过 WebSearch 工具搜索公开网页" },
+      "supportedIndicators": {
+        "prefixes": ["A1","B4","F3","N3","A3"],
+        "note": "仅用于非 critical 指标的备选 / FOMC 日期等事实查询"
+      },
+      "valueType": "string_or_number",
+      "unitExpectation": { "note": "无固定单位契约 — 必须标注来源 URL 和数据日期" },
+      "allowedFailureModes": ["no_results", "stale_data", "conflicting_sources"],
+      "allowedFallbackTargets": [],
+      "isPrimaryFor": ["B4","F3","N3"],
+      "isFallbackFor": ["A1","N5","A3"],
+      "constraints": {
+        "requiresSourceUrl": true,
+        "requiresDataDate": true,
+        "forbiddenValueSources": ["news_article", "proxy_etf", "proxy_index", "approximate", "stale_proxy", "unattributed"],
+        "note": "WebSearch 获取的值必须来自原始指标页/官方源/数据平台摘要，不得来自新闻文章或 ETF 代理"
+      },
+      "probeCheck": { "command": "always_available", "argsTemplate": [], "successPattern": "assumed", "note": "WebSearch 在 CLI 环境始终可用" }
+    }
+  }
+}

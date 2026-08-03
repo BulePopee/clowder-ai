@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy to tools.json and fill in local paths. tools.json is gitignored.",
+  "_comment_env": "Alternatively, set TTFUND_RUNTIME_ROOT to override the runtime data directory.",
+  "ttfund": {
+    "cli": "$HOME/AppData/Local/TTFund/ttskill-base/ttskill-base-win32-x64-0.1.1/bin/ttskill.js"
+  },
+  "ifind": {
+    "entry": "$API_ROOT/skills/ifind-finance-data-1.1.0/call-node.js",
+    "cwd": "$API_ROOT"
+  },
+  "mxdata": {
+    "entry": "$API_ROOT/skills/mx-data/mx_data.py"
+  },
+  "wind": {
+    "entry": "wind-mcp-skill"
+  }
+}

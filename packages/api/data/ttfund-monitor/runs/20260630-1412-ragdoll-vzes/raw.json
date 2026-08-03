@@ -1,0 +1,715 @@
+{
+  "runId": "20260630-1412-ragdoll-vzes",
+  "round": "routine",
+  "version": "2.4.0",
+  "collectedAt": "2026-06-30T06:51:38.177Z",
+  "summary": {
+    "total": 54,
+    "collected": 43,
+    "missing": 2,
+    "fresh": 42,
+    "staleSuccess": 1,
+    "staleGap": 6,
+    "invalidDate": 0
+  },
+  "results": {
+    "B1": {
+      "indicator": "B1",
+      "value": 4.86,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B2": {
+      "indicator": "B2",
+      "value": 4.38,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B3": {
+      "indicator": "B3",
+      "value": 4.1,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B6": {
+      "indicator": "B6",
+      "value": 1.717,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "S1": {
+      "indicator": "S1",
+      "value": 17.65,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "X1": {
+      "indicator": "X1",
+      "value": 101.1156,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "X3": {
+      "indicator": "X3",
+      "value": 6.8175,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "G1_am": {
+      "indicator": "G1_am",
+      "value": null,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "missing"
+    },
+    "G1_pm": {
+      "indicator": "G1_pm",
+      "value": null,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "missing"
+    },
+    "G2": {
+      "indicator": "G2",
+      "value": 886.74,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "G3": {
+      "indicator": "G3",
+      "value": 887.2,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G5": {
+      "indicator": "G5",
+      "value": 888.72,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "元/克",
+      "_freshStatus": "fresh"
+    },
+    "G6": {
+      "indicator": "G6",
+      "value": 7496,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "万盎司",
+      "_freshStatus": "fresh"
+    },
+    "CPI": {
+      "indicator": "CPI",
+      "value": 4.2,
+      "date": "2026-06-29",
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "E2": {
+      "indicator": "E2",
+      "value": 4963.86,
+      "date": null,
+      "source": "ttfund",
+      "unit": "",
+      "_freshStatus": "no_date"
+    },
+    "M3": {
+      "indicator": "M3",
+      "value": 2.972,
+      "date": null,
+      "source": "ttfund",
+      "unit": "%",
+      "_freshStatus": "no_date"
+    },
+    "G4": {
+      "indicator": "G4",
+      "value": 4200,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "G4b": {
+      "indicator": "G4b",
+      "value": 4026.45,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "AG": {
+      "indicator": "AG",
+      "value": 58.29,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "O1": {
+      "indicator": "O1",
+      "value": 73.15,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "O2": {
+      "indicator": "O2",
+      "value": 70.42,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "$",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "G7": {
+      "indicator": "G7",
+      "value": 32314227.65,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "oz",
+      "_freshStatus": "fresh"
+    },
+    "G8l": {
+      "indicator": "G8l",
+      "value": 131102,
+      "date": "2026-06-23",
+      "source": "ifind",
+      "unit": "万张",
+      "_freshStatus": "fresh"
+    },
+    "G8s": {
+      "indicator": "G8s",
+      "value": 15707,
+      "date": "2026-06-23",
+      "source": "ifind",
+      "unit": "张",
+      "_freshStatus": "fresh"
+    },
+    "A2a": {
+      "indicator": "A2a",
+      "value": 1.6053,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "A2g": {
+      "indicator": "A2g",
+      "value": 1.2734,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "N4": {
+      "indicator": "N4",
+      "value": 3.65,
+      "date": "2026-06-30",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "X4": {
+      "indicator": "X4",
+      "value": 6.798993950952951,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B8": {
+      "indicator": "B8",
+      "value": 2.16,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "B9": {
+      "indicator": "B9",
+      "value": 2.22,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "M1": {
+      "indicator": "M1",
+      "value": 1.438,
+      "date": "2026-06-30",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "M2": {
+      "indicator": "M2",
+      "value": 1.4531,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "M2a": {
+      "indicator": "M2a",
+      "value": 1.4,
+      "date": "2026-06-30",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "N1": {
+      "indicator": "N1",
+      "value": 3.87,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B5": {
+      "indicator": "B5",
+      "value": 2.209,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "B7": {
+      "indicator": "B7",
+      "value": 1.2362,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "E1_kl": {
+      "indicator": "E1_kl",
+      "value": [
+        [
+          "2026-06-29",
+          29774.75
+        ],
+        [
+          "2026-06-26",
+          29118.24
+        ],
+        [
+          "2026-06-25",
+          29440.32
+        ],
+        [
+          "2026-06-24",
+          29220.06
+        ],
+        [
+          "2026-06-23",
+          29347.27
+        ],
+        [
+          "2026-06-22",
+          30347.08
+        ],
+        [
+          "2026-06-18",
+          30406.19
+        ],
+        [
+          "2026-06-17",
+          29670.95
+        ],
+        [
+          "2026-06-16",
+          29968.13
+        ],
+        [
+          "2026-06-15",
+          30543.92
+        ],
+        [
+          "2026-06-12",
+          29635.95
+        ],
+        [
+          "2026-06-11",
+          29446.18
+        ],
+        [
+          "2026-06-10",
+          28508.03
+        ],
+        [
+          "2026-06-09",
+          29084.5
+        ],
+        [
+          "2026-06-08",
+          29414.26
+        ],
+        [
+          "2026-06-05",
+          28957.6
+        ],
+        [
+          "2026-06-04",
+          30407.81
+        ],
+        [
+          "2026-06-03",
+          30571.24
+        ],
+        [
+          "2026-06-02",
+          30660.6
+        ],
+        [
+          "2026-06-01",
+          30513.86
+        ]
+      ],
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:20",
+      "_freshStatus": "unknown"
+    },
+    "E2_kl": {
+      "indicator": "E2_kl",
+      "value": [
+        [
+          "2026-06-29",
+          4926.921
+        ],
+        [
+          "2026-06-26",
+          4868.2205
+        ],
+        [
+          "2026-06-25",
+          5020.1038
+        ],
+        [
+          "2026-06-24",
+          4943.0197
+        ],
+        [
+          "2026-06-23",
+          4919.386
+        ],
+        [
+          "2026-06-22",
+          5059.6582
+        ],
+        [
+          "2026-06-18",
+          4941.5986
+        ],
+        [
+          "2026-06-17",
+          4931.3861
+        ],
+        [
+          "2026-06-16",
+          4884.2322
+        ],
+        [
+          "2026-06-15",
+          4891.7126
+        ],
+        [
+          "2026-06-12",
+          4777.3206
+        ],
+        [
+          "2026-06-11",
+          4722.4122
+        ],
+        [
+          "2026-06-10",
+          4748.5932
+        ],
+        [
+          "2026-06-09",
+          4801.8106
+        ],
+        [
+          "2026-06-08",
+          4713.6358
+        ],
+        [
+          "2026-06-05",
+          4816.9199
+        ],
+        [
+          "2026-06-04",
+          4904.7454
+        ],
+        [
+          "2026-06-03",
+          4938.8091
+        ],
+        [
+          "2026-06-02",
+          4914.5591
+        ],
+        [
+          "2026-06-01",
+          4844.2556
+        ]
+      ],
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:20",
+      "_freshStatus": "unknown"
+    },
+    "E3_kl": {
+      "indicator": "E3_kl",
+      "value": [
+        [
+          "2026-06-29",
+          4216.6985
+        ],
+        [
+          "2026-06-26",
+          4194.2089
+        ],
+        [
+          "2026-06-25",
+          4371.9891
+        ],
+        [
+          "2026-06-24",
+          4251.4244
+        ],
+        [
+          "2026-06-23",
+          4192.1945
+        ],
+        [
+          "2026-06-22",
+          4359.392
+        ],
+        [
+          "2026-06-18",
+          4252.3903
+        ],
+        [
+          "2026-06-17",
+          4167.0478
+        ],
+        [
+          "2026-06-16",
+          4102.9421
+        ],
+        [
+          "2026-06-15",
+          4033.5349
+        ],
+        [
+          "2026-06-12",
+          3830.353
+        ],
+        [
+          "2026-06-11",
+          3811.246
+        ],
+        [
+          "2026-06-10",
+          3854.7935
+        ],
+        [
+          "2026-06-09",
+          3961.7493
+        ],
+        [
+          "2026-06-08",
+          3811.7854
+        ],
+        [
+          "2026-06-05",
+          3957.935
+        ],
+        [
+          "2026-06-04",
+          4088.884
+        ],
+        [
+          "2026-06-03",
+          4122.987
+        ],
+        [
+          "2026-06-02",
+          4055.8709
+        ],
+        [
+          "2026-06-01",
+          3950.9432
+        ]
+      ],
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "",
+      "note": "kline:20",
+      "_freshStatus": "unknown"
+    },
+    "B10": {
+      "indicator": "B10",
+      "value": 2.83,
+      "date": "2026-06-26",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "N6": {
+      "indicator": "N6",
+      "value": -0.03,
+      "date": "2026-06-26",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "N7": {
+      "indicator": "N7",
+      "value": 0.504,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "S3": {
+      "indicator": "S3",
+      "value": 36.1233,
+      "date": "2026-06-26",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "S2": {
+      "indicator": "S2",
+      "value": 27.1714285714286,
+      "date": "2026-06-30",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "M5": {
+      "indicator": "M5",
+      "value": 16.265090999999998,
+      "date": "2026-05-31",
+      "source": "ifind",
+      "unit": "万亿元",
+      "_freshStatus": "fresh"
+    },
+    "N5": {
+      "indicator": "N5",
+      "value": 7.9001209999999995,
+      "date": "2026-06-24",
+      "source": "ifind",
+      "unit": "T",
+      "_freshStatus": "fresh"
+    },
+    "R3": {
+      "indicator": "R3",
+      "value": 79,
+      "date": "2026-05-31",
+      "source": "ifind",
+      "unit": "bp",
+      "_freshStatus": "staleGap"
+    },
+    "R4": {
+      "indicator": "R4",
+      "value": 0.95,
+      "date": "2026-06-29",
+      "source": "ifind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "F1": {
+      "indicator": "F1",
+      "value": 3.75,
+      "date": "2025-12-11",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "staleSuccess"
+    },
+    "F2": {
+      "indicator": "F2",
+      "value": 3.3654,
+      "date": "2026-06-30",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "fresh"
+    },
+    "N2": {
+      "indicator": "N2",
+      "value": 3.62,
+      "date": "2026-06-26",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "staleGap",
+      "_staleNote": "fallback_not_implemented"
+    },
+    "X2": {
+      "indicator": "X2",
+      "value": 6.8109,
+      "date": "2026-06-30",
+      "source": "wind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "E1": {
+      "indicator": "E1",
+      "value": 29774.75,
+      "date": "20260629 16:00:10",
+      "source": "wind",
+      "unit": "",
+      "_freshStatus": "fresh"
+    },
+    "M4": {
+      "indicator": "M4",
+      "value": 1.5023,
+      "date": "2026-06-29",
+      "source": "wind",
+      "unit": "%",
+      "_freshStatus": "fresh",
+      "_staleNote": "fallback_not_implemented"
+    }
+  }
+}

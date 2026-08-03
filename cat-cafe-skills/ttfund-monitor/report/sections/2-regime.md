@@ -1,0 +1,115 @@
+# Section 2: Market Wind Diagnosis
+
+## Purpose
+
+数据驱动的市场风向判断。先列数据方向，再从资产联动反推主导驱动力。不做 regime 选择题。
+
+## Protocol
+
+1. 从 snapshot 提取关键资产方向数据
+2. 填资产方向表 → 看"什么在动"
+3. 从资产联动判断主导驱动力 → 看"为什么动"
+4. 列出证据链（支持判断的数据 + 与判断矛盾的数据）
+5. 标注不确定项
+6. 末尾一句话辅助标签（可选）
+
+## Template
+
+```markdown
+## 2. 市场风向诊断
+
+### 2.1 资产方向
+
+| 资产 | 方向 | 数值 | vs 基准/20MA | 含义 |
+|------|:--:|------|:--:|------|
+| 美股(NDX) | {↑/↓/→} | {value} | {vs 20MA} | {风险偏好/成长重定价} |
+| 美债(30Y) | {↑/↓/→} | {value}% | — | {利率预期方向} |
+| 美债(2Y) | {↑/↓/→} | {value}% | — | {政策利率预期} |
+| 黄金(Au99.99) | {↑/↓/→} | {value} ({change}%) | — | {避险/实际利率压力} |
+| 美元(DXY) | {↑/↓/→} | {value} | — | {美元现金偏好} |
+| 原油(Brent) | {↑/↓/→} | ${value} | — | {供给/增长信号} |
+| A股(沪深300) | {↑/↓/→} | {value} | {vs 20MA} | {独立行情判断} |
+| VIX | {<20/20-30/>30} | {value} | — | {恐慌/平静} |
+
+### 2.2 跨资产联动
+
+{用一段话描述资产联动的模式。禁止堆砌指标名，必须写"什么和什么同步/背离，说明什么"。}
+
+{如果数据方向矛盾（如 DXY↑ 但 CNH 强于 CNY），必须标注"矛盾"。}
+
+联动判断：{这是实际利率冲击 / 通胀预期冲击 / 信用压力 / 地缘避险 / 多方向拉锯}
+
+### 2.3 债券市场通胀定价佐证
+
+{仅在 B8 TIPS + B9 breakeven 可用时输出}
+
+| 指标 | 本轮 | 变化 | 含义 |
+|---|---:|---:|---|
+| 10Y TIPS 实际收益率(B8) | {B8}% | {↑/↓/→} | 真实资金成本 |
+| 10Y Breakeven(B9) | {B9}% | {↑/↓/→} | 债券市场通胀预期 |
+
+**解读**：本轮名义 10Y({B2}%)变化主要由 {TIPS 实际利率/Breakeven 通胀预期/两者共同} 驱动。
+
+**与主线关系**：{支持 — Breakeven 方向与主线判断一致 / 冲突 — Breakeven 方向与主线判断矛盾 / 中性 — B8/B9 变化有限，未提供新方向性证据}。
+
+> B8/B9 作为债券市场定价佐证，不单独触发操作建议。
+
+### 2.4 主导驱动力
+
+{从以下 6 个中选出本轮最可能的 1 个主导 + 1-2 个被排除的}
+
+| 驱动力 | 判断 | 证据 |
+|--------|:--:|------|
+| 实际利率 | {主导/辅助/排除} | {TIPS↑/↓, 金, NDX} |
+| 通胀预期 | {主导/辅助/排除} | {breakeven, 油, 金} |
+| 政策利率 | {主导/辅助/排除} | {FedWatch, 2Y, SOFR} |
+| 信用风险 | {主导/辅助/排除} | {HY OAS, SOFR-IORB, A2} |
+| 流动性 | {主导/辅助/排除} | {FRA-OIS, VIX, MOVE} |
+| 美元外部压力 | {主导/辅助/排除} | {DXY, CNH−CNY, MMF AUM} |
+
+**本轮主导**: {驱动力名称}。{1-2 句话解释为什么是它，为什么不是其他}。
+
+### 2.5 不确定性
+
+- 数据矛盾: {列出方向冲突的指标对，没有则写"无"}
+- 无法判断: {目前数据不足以判断的方向，没有则写"无"}
+- 等待事件: {关键事件如 FOMC/CPI/地缘，没有则写"无"}
+
+辅助标签：{利率驱动/地缘驱动/信用驱动/无强主导方向}
+
+### 2.6 时序对比
+
+> 本小节数据来源：`temporal-diff.json`。仅当 `meta.status` 为 `ok` 或 `degraded` 时输出完整对比；`no_baseline` 时仅输出一行"无可比基线"。
+
+**对比基线**: {baselineRunId}（{daysSinceBaseline} 天前）
+
+**方向变化摘要**（Tier 1 核心指标，最多 10 项显著变化）:
+
+| 指标 | 基线值 | 当前值 | 变化 | 方向 | 幅度 |
+|------|------|------|------|:--:|:--:|
+| {indicator} | {baselineValue} | {currentValue} | {deltaDisplay} | {↑/↓/→/新/失} | {negligible/moderate/significant} |
+
+**跨期一致性**:
+
+{consistency_check.summary}
+
+{如有 divergent_pairs，逐项列出:}
+- {pair}: {aDir} vs {bDir} — {note}
+
+**Regime 稳定性**: {stabilityNote}{regimeChanged 时追加: 从 "{baselineRegime}" → "{currentRegime}"}
+
+{如有 keyDifferences:}
+- {keyDifferences 逐项}
+
+**阈值穿越** {如有 crossed}:
+- {indicator}: {from} → {to}, 穿越 {threshold}
+
+{如有 approaching}:
+- {indicator}: 距 {threshold} 仅 {distance}, 当前 {currentValue}
+```
+
+## Source
+
+- Values: `raw-snapshot.md` + `derived-snapshot.md`
+- Driver judgment logic: `decision-engine.md` §Market Wind Diagnosis
+- Condition→Action: `decision-engine.md` §Condition → Action Traceability

@@ -1,0 +1,286 @@
+{
+  "meta": {
+    "runId": "20260721-1117-auto",
+    "computedAt": "2026-07-24T01:46:55.664Z",
+    "version": "1.0.0",
+    "totalFormulas": 25,
+    "counts": {
+      "freshDerived": 15,
+      "staleDerived": 3,
+      "missingDerived": 7
+    }
+  },
+  "derived": {
+    "D1": {
+      "name": "US 10Y-2Y",
+      "formula": "B2 - B3",
+      "value": "0.4",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B2": "fresh",
+        "B3": "fresh"
+      }
+    },
+    "D2": {
+      "name": "US 30Y-10Y",
+      "formula": "B1 - B2",
+      "value": "0.5",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B1": "fresh",
+        "B2": "fresh"
+      }
+    },
+    "D3": {
+      "name": "US 30Y-2Y",
+      "formula": "B1 - B3",
+      "value": "0.9",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B1": "fresh",
+        "B3": "fresh"
+      }
+    },
+    "D4": {
+      "name": "CN 10Y-2Y",
+      "formula": "B6 - B7",
+      "value": "0.5",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B6": "fresh",
+        "B7": "fresh"
+      }
+    },
+    "D5": {
+      "name": "CN 30Y-10Y",
+      "formula": "B5 - B6",
+      "value": "0.5",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B5": "fresh",
+        "B6": "fresh"
+      }
+    },
+    "D6": {
+      "name": "CN 30Y-2Y",
+      "formula": "B5 - B7",
+      "value": "1.0",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B5": "fresh",
+        "B7": "fresh"
+      }
+    },
+    "D7": {
+      "name": "CN-US 10Y",
+      "formula": "B6 - B2",
+      "value": "-2.9",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "B6": "fresh",
+        "B2": "fresh"
+      }
+    },
+    "D8": {
+      "name": "DR007-OMO",
+      "formula": "M2 - M2a",
+      "value": "0.03",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "M2": "fresh",
+        "M2a": "fresh"
+      }
+    },
+    "D9": {
+      "name": "R007-DR007",
+      "formula": "M4 - M2",
+      "value": "0.00",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "M4": "fresh",
+        "M2": "fresh"
+      }
+    },
+    "D10": {
+      "name": "SOFR-IORB",
+      "formula": "N2 - N4",
+      "value": "-6.00",
+      "unit": "bp",
+      "freshness": "staleDerived",
+      "components": {
+        "N2": "staleGap",
+        "N4": "fresh"
+      }
+    },
+    "N7": {
+      "name": "SOFR-IORB利差",
+      "formula": "N2 - N4",
+      "value": "-6.00",
+      "unit": "bp",
+      "freshness": "staleDerived",
+      "components": {
+        "N2": "staleGap",
+        "N4": "fresh"
+      }
+    },
+    "D11": {
+      "name": "Gold/Oil Ratio",
+      "formula": "G4 / O1",
+      "value": "44.99",
+      "unit": "ratio",
+      "freshness": "freshDerived",
+      "components": {
+        "G4": "fresh",
+        "O1": "fresh"
+      }
+    },
+    "D12": {
+      "name": "Gold/Silver Ratio",
+      "formula": "G4 / AG",
+      "value": "72.96",
+      "unit": "ratio",
+      "freshness": "staleDerived",
+      "components": {
+        "G4": "fresh",
+        "AG": "staleGap"
+      }
+    },
+    "D13": {
+      "name": "G11 CN Premium",
+      "formula": "(G2*31.1035/X3)/G4-1",
+      "value": "-0.44",
+      "unit": "%",
+      "freshness": "freshDerived",
+      "components": {
+        "G2": "fresh",
+        "X3": "fresh",
+        "G4": "fresh"
+      }
+    },
+    "D14": {
+      "name": "CNH-CNY",
+      "formula": "X4 - X3",
+      "value": "-0.0220",
+      "unit": "CNY/USD",
+      "freshness": "freshDerived",
+      "components": {
+        "X4": "fresh",
+        "X3": "fresh"
+      }
+    },
+    "D15": {
+      "name": "Nasdaq 100 20MA",
+      "formula": "SMA(kl, 20)",
+      "value": "29610.57",
+      "unit": "",
+      "freshness": "missingDerived",
+      "components": {
+        "E1_kl": "unknown"
+      }
+    },
+    "D16": {
+      "name": "Nasdaq 100 PctChg",
+      "formula": "(latest - 20d_ago) / 20d_ago",
+      "value": "0.55",
+      "unit": "%",
+      "freshness": "missingDerived",
+      "components": {
+        "E1_kl": "unknown"
+      }
+    },
+    "D17": {
+      "name": "沪深300 20MA",
+      "formula": "SMA(kl, 20)",
+      "value": "4879.24",
+      "unit": "",
+      "freshness": "missingDerived",
+      "components": {
+        "E2_kl": "unknown"
+      }
+    },
+    "D18": {
+      "name": "沪深300 PctChg",
+      "formula": "(latest - 20d_ago) / 20d_ago",
+      "value": "-1.64",
+      "unit": "%",
+      "freshness": "missingDerived",
+      "components": {
+        "E2_kl": "unknown"
+      }
+    },
+    "D19": {
+      "name": "创业板 20MA",
+      "formula": "SMA(kl, 20)",
+      "value": "4100.06",
+      "unit": "",
+      "freshness": "missingDerived",
+      "components": {
+        "E3_kl": "unknown"
+      }
+    },
+    "D20": {
+      "name": "创业板 PctChg",
+      "formula": "(latest - 20d_ago) / 20d_ago",
+      "value": "-2.56",
+      "unit": "%",
+      "freshness": "missingDerived",
+      "components": {
+        "E3_kl": "unknown"
+      }
+    },
+    "D21": {
+      "name": "Credit Spread AAA-Govt 3Y",
+      "formula": "A2a - A2g",
+      "value": "0.3",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "A2a": "fresh",
+        "A2g": "fresh"
+      }
+    },
+    "D22": {
+      "name": "TIPS+BE vs Nominal",
+      "formula": "B8+B9 vs B2",
+      "value": "4.60",
+      "diff_vs_B2": "0.00",
+      "unit": "%",
+      "freshness": "freshDerived",
+      "components": {
+        "B8": "fresh",
+        "B9": "fresh"
+      }
+    },
+    "D23": {
+      "name": "Gold Futures-Spot Basis",
+      "formula": "G5 - G1_pm",
+      "value": null,
+      "unit": "元/克",
+      "freshness": "missingDerived",
+      "components": {
+        "G5": "fresh",
+        "G1_pm": "missing"
+      }
+    },
+    "D24": {
+      "name": "MMF CN-US Spread",
+      "formula": "N3 - M3",
+      "value": "1.9",
+      "unit": "bp",
+      "freshness": "freshDerived",
+      "components": {
+        "N3": "fresh",
+        "M3": "fresh"
+      }
+    }
+  }
+}

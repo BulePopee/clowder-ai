@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "checkedAt": "2026-07-21T08:07:32.800Z",
+    "runId": "20260721-1117-auto",
+    "version": "1.1.0",
+    "pipelineVersion": "2.8.0"
+  },
+  "sources": [
+    {
+      "sourceId": "ttfund",
+      "name": "天天基金 CLI",
+      "probeStatus": "available",
+      "classification": "callable",
+      "contractStatus": "ok",
+      "contractExpected": true,
+      "details": "CLI 可用（status JSON 被截断超过 16KB，exit 0）",
+      "installPath": "C:/Users/Administrator/AppData/Local/TTFund/ttskill-base/ttskill-base-win32-x64-0.1.1/bin/ttskill.js",
+      "probeCheck": {
+        "code": 0,
+        "ok": true,
+        "truncated": true,
+        "stderr": ""
+      },
+      "depthProbe": {
+        "verdict": "ok",
+        "classification": null,
+        "checks": [
+          {
+            "checkId": "ttfund-macro_fiscal-treasury_yields-us_10y",
+            "label": "B2 US 10Y yield",
+            "critical": true,
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "4.6"
+          },
+          {
+            "checkId": "ttfund-macro_fiscal-trade_date",
+            "label": "Trade date",
+            "critical": true,
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "2026-07-21"
+          },
+          {
+            "checkId": "ttfund-gold_quotes-au9999-close",
+            "label": "G2 Au9999 close",
+            "critical": true,
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "886.95"
+          }
+        ],
+        "failures": [],
+        "details": "All depth checks passed"
+      }
+    },
+    {
+      "sourceId": "ifind",
+      "name": "同花顺 iFinD MCP",
+      "probeStatus": "available",
+      "classification": "callable",
+      "contractStatus": "ok",
+      "contractExpected": true,
+      "details": "入口模块加载成功，mcp_config.json 存在",
+      "installPath": "D:/clowder-ai/packages/api/skills/ifind-finance-data-1.1.0/call-node.js",
+      "probeCheck": {
+        "ok": true,
+        "stdout": "ok",
+        "stderr": ""
+      },
+      "depthProbe": {
+        "verdict": "ok",
+        "classification": null,
+        "checks": [
+          {
+            "checkId": "ifind-b8-value",
+            "label": "B8 TIPS 10Y value",
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "2.35",
+            "failureClass": null,
+            "details": null
+          },
+          {
+            "checkId": "ifind-b8-date",
+            "label": "B8 date",
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "2026-07-20",
+            "failureClass": null,
+            "details": null
+          }
+        ],
+        "failures": [],
+        "details": "iFinD depth probe passed"
+      }
+    },
+    {
+      "sourceId": "wind",
+      "name": "Wind 万得 MCP",
+      "probeStatus": "available",
+      "classification": "callable",
+      "contractStatus": "ok",
+      "contractExpected": true,
+      "details": "probe 成功返回结构化数据",
+      "installPath": "C:/Users/Administrator/.agents/skills/wind-mcp-skill",
+      "probeCheck": {
+        "code": 0,
+        "ok": true,
+        "stdLen": 2161,
+        "stderr": "",
+        "hasData": true
+      },
+      "depthProbe": {
+        "verdict": "ok",
+        "classification": null,
+        "checks": [
+          {
+            "checkId": "wind-ffr-probe",
+            "label": "F1 Fed funds rate (via parseWind rows)",
+            "callable": true,
+            "schemaOk": true,
+            "valueOk": true,
+            "dateOk": true,
+            "value": "3.75",
+            "date": "2025-12-11",
+            "failureClass": null,
+            "details": null
+          }
+        ],
+        "failures": [],
+        "details": "Wind depth probe passed (value=3.75, date=2025-12-11)"
+      }
+    },
+    {
+      "sourceId": "mx-data",
+      "name": "妙想金融数据 (东方财富)",
+      "probeStatus": "available",
+      "classification": "callable",
+      "contractStatus": "ok",
+      "contractExpected": true,
+      "details": "入口文件存在",
+      "installPath": "D:/clowder-ai/packages/api/skills/mx-data/mx_data.py",
+      "probeCheck": null,
+      "depthProbe": {
+        "verdict": "skipped",
+        "classification": null,
+        "checks": [],
+        "failures": [],
+        "details": ""
+      }
+    },
+    {
+      "sourceId": "websearch",
+      "name": "网络搜索",
+      "probeStatus": "available",
+      "classification": "callable",
+      "contractStatus": "ok",
+      "contractExpected": true,
+      "details": "WebSearch always available in CLI environment",
+      "installPath": null,
+      "probeCheck": null,
+      "depthProbe": {
+        "verdict": "skipped",
+        "classification": null,
+        "checks": [],
+        "failures": [],
+        "details": ""
+      }
+    }
+  ],
+  "summary": {
+    "total": 5,
+    "callable": 5,
+    "toolMissing": 0,
+    "authMissing": 0,
+    "schemaDrift": 0,
+    "noData": 0,
+    "contractViolations": 0,
+    "contractDegraded": 0,
+    "depthProbe": {
+      "ok": 3,
+      "failed": 0,
+      "degraded": 0,
+      "skipped": 2,
+      "verdict": "ok"
+    },
+    "verdict": "ok"
+  }
+}

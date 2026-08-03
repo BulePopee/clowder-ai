@@ -1,0 +1,44 @@
+[
+  {
+    "indicator": "A1",
+    "source": "ifind",
+    "status": "null_value",
+    "error": "null value"
+  },
+  {
+    "indicator": "N2",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-22",
+    "source": "ifind"
+  },
+  {
+    "indicator": "B10",
+    "status": "staleGap",
+    "ageDays": 2,
+    "effectiveAge": 2,
+    "maxAgeDays": 3,
+    "date": "2026-07-22",
+    "source": "ifind"
+  },
+  {
+    "indicator": "N6",
+    "status": "staleGap",
+    "ageDays": 3,
+    "effectiveAge": 3,
+    "maxAgeDays": 3,
+    "date": "2026-07-21",
+    "source": "ifind"
+  },
+  {
+    "indicator": "R3",
+    "status": "staleGap",
+    "ageDays": 24,
+    "effectiveAge": 24,
+    "maxAgeDays": 7,
+    "date": "2026-06-30",
+    "source": "ifind"
+  }
+]
