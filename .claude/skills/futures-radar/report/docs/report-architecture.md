@@ -27,11 +27,10 @@
 
 ### Stage 5A: Report Facts Assembly（确定性）
 
-**输入 Artifacts**:
+**输入 Artifacts**（四份 JSON）:
 - `candidates.json` — Top 10 扫描结果
 - `filtered.json` — 筛选决策（KEEP/DROP/DOWNGRADE）
 - `probability.json` — HV 概率锥 + ATR 对比
-- `raw-snapshot.md` — 原始行情快照（可选，用于溯源）
 
 **输出**: `report-facts.json`
 
@@ -39,11 +38,12 @@
 - Symbol 关联与一致性校验（runId 一致性、symbol join 完整性）
 - 数值字段提取（close/atr/hv/cone/divergence）
 - 筛选阶段判断记录（initialDirection/initialConfidence）
+- 筛选阶段文本复制（summary/watchConditions/criteria.*.note，原样保留）
 - 数据质量聚合（correctionCount/totalBars/degraded）
 - Provenance 记录（artifactId/runId/jsonPath/timestamp）
 
 **禁止**:
-- 生成自然语言描述
+- 合成新的自然语言描述（可复制 filtered.json 已有文本，但不得改写或总结）
 - 调用 LLM
 - 估算或修改数值
 
@@ -56,19 +56,18 @@
 **输出**: `report-model.json`
 
 **职责**:
-- 提取结构化 Q1-Q6 分析（保留完整六问，不压缩为四行）
+- 提取 Q1-Q6 原始字符串（保留实际结构，不虚构子字段）
 - 记录最终判断（finalDirection/finalConfidence/oddsBias）
 - 判断变化标记（若筛选阶段与分析阶段方向/置信度不同，标记 `assessmentChanged=true`）
-- 证据链完整性校验（driver 必须有 evidence + sources）
 - 保留数值事实不变（继承 5A 的 marketFacts/priceRanges）
 
-**当前实现**: 直接使用已有 `analysis.json`（人工填写）  
-**未来演进**: LLM 生成结构化 JSON（不直接写 Markdown）
+**当前实现**: 直接使用已有 `analysis.json`（人工填写），原样复制字符串字段  
+**未来演进**: LLM 生成结构化 JSON（需先升级 analysis.json 契约）
 
 **禁止**:
 - 修改 5A 生成的数值字段
 - 篡改 provenance
-- 压缩为固定行数
+- 虚构结构化子字段（如从 string 推断 claim[]/sources[]）
 
 ### Stage 5C: Markdown Renderer（确定性）
 
@@ -165,71 +164,7 @@ interface ReportFacts {
     }>;
   };
   
-  opportunities: Array<{
-    symbol: string;
-    name: string;
-    rank: number;
-    
-    // 市场事实
-    marketFacts: {
-      close: number;
-      hv: {
-        annual: number;
-        periodDays: number;
-        percentile90d: number | null;
-        estimator: 'yang_zhang' | 'garman_klass' | 'close_to_close';
-        correctionCount: number;
-        totalBars: number;
-        degraded: boolean;
-      };
-      provenance: {
-        close: { artifactId: 'probability-json', runId: string, path: string },
-        hv: { artifactId: 'probability-json', runId: string, path: string }
-      };
-    };
-    
-    // 价格区间
-    priceRanges: Array<{
-      period: '3d' | '5d';
-      hvCone: {
-        p68: [number, number];
-        p95: [number, number];
-      };
-      atrBand: {
-        atr5: number;
-        band: [number, number];
-      };
-      divergence: {
-        pct: number;
-        interpretation: string;
-      };
-      provenance: {
-        artifactId: 'probability-json',
-        runId: string,
-        calculatedAt: string
-      };
-    }>;
-    
-    // 筛选阶段判断
-    screening: {
-      initialConfidence: 'high' | 'medium' | 'low';
-      initialDirection: 'bullish' | 'bearish' | 'neutral';
-      criteria: {
-        volatility: { result: string, note: string };
-        liquidity: { result: string, note: string };
-        priceStructure: { result: string, note: string };
-        driver: { result: string, note: string };
-        risk: { result: string, note: string };
-      };
-      summary: string;
-      watchConditions: string;
-      provenance: {
-        artifactId: 'filtered-json',
-        runId: string,
-        path: string
-      };
-    };
-  }>;
+  opportunities: Array<OpportunityFacts>;
   
   rejected: Array<{
     symbol: string;
@@ -244,6 +179,72 @@ interface ReportFacts {
     };
   }>;
 }
+
+interface OpportunityFacts {
+  symbol: string;
+  name: string;
+  rank: number;
+  
+  // 市场事实
+  marketFacts: {
+    close: number;
+    hv: {
+      annual: number;
+      periodDays: number;
+      percentile90d: number | null;
+      estimator: 'yang_zhang' | 'garman_klass' | 'close_to_close';
+      correctionCount: number;
+      totalBars: number;
+      degraded: boolean;
+    } | null;  // null 表示数据不足（<21 bars）
+    provenance: {
+      close: { artifactId: 'probability-json', runId: string, path: string },
+      hv: { artifactId: 'probability-json', runId: string, path: string } | null
+    };
+  };
+  
+  // 价格区间（完整单元，不拆分 ATR）
+  priceRanges: Array<{
+    period: '3d' | '5d';
+    hvCone: {
+      p68: [number, number];
+      p95: [number, number];
+    } | null;  // null when hv=null
+    atrBand: {
+      atr5: number;
+      band: [number, number];
+    };
+    divergence: {
+      pct: number | null;  // null when hvCone=null
+      interpretation: string;
+    };
+    provenance: {
+      artifactId: 'probability-json',
+      runId: string,
+      calculatedAt: string
+    };
+  }>;
+  
+  // 筛选阶段判断与文本（原样复制 filtered.json）
+  screening: {
+    initialConfidence: 'high' | 'medium' | 'low';
+    initialDirection: 'bullish' | 'bearish' | 'neutral';
+    criteria: {
+      volatility: { result: string, note: string };
+      liquidity: { result: string, note: string };
+      priceStructure: { result: string, note: string };
+      driver: { result: string, note: string };
+      risk: { result: string, note: string };
+    };
+    summary: string;
+    watchConditions: string;
+    provenance: {
+      artifactId: 'filtered-json',
+      runId: string,
+      path: string
+    };
+  };
+}
 ```
 
 ---
@@ -251,23 +252,28 @@ interface ReportFacts {
 ## 4. report-model.json 契约
 
 ```typescript
-interface ReportModel extends ReportFacts {
-  // 继承 5A 的所有字段，增加分析层
+interface ReportModel {
+  meta: ReportFacts['meta'];
+  screening: ReportFacts['screening'];
+  rejected: ReportFacts['rejected'];
   
+  // 扩展 opportunities，增加 thesis 分析层
   opportunities: Array<{
-    // ... 继承 ReportFacts.opportunities[i] 所有字段
+    symbol: string;
+    name: string;
+    rank: number;
+    marketFacts: OpportunityFacts['marketFacts'];
+    priceRanges: OpportunityFacts['priceRanges'];
+    screening: OpportunityFacts['screening'];
     
-    // 分析论点（5B 新增）
+    // 分析论点（5B 新增，保留原始字符串结构）
     thesis: {
-      // Q1: 驱动因素
+      // Q1: 驱动因素（真实字段名: q1_driver）
       driver: {
-        content: string;
-        evidence: Array<{
-          claim: string;
-          sources: Array<{ label: string, url: string }>;
-          asOf: string;
-        }>;
-        confidence: number;  // 0-1
+        primary: string;
+        secondary: string;
+        evidence: string;  // 原始 string，不拆分为 claim[]
+        source: string;
         provenance: {
           artifactId: 'analysis-json',
           runId: string,
@@ -275,44 +281,63 @@ interface ReportModel extends ReportFacts {
         };
       };
       
-      // Q2/Q3: 趋势与赔率
-      trendAndOdds: {
-        trend: string;
-        technical: string[];
-        oddsBias: 'bullish' | 'bearish' | 'neutral';
-        oddsReasoning: string;
+      // Q2: 趋势/脉冲（真实字段名: q2_trendOrImpulse）
+      trendOrImpulse: {
+        assessment: string;
         provenance: {
           artifactId: 'analysis-json',
           runId: string,
-          fields: ['q2_trend', 'q3_odds']
+          field: 'q2_trendOrImpulse'
         };
       };
       
-      // Q4: 确认信号
-      confirmations: Array<{
-        signal: string;
-        priceLevel?: number;
-        volumeCondition?: string;
-        source: 'artifact-derived' | 'analysis-manual' | 'external-evidence';
-      }>;
-      
-      // Q5: 失效条件
-      invalidations: Array<{
-        condition: string;
-        priceLevel?: number;
+      // Q3: 赔率（真实字段名: q3_odds）
+      odds: {
+        bias: 'bullish' | 'bearish' | 'neutral';
         reasoning: string;
-        source: 'artifact-derived' | 'analysis-manual' | 'external-evidence';
-      }>;
+        provenance: {
+          artifactId: 'analysis-json',
+          runId: string,
+          field: 'q3_odds'
+        };
+      };
       
-      // Q6: 风险
-      risks: string[];
+      // Q4: 确认信号（真实字段名: q4_confirmation）
+      confirmations: {
+        signals: string[];  // 原始 string[]，不拆分为 priceLevel/volumeCondition
+        provenance: {
+          artifactId: 'analysis-json',
+          runId: string,
+          field: 'q4_confirmation'
+        };
+      };
       
-      // 最终判断
+      // Q5: 失效条件（真实字段名: q5_invalidation）
+      invalidations: {
+        conditions: string[];  // 原始 string[]，不拆分为 priceLevel/reasoning
+        provenance: {
+          artifactId: 'analysis-json',
+          runId: string,
+          field: 'q5_invalidation'
+        };
+      };
+      
+      // Q6: 风险（真实字段名: q6_risks）
+      risks: {
+        items: string[];
+        provenance: {
+          artifactId: 'analysis-json',
+          runId: string,
+          field: 'q6_risks'
+        };
+      };
+      
+      // 最终判断（来自 analysis.json 顶层字段）
       finalDirection: 'bullish' | 'bearish' | 'neutral';
       finalConfidence: 'high' | 'medium' | 'low';
       
       // 判断变化标记
-      assessmentChanged: boolean;  // true 表示筛选与分析阶段判断不一致
+      assessmentChanged: boolean;  // true 表示 screening.initialDirection/Confidence 与 final* 不一致
     };
   }>;
 }
@@ -327,29 +352,30 @@ interface ReportModel extends ReportFacts {
 | `meta.runId` | filtered.json | 所有 artifact 必须一致 | FAIL | 正则 `^\d{8}-\d{4}-auto$` |
 | `meta.totalSymbols` | candidates.meta.preFilter.total | N/A | FAIL | ≥0 |
 | `screening.top10[].close` | candidates.json (trend.close) | N/A | FAIL | >0 |
-| `screening.top10[].atr5` | candidates.json (indicators.atr5) | N/A | FAIL | ≥0 |
 | `opportunities[].marketFacts.close` | probability.json (close) | 优先 probability | FAIL | 与 candidates 偏差 <1% |
-| `opportunities[].marketFacts.hv.*` | probability.json (hv) | N/A | FAIL | annual ∈ [0, 5] |
-| `opportunities[].priceRanges` | probability.json (cone + atrComparison) | N/A | FAIL | 完整单元（不拆分 ATR） |
+| `opportunities[].marketFacts.hv.*` | probability.json (hv) | N/A | 降级为 null | hv=null 时 annual 不存在 |
+| `opportunities[].priceRanges[].hvCone` | probability.json (cone) | N/A | 降级为 null | hv=null 时 hvCone=null |
+| `opportunities[].priceRanges[].atrBand` | probability.json (atrComparison) | N/A | FAIL | 完整单元（atr5 + band） |
+| `opportunities[].priceRanges[].divergence.pct` | probability.json (atrComparison.divergencePct) | N/A | 降级为 null | hvCone=null 时 divergence.pct=null |
 | `opportunities[].screening.*` | filtered.json (candidates[]) | N/A | FAIL | KEEP 必须存在 |
-| `opportunities[].thesis.driver` | analysis.json (q1_driver) | N/A | WARN + 人工补充 | evidence 非空 |
-| `opportunities[].thesis.confirmations` | analysis.json (q4_entry_confirmation) | N/A | WARN + 人工补充 | 至少 1 条 |
+| `opportunities[].thesis.driver` | analysis.json (q1_driver) | N/A | FAIL | primary/secondary/evidence 非空 |
+| `opportunities[].thesis.confirmations.signals` | analysis.json (q4_confirmation.signals) | N/A | FAIL | 至少 1 条 |
 | `rejected[]` | filtered.json (downgraded) | N/A | 允许为空 | reason 必填 |
 
 ### ATR 真相源规则
 
-**唯一来源**: `probability.json.atrComparison`
+**唯一来源**: `probability.json.atrComparison`（完整单元，不拆分）
 
 - `atr5`
-- `atr2xBand`
-- `divergencePct`
-- `interpretation`
+- `atr2xBand` → `atrBand.band`
+- `divergencePct` → `divergence.pct`
+- `interpretation` → `divergence.interpretation`
 
 `candidates.json.indicators.atr5` 仅用于：
 1. Stage 4.5 的上游输入
 2. 5A 的一致性校验（允许 <0.01 浮点误差）
 
-Renderer 不得直接读取 `candidates.json` 的 ATR。
+**5A/5C 禁止直接读取** `candidates.json` 的 ATR 字段。
 
 ### 判断优先级规则
 
@@ -437,11 +463,12 @@ Renderer 不得直接读取 `candidates.json` 的 ATR。
 
 ### 7.2 5A 降级策略
 
-| 降级类型 | 行为 | 标记 |
-|---------|------|------|
-| HV 数据不足 | 继续，标记降级 | `opportunities[i].marketFacts.hv=null` |
-| OHLC 修正率 >20% | 继续，标记降级 | `degraded=true` |
-| ATR/HV 偏差 >20% | 继续，记录偏差 | `divergence.interpretation` 包含 "❌" |
+| 降级类型 | 行为 | 标记 | Renderer 行为 |
+|---------|------|------|--------------|
+| HV 数据不足 (<21 bars) | 继续，标记降级 | `opportunities[i].marketFacts.hv=null` | 价格区间表显示 "数据不足，无法计算 HV 概率锥" |
+| OHLC 修正率 >20% | 继续，标记降级 | `degraded=true` | 在价格区间表下方显示 "⚠️ 数据质量警告：OHLC 数据修正率 >20%，HV 估算可能不准确（X修正/Y根）" |
+| ATR/HV 偏差 >20% | 继续，记录偏差 | `divergence.interpretation` 包含 "❌" | 偏差行显示 "❌" 图标 + interpretation 文本 |
+| HV 存在但 hvCone 计算失败 | 继续，hvCone=null | `priceRanges[].hvCone=null` | 价格区间表 HV 行显示 "—" |
 
 ### 7.3 5B 失败策略
 

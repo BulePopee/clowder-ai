@@ -79,16 +79,35 @@ const artifacts = [
     stage: 'probability',
     required: true,
     producedBy: 'probability/stage-4-5.cjs',
-    consumedBy: ['report'],
+    consumedBy: ['report-5a'],
     note: 'HV probability cones + ATR comparison for KEEP candidates'
+  },
+  {
+    id: 'report-facts-json',
+    path: '{runDir}/report-facts.json',
+    stage: 'report-5a',
+    required: true,
+    producedBy: 'report/build-facts.cjs',
+    consumedBy: ['report-5b'],
+    note: 'Stage 5A: Deterministic facts assembly from 4 JSON artifacts'
+  },
+  {
+    id: 'report-model-json',
+    path: '{runDir}/report-model.json',
+    stage: 'report-5b',
+    required: true,
+    producedBy: 'report/build-model.cjs',
+    consumedBy: ['report-5c'],
+    note: 'Stage 5B: Analysis integration with thesis layer'
   },
   {
     id: 'report',
     path: '{runDir}/report.md',
-    stage: 'report',
+    stage: 'report-5c',
     required: true,
-    producedBy: 'manual (LLM follows report/template.md)',
-    consumedBy: ['consistency', 'current']
+    producedBy: 'report/render-markdown.cjs',
+    consumedBy: ['consistency', 'current'],
+    note: 'Stage 5C: Markdown rendering from report-model.json'
   },
   {
     id: 'current',
@@ -210,6 +229,52 @@ const stages = [
     note: 'Auto stage: Calculate HV-based probability cones and ATR comparison for KEEP candidates'
   },
 
+  // ── Stage 5A: Report Facts Assembly (Auto) ──
+  {
+    id: 'report-5a',
+    label: '报告事实组装 (确定性)',
+    auto: true,
+    dependsOn: ['probability'],
+    inputs: ['candidates-json', 'filtered-json', 'probability-json'],
+    outputs: ['report-facts-json'],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    rebuildCommand: 'node report/build-facts.cjs --runId {runId}',
+    script: 'report/build-facts.cjs',
+    args: (runId) => ['--runId', runId],
+    note: 'Phase 8-A: Deterministic facts assembly from 4 JSON artifacts. Symbol join + provenance tracking + data quality aggregation.'
+  },
+
+  // ── Stage 5B: Analysis Integration (Manual) ──
+  {
+    id: 'report-5b',
+    label: '分析集成 (半自动)',
+    auto: false,
+    dependsOn: ['report-5a'],
+    inputs: ['report-facts-json', 'analysis-json'],
+    outputs: ['report-model-json'],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    manualInstruction: 'LLM: read report/docs/report-architecture.md. Build report-model.json by integrating analysis.json thesis layer (Q1-Q6 raw strings) with report-facts.json. Preserve actual field names (q1_driver, q2_trendOrImpulse, etc). Mark assessmentChanged when screening vs analysis judgments differ. Output: report-model.json.',
+    note: 'Phase 8-A: Semi-automatic. Current: copy analysis.json strings. Future: LLM generates structured thesis JSON.'
+  },
+
+  // ── Stage 5C: Markdown Renderer (Auto) ──
+  {
+    id: 'report-5c',
+    label: 'Markdown 渲染 (确定性)',
+    auto: true,
+    dependsOn: ['report-5b'],
+    inputs: ['report-model-json'],
+    outputs: ['report'],
+    validators: [],
+    failurePolicy: 'hard_fail',
+    rebuildCommand: 'node report/render-markdown.cjs --runId {runId}',
+    script: 'report/render-markdown.cjs',
+    args: (runId) => ['--runId', runId],
+    note: 'Phase 8-A: Template-driven markdown generation. 4 chapters + appendix. Data quality warnings by rules. Structure completeness over line count.'
+  },
+
   // ── Stage 5: Report (Manual) ──
   {
     id: 'report',
@@ -220,7 +285,7 @@ const stages = [
     outputs: ['report'],
     validators: [],
     failurePolicy: 'hard_fail',
-    manualInstruction: 'LLM: Read report/docs/report-architecture.md. Follow 5A/5B/5C pipeline: (1) Build report-facts.json from 5 artifacts, (2) Build report-model.json by integrating analysis.json, (3) Render report.md from report-model.json. Ensure structure completeness (4 chapters + appendix), data quality warnings, and judgment change annotations.',
+    manualInstruction: 'LLM: Read report/docs/report-architecture.md. Follow 5A/5B/5C pipeline: (1) Build report-facts.json from 4 artifacts, (2) Build report-model.json by integrating analysis.json, (3) Render report.md from report-model.json. Ensure structure completeness (4 chapters + appendix), data quality warnings, and judgment change annotations.',
     note: 'Phase 8 architecture: Three-stage pipeline (facts → model → markdown). Structure-driven, not line-count-driven. Gold standard report (20260730-1701-auto/report.md) serves as visual reference only.'
   },
 
