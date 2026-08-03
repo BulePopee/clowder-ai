@@ -975,6 +975,7 @@ describe('SystemPromptBuilder', () => {
     }
   });
 
+  test('F167-F AC-F10: AGENTS.md / CLAUDE.md have no hardcoded "@x = model-y" bindings', async () => {
     // KD-21 invariant: handle/model must stay decoupled in static docs. If someone
     // re-introduces "@codex（model=gpt-5.3-codex）" style hardcoding, this test traps it.
     const fs = await import('node:fs');
